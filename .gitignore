@@ -1,0 +1,46 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Test / typecheck / linter caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Beads local DB cache (remote truth is on the beads-sync branch)
+.beads/beads.db
+.beads/*.db
+.beads/*.db-*
+
+# OS / editor metadata
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*.swo
+
+# Local env files (secrets)
+.env
+.env.local
+
+# Local workflow reasoning artifacts (keep out of git by default)
+.kilocode/thinking/*.json
+.kilocode/
+.kilocodemodes
+.kilocodeignore
+
+# plans
+plans/
