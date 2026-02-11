@@ -8,8 +8,10 @@ from pydantic import BaseModel, Field, field_validator
 
 from artifacts.models.artifacts.integrations import IntegrationTag
 
+from pathlib import Path
+
 if TYPE_CHECKING:
-    from pathlib import Path
+    pass
 
 CONFIG_FILENAME = "repomap.toml"
 
@@ -183,6 +185,42 @@ class RepoMapConfig(BaseModel):
 
 class ConfigError(Exception):
     """Raised when config file exists but cannot be parsed."""
+
+
+def resolve_output_dir(root: Path, output_dir: str) -> Path:
+    """Resolve a config-provided output_dir safely within the repo root.
+
+    The config output_dir must be a non-empty relative path that remains
+    within the repository root after resolution. Absolute paths and paths
+    that escape the root are rejected.
+    """
+    if not output_dir:
+        msg = "output_dir must be a non-empty relative path"
+        raise ConfigError(msg)
+
+    if output_dir.startswith("~"):
+        msg = "output_dir must be a relative path within the repo root"
+        raise ConfigError(msg)
+
+    output_path = Path(output_dir)
+    if output_path.is_absolute():
+        msg = "output_dir must be a relative path within the repo root"
+        raise ConfigError(msg)
+
+    try:
+        resolved_root = root.resolve()
+        resolved_output = (resolved_root / output_path).resolve()
+    except OSError as exc:
+        msg = f"Failed to resolve output_dir '{output_dir}': {exc}"
+        raise ConfigError(msg) from exc
+
+    try:
+        resolved_output.relative_to(resolved_root)
+    except ValueError as exc:
+        msg = f"output_dir '{output_dir}' escapes the repository root"
+        raise ConfigError(msg) from exc
+
+    return resolved_output
 
 
 def _strip_claims_sections(data: dict) -> dict:

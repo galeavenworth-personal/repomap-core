@@ -16,7 +16,7 @@ from contract.artifacts import (
     INTEGRATIONS_STATIC_JSONL,
     SYMBOLS_JSONL,
 )
-from rules.config import load_config
+from rules.config import load_config, resolve_output_dir
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -44,7 +44,7 @@ def generate_all_artifacts(
         config = load_config(root)
 
     if out_dir is None:
-        out_dir = root / config.output_dir
+        out_dir = resolve_output_dir(root, config.output_dir)
 
     layers_config = config.layers if config else None
     include_patterns = config.include if config else None

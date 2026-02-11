@@ -8,7 +8,7 @@ from pathlib import Path
 
 from artifacts.write import generate_all_artifacts
 from contract.validation import validate_artifacts
-from rules.config import load_config
+from rules.config import load_config, resolve_output_dir
 from verify.verify import verify_determinism
 
 
@@ -63,7 +63,7 @@ def _resolve_output_dir(root: Path, out_dir: str | None) -> Path | None:
 def _resolve_artifacts_dir(root: Path, artifacts_dir: str | None) -> Path:
     if artifacts_dir is None:
         config = load_config(root)
-        return (root / config.output_dir).resolve()
+        return resolve_output_dir(root, config.output_dir)
     return Path(artifacts_dir).expanduser().resolve()
 
 

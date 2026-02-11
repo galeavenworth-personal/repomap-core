@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from cli import main
-from rules.config import load_config
+from rules.config import ConfigError, load_config, resolve_output_dir
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def _write_minimal_repo(root: Path) -> None:
@@ -94,3 +94,10 @@ def test_cli_verify_missing_artifacts_dir_reports_error(
     captured = capsys.readouterr()
     assert f"artifacts-dir: {artifacts_dir}" in captured.err
     assert "Artifacts directory does not exist" in captured.err
+
+
+def test_resolve_output_dir_rejects_escape(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    with pytest.raises(ConfigError, match="escapes the repository root"):
+        resolve_output_dir(repo_root, "../outside")

@@ -71,7 +71,11 @@ def _iter_gitignore_files(root: Path) -> list[Path]:
     """Return sorted list of .gitignore files under root (including root)."""
     gitignore_paths = [root / ".gitignore"]
     gitignore_paths.extend(root.rglob(".gitignore"))
-    unique_paths = {path for path in gitignore_paths if path.is_file()}
+    unique_paths = {
+        path
+        for path in gitignore_paths
+        if path.is_file() and not path.is_symlink() and _is_within_root(path, root)
+    }
     return sorted(unique_paths, key=lambda p: p.relative_to(root).as_posix())
 
 
