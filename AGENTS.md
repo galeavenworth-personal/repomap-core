@@ -1,14 +1,21 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+This project uses **bd** (beads) for issue tracking.
+
+This repo prefers a **pinned**, user-local Beads install and a repo-local wrapper:
+
+```bash
+.kilocode/tools/beads_install.sh   # one-time (per machine / per pinned version)
+.kilocode/tools/bd init           # one-time (per clone)
+```
 
 ## Quick Reference
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --status in_progress  # Claim work
-bd close <id>         # Complete work
+.kilocode/tools/bd ready              # Find available work
+.kilocode/tools/bd show <id>          # View issue details
+.kilocode/tools/bd update <id> --status in_progress  # Claim work
+.kilocode/tools/bd close <id>         # Complete work
 ```
 
 ## Session Start
@@ -16,7 +23,7 @@ bd close <id>         # Complete work
 Sync Beads state from remote before starting work:
 
 ```bash
-bd sync --no-push
+.kilocode/tools/bd sync --no-push
 ```
 
 ## Landing the Plane (Session Completion)
@@ -31,7 +38,7 @@ bd sync --no-push
 4. **Update issue status** - Close finished work, update in-progress items
 5. **Sync Beads** - Publish task state updates:
    ```bash
-   bd sync
+   .kilocode/tools/bd sync
    ```
 6. **PUSH TO REMOTE** (only if explicitly requested):
    ```bash
@@ -47,4 +54,3 @@ bd sync --no-push
 - Work is NOT complete until changes are committed, and pushed if explicitly requested
 - NEVER say "ready to push when you are" - either push (when requested) or state what remains
 - If push fails, resolve and retry until it succeeds
-

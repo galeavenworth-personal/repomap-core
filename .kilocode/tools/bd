@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Repo-local Beads (`bd`) entrypoint.
+#
+# Prefers a pinned version installed into a user-local, versioned prefix.
+# Falls back to `bd` on PATH only if the pinned binary is missing.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BEADS_VERSION="${BEADS_VERSION:-$(cat "${SCRIPT_DIR}/beads_version")}" 
+BEADS_PREFIX_BASE="${BEADS_PREFIX_BASE:-${HOME}/.local/beads}"
+PINNED_BD="${BEADS_PREFIX_BASE}/${BEADS_VERSION}/bin/bd"
+
+if [[ -x "${PINNED_BD}" ]]; then
+  exec "${PINNED_BD}" "$@"
+fi
+
+echo "ERROR: bd is not installed." >&2
+echo "Install the pinned version for this repo:" >&2
+echo "  .kilocode/tools/beads_install.sh" >&2
+echo "(You can override location/version with BEADS_PREFIX_BASE / BEADS_VERSION env vars.)" >&2
+exit 2
