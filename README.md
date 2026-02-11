@@ -1,61 +1,43 @@
-# repomap-core (staging)
+# repomap-core
 
-This is a **staging snapshot** intended for future export into a pristine, standalone
-repository.
+Deterministic repo scanning + artifact generation for **agent-grade code understanding**.
 
-## What it is
+`repomap-core` turns a codebase into a small set of **stable, machine-readable artifacts** (think: an index, not a narrative). Agents (or humans) can then answer questions like “where is this symbol used?” or “what depends on this module?” without re-parsing the entire repo every time.
 
-`repomap-core` is the **canonical core library** for deterministic repository scanning and
-artifact generation.
+The core design goal is simple: **same inputs → byte-identical outputs**. That makes the artifacts safe to cache, diff, and trust in automated workflows.
 
-It is also the **intended owner of the primary `repomap` CLI entrypoint** (for `generate`,
-`verify`, and later `query`).
+---
 
-## Install
+## What you get
 
-This directory is a **staging snapshot** inside a legacy monorepo.
+`repomap-core` produces an artifact directory (default `repo_map/`, commonly configured as `.repomap/`) that becomes the query surface for agents.
 
-- It is **not** published from this repository.
-- Cross-repo links are intentionally omitted.
+Typical artifacts include:
 
-In the canonical split, the intended distribution name is `repomap-core`.
+- `symbols.jsonl` — symbol catalog (functions/classes/methods with locations and metadata)
+- `deps.edgelist` — dependency edges (module → module)
+- additional summaries (integration/layer/analyzer outputs) depending on config and enabled analyzers
 
-## CLI (primary entrypoint: `repomap`)
+The artifact directory is designed to be:
+- **text-native** (JSONL / edgelists / small summaries)
+- **diff-friendly**
+- **incremental-workflow friendly** (generate → verify → query/report)
 
-In the canonical (exported) package, `repomap-core` is intended to publish the `repomap`
-console script.
+---
 
-Target command surface:
+## Quick start (agent-friendly)
 
-- `repomap generate <repo-path>` — generate deterministic analysis artifacts.
-- `repomap verify <repo-path>` — verify constraints/claims against those artifacts.
-- (later) `repomap query ...` — query and explore artifacts/claims.
+Generate artifacts first, then treat the artifact directory as your “truth layer”.
 
-Packaging note (staging): this monorepo snapshot may not yet include the final
-console-script wiring. The statements above describe the intended publishing and CLI
-story for the exported repo.
+```bash
+# Generate artifacts (preferred output dir is a hidden folder)
+repomap generate .           # uses repomap.toml if present
 
-## Claims extension (optional)
+# or, in some staging snapshots / older docs, the command may be named:
+repomap analyze . --output-dir .repomap
 
-Install `repomap-claims` to add claims-related subcommands under the same primary
-entrypoint:
+# Confirm output exists
+ls -la .repomap/  # or repo_map/
 
-In the canonical split, the intended distribution name is `repomap-claims`.
-
-When the extension is installed, it enables `repomap claims ...` under the same
-primary CLI entrypoint.
-
-`repomap-core` remains the owner of the `repomap` command; `repomap-claims` extends it.
-
-## Docs / export note
-
-This staging snapshot lives inside a monorepo, but the exported repo should be
-self-contained. During export, the following documents are expected to be vendored into
-the standalone repos (or replaced with equivalent in-repo references):
-
-- Contract authority: `REPOMAP_CORE_CLAIMS_CONTRACT.md`
-- Schema policy: `SCHEMA_VERSION_POLICY.md`
-
-## Scope
-
-Deterministic scanning, parsing, and artifact generation.
+# (Recommended) verify determinism / contracts
+repomap verify .
