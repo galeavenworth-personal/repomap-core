@@ -68,7 +68,7 @@ customModes:
 
       - `.venv/bin/python -m ruff format --check .`
       - `.venv/bin/python -m ruff check .`
-      - `.venv/bin/python -m mypy repomap`
+      - `.venv/bin/python -m mypy src`
       - `.venv/bin/python -m pytest -m 'not live'`
     whenToUse: |
       Use when working on claims generation, evidence gathering, verification,
@@ -225,7 +225,7 @@ customModes:
       Before completing any code changes:
       - `.venv/bin/python -m ruff format --check .`
       - `.venv/bin/python -m ruff check .`
-      - `.venv/bin/python -m mypy repomap`
+      - `.venv/bin/python -m mypy src`
       - `.venv/bin/python -m pytest -m 'not live'`
   - slug: fitter
     name: Fitter (Line Health)
