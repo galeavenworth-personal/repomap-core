@@ -118,10 +118,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     assert proc.stdout is not None  # for mypy
+    stdout = proc.stdout
 
     def _read_output() -> None:
         nonlocal last_output
-        for raw in proc.stdout:
+        for raw in stdout:
             line = raw.rstrip("\n")
             tail.append(line)
             last_output = time.monotonic()
@@ -151,7 +152,11 @@ def main(argv: list[str] | None = None) -> int:
         _kill_process_group(proc)
         try:
             proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            # The process group kill above is best-effort; do not block teardown.
+            pass
         except Exception:
+            # A race (already-exited) or OS-level error shouldn't prevent emitting a contract.
             pass
         # Best-effort join; don't block indefinitely.
         reader.join(timeout=1)
