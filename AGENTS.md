@@ -7,6 +7,17 @@ This repo prefers a **pinned**, user-local Beads install and a repo-local wrappe
 ```bash
 .kilocode/tools/beads_install.sh   # one-time (per machine / per pinned version)
 .kilocode/tools/bd init           # one-time (per clone)
+.kilocode/tools/beads_git_setup.sh # one-time (per clone) git merge driver setup
+```
+
+## Beads Git Merge Driver (Required)
+
+This repo tracks Beads JSONL files with a custom git merge driver. Fresh clones
+must configure it once per clone to avoid git errors like "unknown merge driver
+beads".
+
+```bash
+.kilocode/tools/beads_git_setup.sh
 ```
 
 ## Quick Reference

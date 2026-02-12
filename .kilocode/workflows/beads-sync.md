@@ -96,6 +96,15 @@ Initialize Beads for this repo (once per clone):
 .kilocode/tools/bd init
 ```
 
+### Configure git merge driver (once per clone)
+
+This repo tracks Beads JSONL files with a custom git merge driver. Configure it
+to avoid "unknown merge driver beads" on fresh clones:
+
+```bash
+.kilocode/tools/beads_git_setup.sh
+```
+
 ## References
 
 - Skill: [`beads-local-db-ops`](../skills/beads-local-db-ops/SKILL.md)
