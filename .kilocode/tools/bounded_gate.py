@@ -43,11 +43,13 @@ def _kill_process_group(proc: subprocess.Popen[str]) -> None:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
         return
-    except Exception:
+    except PermissionError:
+        return
+    except OSError:
         # Fall back to process-only kill.
         try:
             proc.kill()
-        except Exception:
+        except (ProcessLookupError, PermissionError, OSError):
             return
 
 
@@ -109,8 +111,9 @@ def main(argv: list[str] | None = None) -> int:
             "last_output_lines": [f"error: {exc}"],
             "stop_reason": "env_missing",
             "repro_hints": [
-                f"Run from repo root: {os.getcwd()}",
-                f"cwd used for this run: {cwd}",
+                f"Runner cwd (diagnostic only): {os.getcwd()}",
+                f"Command cwd (--cwd): {cwd}",
+                "If the repo root differs, re-run from repo root or pass the repo root via --cwd.",
                 "Ensure the command exists and required venv deps are installed.",
             ],
         }
@@ -155,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         except subprocess.TimeoutExpired:
             # The process group kill above is best-effort; do not block teardown.
             pass
-        except Exception:
+        except (ProcessLookupError, OSError):
             # A race (already-exited) or OS-level error shouldn't prevent emitting a contract.
             pass
         # Best-effort join; don't block indefinitely.
@@ -169,8 +172,9 @@ def main(argv: list[str] | None = None) -> int:
             "last_output_lines": list(tail),
             "stop_reason": stop_reason,
             "repro_hints": [
-                f"Run from repo root: {os.getcwd()}",
-                f"cwd used for this run: {cwd}",
+                f"Runner cwd (diagnostic only): {os.getcwd()}",
+                f"Command cwd (--cwd): {cwd}",
+                "If the repo root differs, re-run from repo root or pass the repo root via --cwd.",
                 "If the gate produces sparse output, increase verbosity to reduce false stall classification.",
                 "Re-run with: .venv/bin/python .kilocode/tools/bounded_gate.py --pass-through --tail-lines 50 --gate-id <gate> --timeout-seconds <N> --stall-seconds <M> -- <command>",
             ],
@@ -198,8 +202,9 @@ def main(argv: list[str] | None = None) -> int:
             "last_output_lines": list(tail),
             "stop_reason": "env_missing",
             "repro_hints": [
-                f"Run from repo root: {os.getcwd()}",
-                f"cwd used for this run: {cwd}",
+                f"Runner cwd (diagnostic only): {os.getcwd()}",
+                f"Command cwd (--cwd): {cwd}",
+                "If the repo root differs, re-run from repo root or pass the repo root via --cwd.",
                 "Install dev tooling (ruff/mypy/pytest) into the venv (e.g. pip install -e '.[dev]').",
             ],
         }
