@@ -1,10 +1,13 @@
 # Environment Variables Setup
 
 This document describes environment variables used by **Kilo Code MCP servers** and optional repomap-core development workflows.
+Default offline quality gates require **no** environment variables; these are only for optional tooling.
 
 ## Required Environment Variables (default local quality gates)
 
 **None.** The default local quality gates for this repo are designed to run **offline** and without secrets.
+
+## Optional Environment Variables (MCP servers / workflows)
 
 ### SONARQUBE_TOKEN
 **Purpose:** Authentication for SonarQube MCP server  
@@ -16,6 +19,15 @@ export SONARQUBE_TOKEN="your-token-here"
 
 **Previous Issue:** Token was hardcoded in `mcp.json` (security risk)  
 **Fixed:** Now uses `${SONARQUBE_TOKEN}` environment variable reference
+
+### CONTEXT7_API_KEY
+
+**Purpose:** Authentication for Context7 MCP docs lookup  
+**Used by:** `.kilocode/mcp.json` → `context7` server  
+**How to set:**
+```bash
+export CONTEXT7_API_KEY="your-api-key-here"
+```
 
 ## Experimental / Out-of-scope for repomap-core
 
@@ -39,6 +51,7 @@ export OPENROUTER_API_KEY="your-api-key-here"
 Add to `~/.bashrc` or `~/.zshrc`:
 ```bash
 export SONARQUBE_TOKEN="your-token-here"
+# export CONTEXT7_API_KEY="your-api-key-here"  # optional (Context7 MCP docs)
 # export OPENROUTER_API_KEY="your-api-key-here"  # experimental (claims extension)
 ```
 
@@ -51,6 +64,7 @@ source ~/.bashrc  # or ~/.zshrc
 Create `.env` in project root (already gitignored):
 ```bash
 SONARQUBE_TOKEN=your-token-here
+# CONTEXT7_API_KEY=your-api-key-here  # optional (Context7 MCP docs)
 # OPENROUTER_API_KEY=your-api-key-here  # experimental (claims extension)
 ```
 
@@ -67,6 +81,7 @@ Add to `.vscode/settings.json` (not committed):
 {
   "terminal.integrated.env.linux": {
     "SONARQUBE_TOKEN": "your-token-here",
+    "CONTEXT7_API_KEY": "your-api-key-here",
     "OPENROUTER_API_KEY": "your-api-key-here" 
   }
 }
@@ -77,10 +92,12 @@ Add to `.vscode/settings.json` (not committed):
 Check if environment variables are set:
 ```bash
 echo $SONARQUBE_TOKEN
+# echo $CONTEXT7_API_KEY  # optional (Context7 MCP docs)
 # echo $OPENROUTER_API_KEY  # experimental (claims extension)
 ```
 
 `SONARQUBE_TOKEN` should output a non-empty value if you are using SonarQube MCP tooling.
+`CONTEXT7_API_KEY` should output a non-empty value if you are using Context7 MCP tooling.
 
 ## Security Best Practices
 
