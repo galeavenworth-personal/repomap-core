@@ -13,21 +13,24 @@ Beads is issue tracking that lives in your repo, making it perfect for AI coding
 ### Essential Commands
 
 ```bash
+# This repo uses the pinned Beads wrapper.
+# Run all commands via .kilocode/tools/bd
+
 # Create new issues
-bd create "Add user authentication"
+.kilocode/tools/bd create "Add user authentication"
 
 # View all issues
-bd list
+.kilocode/tools/bd list
 
 # View issue details
-bd show <issue-id>
+.kilocode/tools/bd show <issue-id>
 
 # Update issue status
-bd update <issue-id> --status in_progress
-bd update <issue-id> --status done
+.kilocode/tools/bd update <issue-id> --status in_progress
+.kilocode/tools/bd update <issue-id> --status done
 
 # Sync with git remote
-bd sync
+.kilocode/tools/bd sync
 ```
 
 ### Working with Issues
@@ -63,11 +66,11 @@ Try Beads in your own projects:
 # Install Beads
 curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
 
-# Initialize in your repo
-bd init
+# Initialize in your repo (this repo uses the pinned wrapper)
+.kilocode/tools/bd init
 
 # Create your first issue
-bd create "Try out Beads"
+.kilocode/tools/bd create "Try out Beads"
 ```
 
 ## Learn More
