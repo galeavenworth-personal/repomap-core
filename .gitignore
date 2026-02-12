@@ -25,6 +25,10 @@ htmlcov/
 .beads/*.db
 .beads/*.db-*
 
+# Beads sync-branch JSONL (kept in git history on `beads-sync`, not on main)
+.beads/issues.jsonl
+.beads/interactions.jsonl
+
 # OS / editor metadata
 .DS_Store
 Thumbs.db
@@ -37,10 +41,13 @@ Thumbs.db
 .env.local
 
 # Local workflow reasoning artifacts (keep out of git by default)
-.kilocode/thinking/*.json
-.kilocode/
-.kilocodemodes
-.kilocodeignore
+.kilocode/thinking/
+
+# NOTE: `.kilocode/`, `.kilocodemodes`, and `.kilocodeignore` are intentionally tracked in this repo.
+# Do NOT ignore them globally, or new workflow/tooling files won’t be added by default.
 
 # plans
 plans/
+
+# Browser/tooling artifacts
+screenshots/

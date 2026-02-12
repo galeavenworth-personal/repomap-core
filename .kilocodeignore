@@ -1,0 +1,49 @@
+# Kilo Code Ignore File
+# Kilo should see repomap artifacts and claims for analysis
+# This is intentionally minimal compared to .gitignore
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual environments (large, not useful for analysis)
+.venv/
+venv/
+ENV/
+
+# Build artifacts (generated, not source)
+build/
+dist/
+*.egg-info/
+
+# IDE metadata (not code)
+.idea/
+*.swp
+*.swo
+
+# Test coverage (generated)
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Type checker cache (generated)
+.mypy_cache/
+
+# Linter cache (generated)
+.ruff_cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables (secrets)
+.env
+.env.local
+
+# Git directory (not code)
+.git/
+
