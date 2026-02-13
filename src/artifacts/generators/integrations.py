@@ -69,6 +69,7 @@ class IntegrationsGenerator:
         include_patterns = kwargs.get("include_patterns")
         exclude_patterns = kwargs.get("exclude_patterns")
         integration_rules = kwargs.get("integration_tags")
+        nested_gitignore: bool = kwargs.get("nested_gitignore", False)
 
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -81,6 +82,7 @@ class IntegrationsGenerator:
             output_dir=out_dir_name,
             include_patterns=include_patterns,
             exclude_patterns=exclude_patterns,
+            nested_gitignore=nested_gitignore,
         ):
             integrations = _extract_integrations_from_file(
                 file_path,

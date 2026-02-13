@@ -37,6 +37,7 @@ class SymbolsGenerator:
         layers_config: LayersConfig | None = kwargs.get("layers_config")
         include_patterns: list[str] | None = kwargs.get("include_patterns")
         exclude_patterns: list[str] | None = kwargs.get("exclude_patterns")
+        nested_gitignore: bool = kwargs.get("nested_gitignore", False)
 
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -49,6 +50,7 @@ class SymbolsGenerator:
             output_dir=out_dir_name,
             include_patterns=include_patterns,
             exclude_patterns=exclude_patterns,
+            nested_gitignore=nested_gitignore,
         ):
             relative_path = file_path.relative_to(root).as_posix()
             module_name = path_to_module(relative_path)
