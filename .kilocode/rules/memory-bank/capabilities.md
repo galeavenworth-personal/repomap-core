@@ -28,11 +28,13 @@ This registry enables rapid capability matching to tasks. When you see a task, s
 - **/refactor** → Plan and execute refactoring with architecture awareness (code refactoring tasks)
 - **/claims-pipeline** → Run full claims generation pipeline (claims work, evidence gathering)
 - **/codebase-exploration** → Explore unfamiliar codebase systematically (new codebase, understanding structure)
+- **/friction-audit** → Lightweight ergonomics and cognitive friction audit (single-agent flow)
 
 ### Orchestrator Workflows (Factory Line)
 - **/orchestrate-start-task** → Task preparation with isolated discovery, exploration, prep subtasks (multi-agent flow)
 - **/orchestrate-execute-task** → Task execution with isolated implementation subtasks (multi-agent flow)
 - **/orchestrate-refactor** → Refactoring with isolated analysis, planning, implementation subtasks (multi-agent flow)
+- **/orchestrate-pressure-test** → Adversarial pressure test of identity, friction, and leverage (multi-agent flow)
 
 **When to use Orchestrator workflows:**
 - Complex tasks with distinct phases
