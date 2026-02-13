@@ -14,6 +14,9 @@ def path_to_module(file_path: str | Path) -> str:
     Returns:
         Module name (e.g., "repomap_core.cli")
 
+    Raises:
+        ValueError: If normalization would produce an empty module name.
+
     Examples:
         >>> path_to_module("src/repomap_core/cli.py")
         'repomap_core.cli'
@@ -42,5 +45,9 @@ def path_to_module(file_path: str | Path) -> str:
 
     if module_parts and module_parts[-1] == "__init__":
         module_parts = module_parts[:-1]
+
+    if not module_parts:
+        msg = f"Path {path_str!r} does not resolve to a non-empty Python module name"
+        raise ValueError(msg)
 
     return ".".join(module_parts)

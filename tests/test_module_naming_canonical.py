@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from artifacts.generators.deps import DepsGenerator
 from artifacts.generators.symbols import SymbolsGenerator
 from contract.artifacts import DEPS_EDGELIST, SYMBOLS_JSONL
@@ -19,6 +21,14 @@ def test_path_to_module_fallback_rules_are_deterministic() -> None:
     assert path_to_module("pkg/module.py") == "pkg.module"
     assert path_to_module("pkg/__init__.py") == "pkg"
     assert path_to_module(Path("nested/feature/tool.py")) == "nested.feature.tool"
+
+
+def test_path_to_module_rejects_empty_module_names() -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        path_to_module("__init__.py")
+
+    with pytest.raises(ValueError, match="non-empty"):
+        path_to_module("src/__init__.py")
 
 
 def test_deps_and_symbols_use_same_canonical_module_id(tmp_path: Path) -> None:
