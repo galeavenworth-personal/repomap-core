@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -39,7 +40,7 @@ def _run_generators(
         include_patterns: list[str] | None = None,
         exclude_patterns: list[str] | None = None,
         nested_gitignore: bool = False,
-    ) -> scan_files.Iterator[Path]:
+    ) -> Iterator[Path]:
         files_list = list(
             original_find(
                 directory,
@@ -55,7 +56,9 @@ def _run_generators(
     monkeypatch.setattr(scan_files, "find_python_files", _spy_find_python_files)
     monkeypatch.setattr(deps_module, "find_python_files", _spy_find_python_files)
     monkeypatch.setattr(symbols_module, "find_python_files", _spy_find_python_files)
-    monkeypatch.setattr(integrations_module, "find_python_files", _spy_find_python_files)
+    monkeypatch.setattr(
+        integrations_module, "find_python_files", _spy_find_python_files
+    )
 
     SymbolsGenerator().generate(
         root=repo_root,
