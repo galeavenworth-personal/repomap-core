@@ -44,12 +44,15 @@ def _to_int(value: Any) -> int:
     if isinstance(value, float):
         return int(value)
     if isinstance(value, str):
-        return int(value)
+        try:
+            return int(value.strip())
+        except (ValueError, AttributeError):
+            return 0
     return 0
 
 
 def test_artifact_contents_generated_from_committed_fixture(tmp_path: Path) -> None:
-    fixture_root = Path("tests/fixtures/mini_repo")
+    fixture_root = Path(__file__).parent / "fixtures" / "mini_repo"
     repo_root = tmp_path / "repo"
     shutil.copytree(fixture_root, repo_root)
 
