@@ -180,9 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(
             f"[bounded-gate] gate_id={args.gate_id} cwd={cwd} cmd={invocation}\n"
         )
-        sys.stderr.write(
-            f"[bounded-gate] gate_run_signature={run_signature}\n"
-        )
+        sys.stderr.write(f"[bounded-gate] gate_run_signature={run_signature}\n")
 
     try:
         proc = subprocess.Popen(
