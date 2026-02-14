@@ -7,9 +7,11 @@ import pytest
 
 from artifacts.generators import deps as deps_module
 from artifacts.generators import integrations as integrations_module
+from artifacts.generators import modules as modules_module
 from artifacts.generators import symbols as symbols_module
 from artifacts.generators.deps import DepsGenerator
 from artifacts.generators.integrations import IntegrationsGenerator
+from artifacts.generators.modules import ModulesGenerator
 from artifacts.generators.symbols import SymbolsGenerator
 from scan import files as scan_files
 
@@ -56,6 +58,7 @@ def _run_generators(
     monkeypatch.setattr(scan_files, "find_python_files", _spy_find_python_files)
     monkeypatch.setattr(deps_module, "find_python_files", _spy_find_python_files)
     monkeypatch.setattr(symbols_module, "find_python_files", _spy_find_python_files)
+    monkeypatch.setattr(modules_module, "find_python_files", _spy_find_python_files)
     monkeypatch.setattr(
         integrations_module, "find_python_files", _spy_find_python_files
     )
@@ -73,6 +76,9 @@ def _run_generators(
     IntegrationsGenerator().generate(
         root=repo_root,
         out_dir=out_dir,
+        nested_gitignore=nested_gitignore,
+    )
+    ModulesGenerator(repo_root, out_dir).generate(
         nested_gitignore=nested_gitignore,
     )
 
@@ -96,8 +102,8 @@ def test_generator_filelist_parity(
         monkeypatch=monkeypatch,
     )
 
-    assert len(observed) == 3
-    assert observed[0] == observed[1] == observed[2]
+    assert len(observed) == 4
+    assert observed[0] == observed[1] == observed[2] == observed[3]
 
     if nested_gitignore:
         assert "nested/skip.py" not in observed[0]

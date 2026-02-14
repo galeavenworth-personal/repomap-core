@@ -10,6 +10,8 @@ Behavior:
   - bounded tail capture (`--tail-lines`)
 - On timeout/stall/env-missing, emits a Line Fault Contract JSON (MVP fields)
   and exits with code 2.
+- Always appends a `gate_run.v1` JSONL audit record to `.kilocode/gate_runs.jsonl`.
+  The audit record is keyed by a deterministic run signature: `bead_id + run_timestamp`.
 - Otherwise, exits with the wrapped command's exit code.
 """
 
@@ -41,7 +43,7 @@ def _append_audit_record(
     audit_log_path: str,
     *,
     bead_id: str,
-    run_timestamp: str | None,
+    run_timestamp: str,
     gate_id: str,
     status: str,
     exit_code: int,
@@ -50,10 +52,12 @@ def _append_audit_record(
     stop_reason: str | None,
 ) -> None:
     """Append a gate_run.v1 JSONL record to the audit log."""
+    run_signature = f"bead_id={bead_id} run_timestamp={run_timestamp}"
     record = {
         "schema_version": "gate_run.v1",
         "bead_id": bead_id,
         "run_timestamp": run_timestamp,
+        "run_signature": run_signature,
         "gate_id": gate_id,
         "status": status,
         "exit_code": exit_code,
@@ -67,7 +71,9 @@ def _append_audit_record(
             json.dump(record, f, sort_keys=True)
             f.write("\n")
     except OSError as exc:
-        sys.stderr.write(f"[bounded-gate] WARNING: cannot write audit log: {exc}\n")
+        # Audit is mandatory: failing to record proof-of-execution must fail the gate run.
+        sys.stderr.write(f"[bounded-gate] ERROR: cannot write audit log: {exc}\n")
+        raise SystemExit(3)
 
 
 def _kill_process_group(proc: subprocess.Popen[str]) -> None:
@@ -92,11 +98,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cwd", default=".")
     parser.add_argument(
         "--bead-id",
-        help="If set, append a gate_run.v1 JSONL audit record to .kilocode/gate_runs.jsonl",
+        required=True,
+        help=(
+            "Beads task ID. Required for deterministic audit logging to .kilocode/gate_runs.jsonl. "
+            "Together with --run-timestamp forms gate_run_signature."
+        ),
     )
     parser.add_argument(
         "--run-timestamp",
-        help="ISO 8601 UTC timestamp for this run (used only when --bead-id is set)",
+        required=True,
+        help=(
+            "ISO 8601 UTC timestamp for this run. Use one shared value across all gates in a batch "
+            "so proof can be verified by (bead_id, run_timestamp)."
+        ),
     )
     parser.add_argument("--timeout-seconds", type=float, default=600)
     parser.add_argument("--stall-seconds", type=float, default=60)
@@ -128,12 +142,11 @@ def main(argv: list[str] | None = None) -> int:
     invocation = _format_invocation(cmd)
     cwd = os.path.abspath(args.cwd)
     audit_log_path = os.path.join(cwd, ".kilocode", "gate_runs.jsonl")
+    run_signature = f"bead_id={args.bead_id} run_timestamp={args.run_timestamp}"
 
     def _maybe_append_audit_record(
         *, exit_code: int, elapsed_seconds: float, stop_reason: str | None
     ) -> None:
-        if not args.bead_id:
-            return
         status = (
             "fault"
             if stop_reason is not None
@@ -155,6 +168,9 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(
             f"[bounded-gate] gate_id={args.gate_id} cwd={cwd} cmd={invocation}\n"
         )
+        sys.stderr.write(
+            f"[bounded-gate] gate_run_signature={run_signature}\n"
+        )
 
     try:
         proc = subprocess.Popen(
@@ -170,6 +186,9 @@ def main(argv: list[str] | None = None) -> int:
         elapsed = time.monotonic() - start
         contract = {
             "gate_id": args.gate_id,
+            "bead_id": str(args.bead_id),
+            "run_timestamp": str(args.run_timestamp),
+            "run_signature": run_signature,
             "invocation": invocation,
             "elapsed_seconds": round(elapsed, 3),
             "last_output_lines": [f"error: {exc}"],
@@ -234,6 +253,9 @@ def main(argv: list[str] | None = None) -> int:
         elapsed = time.monotonic() - start
         contract = {
             "gate_id": args.gate_id,
+            "bead_id": str(args.bead_id),
+            "run_timestamp": str(args.run_timestamp),
+            "run_signature": run_signature,
             "invocation": invocation,
             "elapsed_seconds": round(elapsed, 3),
             "last_output_lines": list(tail),
@@ -243,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"Command cwd (--cwd): {cwd}",
                 "If the repo root differs, re-run from repo root or pass the repo root via --cwd.",
                 "If the gate produces sparse output, increase verbosity to reduce false stall classification.",
-                "Re-run with: .venv/bin/python .kilocode/tools/bounded_gate.py --pass-through --tail-lines 50 --gate-id <gate> --timeout-seconds <N> --stall-seconds <M> -- <command>",
+                "Re-run with: .venv/bin/python .kilocode/tools/bounded_gate.py --bead-id <task-id> --run-timestamp <RUN_TS> --pass-through --tail-lines 50 --gate-id <gate> --timeout-seconds <N> --stall-seconds <M> -- <command>",
             ],
         }
         _emit_contract(contract, stream=sys.stdout)
@@ -267,6 +289,9 @@ def main(argv: list[str] | None = None) -> int:
     if rc != 0 and any(any(m in line for m in env_missing_markers) for line in tail):
         contract = {
             "gate_id": args.gate_id,
+            "bead_id": str(args.bead_id),
+            "run_timestamp": str(args.run_timestamp),
+            "run_signature": run_signature,
             "invocation": invocation,
             "elapsed_seconds": round(elapsed, 3),
             "last_output_lines": list(tail),

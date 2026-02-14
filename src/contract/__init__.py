@@ -9,11 +9,12 @@ from contract.artifacts import (
     DEPS_EDGELIST,
     DEPS_SUMMARY_JSON,
     INTEGRATIONS_STATIC_JSONL,
+    MODULES_JSONL,
     SYMBOLS_JSONL,
     TIER1_ARTIFACT_SPECS,
     Tier1ArtifactSpec,
 )
-from contract.models import DepsSummary, IntegrationRecord, SymbolRecord
+from contract.models import DepsSummary, IntegrationRecord, ModuleRecord, SymbolRecord
 from contract.validation import (
     ValidationMessage,
     ValidationResult,
@@ -25,10 +26,12 @@ __all__ = [
     "DEPS_EDGELIST",
     "DEPS_SUMMARY_JSON",
     "INTEGRATIONS_STATIC_JSONL",
+    "MODULES_JSONL",
     "SYMBOLS_JSONL",
     "TIER1_ARTIFACT_SPECS",
     "DepsSummary",
     "IntegrationRecord",
+    "ModuleRecord",
     "SymbolRecord",
     "Tier1ArtifactSpec",
     "ValidationMessage",

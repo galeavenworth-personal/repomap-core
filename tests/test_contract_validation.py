@@ -12,6 +12,7 @@ from contract.artifacts import (
     DEPS_EDGELIST,
     DEPS_SUMMARY_JSON,
     INTEGRATIONS_STATIC_JSONL,
+    MODULES_JSONL,
     SYMBOLS_JSONL,
     TIER1_ARTIFACT_SPECS,
 )
@@ -52,6 +53,15 @@ def _write_valid_artifacts(d: Path) -> None:
     (d / INTEGRATIONS_STATIC_JSONL).write_text(
         json.dumps(integration_record) + "\n", encoding="utf-8"
     )
+
+    module_record = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "path": "pkg/mod.py",
+        "module": "pkg.mod",
+        "is_package": False,
+        "package_root": ".",
+    }
+    (d / MODULES_JSONL).write_text(json.dumps(module_record) + "\n", encoding="utf-8")
 
     deps_summary = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,

@@ -11,6 +11,7 @@ from contract.artifacts import (
     DEPS_EDGELIST,
     DEPS_SUMMARY_JSON,
     INTEGRATIONS_STATIC_JSONL,
+    MODULES_JSONL,
     SYMBOLS_JSONL,
 )
 from contract.validation import validate_artifacts
@@ -128,3 +129,36 @@ def test_artifact_contents_generated_from_committed_fixture(tmp_path: Path) -> N
         for r in integrations
     ]
     assert integration_sort_keys == sorted(integration_sort_keys)
+
+    modules_path = out_dir / MODULES_JSONL
+    assert modules_path.exists()
+    modules = read_jsonl(modules_path)
+
+    module_required_keys = {"path", "module", "is_package", "package_root"}
+    for record in modules:
+        assert module_required_keys.issubset(record.keys())
+
+    module_paths = [str(r["path"]) for r in modules]
+    assert module_paths == sorted(module_paths)
+    assert len(module_paths) == len(set(module_paths))
+
+    for record in modules:
+        path = str(record["path"])
+        is_package = bool(record["is_package"])
+        assert is_package is path.endswith("__init__.py")
+
+    expected_modules = {
+        "pkg_a/__init__.py": ("pkg_a", True, "."),
+        "pkg_a/core.py": ("pkg_a.core", False, "."),
+        "pkg_a/integrations.py": ("pkg_a.integrations", False, "."),
+        "pkg_a/use_core.py": ("pkg_a.use_core", False, "."),
+    }
+    observed_modules = {
+        str(record["path"]): (
+            str(record["module"]),
+            bool(record["is_package"]),
+            str(record["package_root"]),
+        )
+        for record in modules
+    }
+    assert observed_modules == expected_modules
