@@ -70,8 +70,9 @@ def test_artifact_contents_generated_from_committed_fixture(tmp_path: Path) -> N
         r.get("kind") == "function" and r.get("name") == "compute_value"
         for r in symbols
     )
-    symbol_id_pattern = re.compile(r"^sym:.+::.+@L\d+:C\d+$")
-    symbol_key_pattern = re.compile(r"^symkey:.+::.+::.+$")
+    # Use delimiter-aware patterns to avoid backtracking-heavy wildcards.
+    symbol_id_pattern = re.compile(r"sym:[^\n]*::[^@\n]+@L\d+:C\d+")
+    symbol_key_pattern = re.compile(r"symkey:[^\n]*::[^:\n]+::[^:\n]+")
     symbol_ids: list[str] = []
     for symbol in symbols:
         assert "symbol_id" in symbol
@@ -85,8 +86,8 @@ def test_artifact_contents_generated_from_committed_fixture(tmp_path: Path) -> N
 
         symbol_id = str(symbol["symbol_id"])
         symbol_key = str(symbol["symbol_key"])
-        assert symbol_id_pattern.match(symbol_id)
-        assert symbol_key_pattern.match(symbol_key)
+        assert symbol_id_pattern.fullmatch(symbol_id)
+        assert symbol_key_pattern.fullmatch(symbol_key)
         assert symbol_id == f"sym:{path}::{qualified_name}@L{start_line}:C{start_col}"
         assert symbol_key == f"symkey:{path}::{qualified_name}::{kind}"
         symbol_ids.append(symbol_id)
