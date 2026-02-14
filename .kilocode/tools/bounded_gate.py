@@ -26,6 +26,7 @@ import subprocess
 import sys
 import time
 from collections import deque
+from datetime import datetime, timezone
 from typing import TextIO
 
 
@@ -98,18 +99,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cwd", default=".")
     parser.add_argument(
         "--bead-id",
-        required=True,
         help=(
-            "Beads task ID. Required for deterministic audit logging to .kilocode/gate_runs.jsonl. "
-            "Together with --run-timestamp forms gate_run_signature."
+            "Beads task ID. Together with --run-timestamp forms gate_run_signature. "
+            "If omitted, defaults to 'adhoc'."
         ),
     )
     parser.add_argument(
         "--run-timestamp",
-        required=True,
         help=(
             "ISO 8601 UTC timestamp for this run. Use one shared value across all gates in a batch "
-            "so proof can be verified by (bead_id, run_timestamp)."
+            "so proof can be verified by (bead_id, run_timestamp). If omitted, uses current UTC time."
         ),
     )
     parser.add_argument("--timeout-seconds", type=float, default=600)
@@ -128,6 +127,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("cmd", nargs=argparse.REMAINDER)
 
     args = parser.parse_args(argv)
+
+    bead_id_defaulted = args.bead_id is None
+    run_timestamp_defaulted = args.run_timestamp is None
+    if bead_id_defaulted:
+        args.bead_id = "adhoc"
+    if run_timestamp_defaulted:
+        args.run_timestamp = datetime.now(timezone.utc).isoformat()
+
+    if (bead_id_defaulted or run_timestamp_defaulted) and not args.json_only:
+        sys.stderr.write(
+            "⚠ --bead-id / --run-timestamp not provided; using defaults for audit record\n"
+        )
+
     if not args.cmd or args.cmd[0] != "--":
         parser.error("command must be provided after '--' (e.g. -- <cmd> <args...>)")
 
