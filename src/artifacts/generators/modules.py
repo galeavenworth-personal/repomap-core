@@ -14,29 +14,33 @@ from utils import path_to_module
 class ModulesGenerator:
     """Generates modules.jsonl artifact from Python source files."""
 
-    def __init__(self, root: Path, out_dir: Path) -> None:
-        self.root = root
-        self.out_dir = out_dir
+    @property
+    def name(self) -> str:
+        """Generator name for logging and identification."""
+        return "modules"
 
-    def generate(self, **kwargs: Any) -> str:
+    def generate(
+        self,
+        root: Path,
+        out_dir: Path,
+        include_patterns: list[str] | None = None,
+        exclude_patterns: list[str] | None = None,
+        nested_gitignore: bool = False,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Generate modules artifact."""
-        include_patterns: list[str] | None = kwargs.get("include_patterns")
-        exclude_patterns: list[str] | None = kwargs.get("exclude_patterns")
-        nested_gitignore: bool = kwargs.get("nested_gitignore", False)
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-        self.out_dir.mkdir(parents=True, exist_ok=True)
-
-        out_dir_name = _get_output_dir_name(self.out_dir, self.root)
+        out_dir_name = _get_output_dir_name(out_dir, root)
 
         records: list[dict[str, str | bool]] = []
         for file_path in find_python_files(
-            self.root,
+            root,
             output_dir=out_dir_name,
             include_patterns=include_patterns,
             exclude_patterns=exclude_patterns,
             nested_gitignore=nested_gitignore,
         ):
-            relative_path = file_path.relative_to(self.root).as_posix()
+            relative_path = file_path.relative_to(root).as_posix()
             module = path_to_module(relative_path)
             is_package = relative_path.endswith("__init__.py")
             package_root = "src" if relative_path.startswith("src/") else "."
@@ -52,9 +56,9 @@ class ModulesGenerator:
 
         records.sort(key=lambda record: (record["path"],))
 
-        _write_jsonl(self.out_dir / MODULES_JSONL, records)
+        _write_jsonl(out_dir / MODULES_JSONL, records)
 
-        return MODULES_JSONL
+        return records, {"count": len(records)}
 
 
 __all__ = ["MODULES_JSONL", "ModulesGenerator"]

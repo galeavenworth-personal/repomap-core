@@ -86,8 +86,14 @@ def generate_all_artifacts(
     )
     integrations = [IntegrationRecord(**d) for d in integration_dicts]
 
-    modules_gen = ModulesGenerator(root, out_dir)
-    modules_gen.generate()
+    modules_gen = ModulesGenerator()
+    modules_gen.generate(
+        root=root,
+        out_dir=out_dir,
+        include_patterns=include_patterns,
+        exclude_patterns=exclude_patterns,
+        nested_gitignore=nested_gitignore,
+    )
 
     artifacts_list = [
         SYMBOLS_JSONL,

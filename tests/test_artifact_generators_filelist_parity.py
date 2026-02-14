@@ -78,7 +78,9 @@ def _run_generators(
         out_dir=out_dir,
         nested_gitignore=nested_gitignore,
     )
-    ModulesGenerator(repo_root, out_dir).generate(
+    ModulesGenerator().generate(
+        root=repo_root,
+        out_dir=out_dir,
         nested_gitignore=nested_gitignore,
     )
 
