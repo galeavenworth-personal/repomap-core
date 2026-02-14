@@ -107,9 +107,10 @@ def test_validation_result_not_ok_when_errors() -> None:
 # Group 2: Directory handling
 
 
-def test_missing_directory() -> None:
+def test_missing_directory(tmp_path: Path) -> None:
     """validate_artifacts reports a missing artifacts directory."""
-    result = validate_artifacts(Path("/nonexistent"))
+    missing_dir = tmp_path / "nonexistent"
+    result = validate_artifacts(missing_dir)
     assert result.ok is False
     assert _messages_contain(result.errors, "Artifacts directory does not exist")
 
