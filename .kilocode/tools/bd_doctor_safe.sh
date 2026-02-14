@@ -23,4 +23,3 @@ fi
 
 echo "WARN: 'bd doctor' not supported by this pinned bd version; skipping." >&2
 exit 0
-

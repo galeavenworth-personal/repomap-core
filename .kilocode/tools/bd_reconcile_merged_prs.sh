@@ -73,7 +73,8 @@ fi
 for TASK_ID in "$@"; do
   # Bounded query: at most 1 merged PR with head branch equal to task id.
   # Note: `--head` filters by head ref name; this matches our convention of naming branches after task ids.
-  GH_OUT="$(gh pr list --state merged --head "${TASK_ID}" -L 1 --json number,url,title,mergedAt 2>&1)" || {
+  # Ensure `gh` runs against the repository at ROOT_DIR even if the caller's CWD differs.
+  GH_OUT="$(cd "${ROOT_DIR}" && gh pr list --state merged --head "${TASK_ID}" -L 1 --json number,url,title,mergedAt 2>&1)" || {
     # Keep output bounded: collapse whitespace + truncate.
     GH_OUT_ONE_LINE="$(echo "${GH_OUT}" | tr '\n' ' ' | tr -s ' ')"
     GH_OUT_TRUNC="${GH_OUT_ONE_LINE:0:200}"
