@@ -11,7 +11,7 @@
 #
 # Options:
 #   --dry-run   Do not mutate Beads; just report what would be closed.
-#   --strict    Fail (exit 2) if `gh` is missing or `gh` queries fail.
+#   --strict    Fail (exit 2) if `gh` is missing, `gh` queries fail, or `bd close` fails.
 
 set -euo pipefail
 
@@ -49,7 +49,7 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 if [[ "$#" -lt 1 ]]; then
-  echo "Usage: .kilocode/tools/bd_reconcile_merged_prs.sh [--dry-run] <task-id> [<task-id> ...]" >&2
+  echo "Usage: .kilocode/tools/bd_reconcile_merged_prs.sh [--dry-run] [--strict] <task-id> [<task-id> ...]" >&2
   exit 2
 fi
 
@@ -98,6 +98,19 @@ for TASK_ID in "$@"; do
     continue
   fi
 
-  "${BD}" close "${TASK_ID}" >/dev/null
+  BD_OUT="$("${BD}" close "${TASK_ID}" 2>&1)" || {
+    # Keep output bounded: collapse whitespace + truncate.
+    BD_OUT_ONE_LINE="$(echo "${BD_OUT}" | tr '\n' ' ' | tr -s ' ')"
+    BD_OUT_TRUNC="${BD_OUT_ONE_LINE:0:200}"
+    if [[ "${STRICT}" == "1" ]]; then
+      echo "ERROR: bd close failed for ${TASK_ID}: ${BD_OUT_TRUNC}" >&2
+      exit 2
+    fi
+    echo "${TASK_ID}: WARN bd close failed; continuing (${BD_OUT_TRUNC})" >&2
+    echo "${TASK_ID}: merged PR found; FAILED to close in Beads"
+    continue
+  }
+
+  # `bd close` succeeded.
   echo "${TASK_ID}: merged PR found; closed in Beads"
 done
