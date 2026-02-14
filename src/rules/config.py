@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, get_args
 
 import tomllib
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from artifacts.models.artifacts.integrations import IntegrationTag
 
@@ -20,16 +19,10 @@ VALID_INTEGRATION_TAGS = frozenset(get_args(IntegrationTag))
 UnclassifiedBehavior = Literal["allow", "deny", "ignore"]
 
 
-class EmbeddingProvider(str, Enum):
-    """Embedding model providers for semantic search."""
-
-    OPENAI = "openai"
-    COHERE = "cohere"
-    LOCAL_OLLAMA = "local_ollama"
-
-
 class LayerDef(BaseModel):
     """Definition of a single architectural layer."""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str = Field(description="Layer name (e.g., 'presentation', 'business')")
     globs: list[str] = Field(
@@ -40,6 +33,8 @@ class LayerDef(BaseModel):
 class LayerRule(BaseModel):
     """Allowed dependencies from one layer to others."""
 
+    model_config = ConfigDict(extra="forbid")
+
     from_layer: str = Field(alias="from", description="Source layer name")
     to: list[str] = Field(
         default_factory=list,
@@ -49,6 +44,8 @@ class LayerRule(BaseModel):
 
 class LayersConfig(BaseModel):
     """Configuration for architectural layer classification and rules."""
+
+    model_config = ConfigDict(extra="forbid")
 
     layer: list[LayerDef] = Field(
         default_factory=list,
@@ -64,63 +61,10 @@ class LayersConfig(BaseModel):
     )
 
 
-class SemanticConfig(BaseModel):
-    """Configuration for semantic search layer."""
-
-    enabled: bool = Field(default=False, description="Enable semantic search")
-    weaviate_url: str = Field(
-        default="http://localhost:8080",
-        description="Weaviate instance URL",
-    )
-    weaviate_api_key: str | None = Field(
-        default=None,
-        description="Weaviate Cloud API key (optional for local)",
-    )
-    embedding_provider: EmbeddingProvider = Field(
-        default=EmbeddingProvider.OPENAI,
-        description="Embedding model provider",
-    )
-    embedding_model: str = Field(
-        default="text-embedding-3-small",
-        description="Embedding model name",
-    )
-    generative_model: str = Field(
-        default="gpt-4o-mini",
-        description="Model for RAG generation",
-    )
-    generative_base_url: str | None = Field(
-        default=None,
-        description="Custom base URL for OpenAI-compatible APIs",
-    )
-    default_alpha: float = Field(
-        default=0.5,
-        description="Default hybrid search alpha (0=pure BM25, 1=pure vector)",
-    )
-    default_limit: int = Field(
-        default=10,
-        description="Default search result limit",
-    )
-
-
-class AnalyzersConfig(BaseModel):
-    """Configuration for optional analyzers."""
-
-    complexity: bool = Field(
-        default=False,
-        description="Enable radon complexity analysis",
-    )
-    docstrings: bool = Field(
-        default=False,
-        description="Enable interrogate docstring coverage",
-    )
-    security: bool = Field(
-        default=False,
-        description="Enable bandit security scanning",
-    )
-
-
 class RepoMapConfig(BaseModel):
     """Configuration for repomap_core artifact generation."""
+
+    model_config = ConfigDict(extra="forbid")
 
     output_dir: str = Field(
         default=".repomap",
@@ -141,10 +85,6 @@ class RepoMapConfig(BaseModel):
     layers: LayersConfig = Field(
         default_factory=LayersConfig,
         description="Architectural layer classification and rules",
-    )
-    analyzers: AnalyzersConfig = Field(
-        default_factory=AnalyzersConfig,
-        description="Optional analyzer toggles",
     )
     nested_gitignore: bool = Field(
         default=False,
