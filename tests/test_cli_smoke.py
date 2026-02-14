@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import shutil
+from pathlib import Path
 
 import pytest
 
 from cli import main
 from rules.config import ConfigError, load_config, resolve_output_dir
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _write_minimal_repo(root: Path) -> None:
@@ -18,6 +16,11 @@ def _write_minimal_repo(root: Path) -> None:
         '"""Minimal module."""\n',
         encoding="utf-8",
     )
+
+
+def _copy_mini_repo_fixture(root: Path) -> None:
+    fixture_repo = Path(__file__).parent / "fixtures" / "mini_repo"
+    shutil.copytree(fixture_repo, root)
 
 
 def test_cli_generate_smoke(tmp_path: Path) -> None:
@@ -31,6 +34,30 @@ def test_cli_generate_smoke(tmp_path: Path) -> None:
     assert exit_code == 0
     assert out_dir.exists()
     assert any(out_dir.iterdir())
+
+
+def test_readme_generate_default_output_dir_from_fixture(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    _copy_mini_repo_fixture(repo_root)
+
+    exit_code = main(["generate", str(repo_root)])
+
+    default_out_dir = repo_root / ".repomap"
+    assert exit_code == 0
+    assert default_out_dir.exists()
+    assert any(default_out_dir.iterdir())
+
+
+def test_readme_generate_out_dir_flag_from_fixture(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    _copy_mini_repo_fixture(repo_root)
+
+    custom_out_dir = tmp_path / "custom-artifacts"
+    exit_code = main(["generate", str(repo_root), "--out-dir", str(custom_out_dir)])
+
+    assert exit_code == 0
+    assert custom_out_dir.exists()
+    assert any(custom_out_dir.iterdir())
 
 
 def test_cli_validate_default_artifacts_dir_reports_error(
