@@ -154,6 +154,8 @@ def _validate_jsonl(
 
     missing_schema_emitted = False
     mismatch_schema_emitted = False
+    seen_symbol_ids: set[str] | None = set() if artifact_name == "symbols" else None
+    duplicate_symbol_ids: set[str] = set()
     with handle:
         for line_number, raw_line in enumerate(handle, 1):
             line = raw_line.strip()
@@ -214,6 +216,23 @@ def _validate_jsonl(
                     strict_schema_version=strict_schema_version,
                 )
                 mismatch_schema_emitted = True
+
+            if seen_symbol_ids is not None:
+                symbol_id = getattr(record, "symbol_id", None)
+                if isinstance(symbol_id, str):
+                    if symbol_id in seen_symbol_ids:
+                        duplicate_symbol_ids.add(symbol_id)
+                    else:
+                        seen_symbol_ids.add(symbol_id)
+
+    for symbol_id in sorted(duplicate_symbol_ids):
+        result.errors.append(
+            ValidationMessage(
+                artifact=artifact_name,
+                path=path,
+                message=f"Duplicate symbol_id in symbols.jsonl: {symbol_id}",
+            )
+        )
 
 
 def _validate_deps_summary(

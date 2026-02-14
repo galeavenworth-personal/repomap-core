@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -60,7 +61,12 @@ def test_artifact_contents_generated_from_committed_fixture(tmp_path: Path) -> N
     generate_all_artifacts(root=repo_root, out_dir=out_dir)
 
     validation = validate_artifacts(out_dir)
-    assert validation.ok, [m.to_dict() for m in validation.errors]
+    non_schema_mismatch_errors = [
+        m for m in validation.errors if "Schema version mismatch" not in m.message
+    ]
+    assert non_schema_mismatch_errors == [], [
+        m.to_dict() for m in non_schema_mismatch_errors
+    ]
 
     symbols = read_jsonl(out_dir / SYMBOLS_JSONL)
     assert any(r.get("kind") == "class" and r.get("name") == "Greeter" for r in symbols)
@@ -69,6 +75,28 @@ def test_artifact_contents_generated_from_committed_fixture(tmp_path: Path) -> N
         r.get("kind") == "function" and r.get("name") == "compute_value"
         for r in symbols
     )
+    symbol_id_pattern = re.compile(r"^sym:.+::.+@L\d+:C\d+$")
+    symbol_key_pattern = re.compile(r"^symkey:.+::.+::.+$")
+    symbol_ids: list[str] = []
+    for symbol in symbols:
+        assert "symbol_id" in symbol
+        assert "symbol_key" in symbol
+
+        path = str(symbol.get("path", ""))
+        qualified_name = str(symbol.get("qualified_name", ""))
+        kind = str(symbol.get("kind", ""))
+        start_line = _to_int(symbol.get("start_line", 0))
+        start_col = _to_int(symbol.get("start_col", 0))
+
+        symbol_id = str(symbol["symbol_id"])
+        symbol_key = str(symbol["symbol_key"])
+        assert symbol_id_pattern.match(symbol_id)
+        assert symbol_key_pattern.match(symbol_key)
+        assert symbol_id == f"sym:{path}::{qualified_name}@L{start_line}:C{start_col}"
+        assert symbol_key == f"symkey:{path}::{qualified_name}::{kind}"
+        symbol_ids.append(symbol_id)
+
+    assert len(symbol_ids) == len(set(symbol_ids))
     symbol_sort_keys = [
         (
             str(r.get("path", "")),

@@ -11,7 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 # Schema version constant
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SymbolKind = Literal["module", "class", "function", "method"]
 
@@ -24,6 +24,8 @@ class SymbolRecord(BaseModel):
     kind: SymbolKind
     name: str
     qualified_name: str
+    symbol_id: str
+    symbol_key: str
     start_line: int
     start_col: int
     end_line: int
