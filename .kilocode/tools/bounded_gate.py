@@ -37,6 +37,39 @@ def _emit_contract(contract: dict, *, stream: TextIO) -> None:
     stream.flush()
 
 
+def _append_audit_record(
+    audit_log_path: str,
+    *,
+    bead_id: str,
+    run_timestamp: str | None,
+    gate_id: str,
+    status: str,
+    exit_code: int,
+    elapsed_seconds: float,
+    invocation: str,
+    stop_reason: str | None,
+) -> None:
+    """Append a gate_run.v1 JSONL record to the audit log."""
+    record = {
+        "schema_version": "gate_run.v1",
+        "bead_id": bead_id,
+        "run_timestamp": run_timestamp,
+        "gate_id": gate_id,
+        "status": status,
+        "exit_code": exit_code,
+        "elapsed_seconds": round(elapsed_seconds, 3),
+        "invocation": invocation,
+        "stop_reason": stop_reason,
+    }
+    try:
+        os.makedirs(os.path.dirname(audit_log_path), exist_ok=True)
+        with open(audit_log_path, "a") as f:
+            json.dump(record, f, sort_keys=True)
+            f.write("\n")
+    except OSError as exc:
+        sys.stderr.write(f"[bounded-gate] WARNING: cannot write audit log: {exc}\n")
+
+
 def _kill_process_group(proc: subprocess.Popen[str]) -> None:
     """Best-effort kill of the process group."""
     try:
@@ -57,6 +90,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bounded_gate")
     parser.add_argument("--gate-id", required=True)
     parser.add_argument("--cwd", default=".")
+    parser.add_argument(
+        "--bead-id",
+        help="If set, append a gate_run.v1 JSONL audit record to .kilocode/gate_runs.jsonl",
+    )
+    parser.add_argument(
+        "--run-timestamp",
+        help="ISO 8601 UTC timestamp for this run (used only when --bead-id is set)",
+    )
     parser.add_argument("--timeout-seconds", type=float, default=600)
     parser.add_argument("--stall-seconds", type=float, default=60)
     parser.add_argument("--tail-lines", type=int, default=50)
@@ -86,6 +127,29 @@ def main(argv: list[str] | None = None) -> int:
 
     invocation = _format_invocation(cmd)
     cwd = os.path.abspath(args.cwd)
+    audit_log_path = os.path.join(cwd, ".kilocode", "gate_runs.jsonl")
+
+    def _maybe_append_audit_record(
+        *, exit_code: int, elapsed_seconds: float, stop_reason: str | None
+    ) -> None:
+        if not args.bead_id:
+            return
+        status = (
+            "fault"
+            if stop_reason is not None
+            else ("pass" if exit_code == 0 else "fail")
+        )
+        _append_audit_record(
+            audit_log_path,
+            bead_id=str(args.bead_id),
+            run_timestamp=args.run_timestamp,
+            gate_id=str(args.gate_id),
+            status=status,
+            exit_code=int(exit_code),
+            elapsed_seconds=float(elapsed_seconds),
+            invocation=invocation,
+            stop_reason=stop_reason,
+        )
 
     if not args.json_only:
         sys.stderr.write(
@@ -118,6 +182,9 @@ def main(argv: list[str] | None = None) -> int:
             ],
         }
         _emit_contract(contract, stream=sys.stdout)
+        _maybe_append_audit_record(
+            exit_code=2, elapsed_seconds=elapsed, stop_reason="env_missing"
+        )
         return 2
 
     assert proc.stdout is not None  # for mypy
@@ -180,6 +247,9 @@ def main(argv: list[str] | None = None) -> int:
             ],
         }
         _emit_contract(contract, stream=sys.stdout)
+        _maybe_append_audit_record(
+            exit_code=2, elapsed_seconds=elapsed, stop_reason=stop_reason
+        )
         return 2
 
     # Command completed normally.
@@ -209,6 +279,9 @@ def main(argv: list[str] | None = None) -> int:
             ],
         }
         _emit_contract(contract, stream=sys.stdout)
+        _maybe_append_audit_record(
+            exit_code=2, elapsed_seconds=elapsed, stop_reason="env_missing"
+        )
         return 2
 
     if not args.json_only:
@@ -220,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
             for line in tail:
                 sys.stderr.write(line + "\n")
 
+    _maybe_append_audit_record(exit_code=rc, elapsed_seconds=elapsed, stop_reason=None)
     return rc
 
 

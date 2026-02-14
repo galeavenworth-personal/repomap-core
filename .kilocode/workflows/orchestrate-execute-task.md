@@ -527,61 +527,88 @@ new_task(
 
 **CRITICAL:** All gates must pass. No exceptions, no ignores, no workarounds.
 
-**Quality Gates:**
+## Quality Gates (MANDATORY: Use Landing Script)
 
-## Gate 1: Format Check
-
-```bash
-.venv/bin/python -m ruff format --check .
-```
-
-If fails:
-```bash
-.venv/bin/python -m ruff format .
-```
-
-## Gate 2: Lint Check
+**Primary method (preferred):**
+Run the landing script which executes all gates via bounded_gate.py, verifies audit proof, closes the bead, and syncs:
 
 ```bash
-.venv/bin/python -m ruff check .
+.kilocode/tools/beads_land_plane.sh --bead-id <task-id>
 ```
 
-**If fails, DO NOT add global ignores.** Use clean fixes:
-
-| Issue | Clean Fix |
-|-------|-----------|
-| TC003 | Per-file-ignores if runtime import |
-| EM102/TRY003 | Extract message to variable |
-| Complexity | Extract Method pattern |
-
-## Gate 3: Type Check
+**Fallback method (if landing script cannot run):**
+Run each gate individually via bounded_gate.py with bead tracking:
 
 ```bash
-.venv/bin/python -m mypy src
+RUN_TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+
+.venv/bin/python .kilocode/tools/bounded_gate.py \
+  --gate-id ruff-format --bead-id <task-id> --run-timestamp "$RUN_TS" \
+  --timeout-seconds 60 --stall-seconds 30 --pass-through -- \
+  .venv/bin/python -m ruff format --check .
+
+.venv/bin/python .kilocode/tools/bounded_gate.py \
+  --gate-id ruff-check --bead-id <task-id> --run-timestamp "$RUN_TS" \
+  --timeout-seconds 60 --stall-seconds 30 --pass-through -- \
+  .venv/bin/python -m ruff check .
+
+.venv/bin/python .kilocode/tools/bounded_gate.py \
+  --gate-id mypy-src --bead-id <task-id> --run-timestamp "$RUN_TS" \
+  --timeout-seconds 120 --stall-seconds 60 --pass-through -- \
+  .venv/bin/python -m mypy src
+
+.venv/bin/python .kilocode/tools/bounded_gate.py \
+  --gate-id pytest --bead-id <task-id> --run-timestamp "$RUN_TS" \
+  --timeout-seconds 180 --stall-seconds 60 --pass-through -- \
+  .venv/bin/python -m pytest -q
 ```
 
-**If fails, DO NOT use `# type: ignore`.** Use clean fixes:
+**NEVER run raw gate commands directly.** All gate executions MUST go through `bounded_gate.py` with `--bead-id` to produce audit records.
 
-| Issue | Clean Fix |
-|-------|-----------|
-| Missing stubs | Per-module override in pyproject.toml |
-| X \| None → X | Ternary + guard pattern |
-| Incompatible types | Fix actual mismatch |
+## Completion Proof Requirement
 
-## Gate 4: Test Suite
+The quality gates subtask is NOT complete until:
+1. All four gates show `status=pass` in `.kilocode/gate_runs.jsonl` for the task's bead ID
+2. The audit proof can be verified by checking the JSONL log
+
+**Verification command:**
 
 ```bash
-.venv/bin/python -m pytest -q
+.venv/bin/python -c "
+import json, sys
+bead_id = sys.argv[1]
+required = {'ruff-format', 'ruff-check', 'mypy-src', 'pytest'}
+found = set()
+with open('.kilocode/gate_runs.jsonl') as f:
+    for line in f:
+        line = line.strip()
+        if not line: continue
+        try: rec = json.loads(line)
+        except: continue
+        if rec.get('bead_id') == bead_id and rec.get('status') == 'pass':
+            found.add(rec.get('gate_id'))
+missing = required - found
+if missing:
+    print(f'MISSING: {sorted(missing)}', file=sys.stderr); sys.exit(1)
+print(f'audit_proof=OK bead_id={bead_id}')
+" <task-id>
 ```
 
-All tests must pass.
+## Audit Log
+
+Every bounded gate run appends a record to `.kilocode/gate_runs.jsonl`. This append-only log provides:
+- Verifiable proof that gates passed for a specific bead ID
+- Timing data for gate execution
+- Fault records for debugging timeout/stall/env issues
+
+The log is the **objective evidence** required to complete the quality gates subtask.
 
 **Output Requirements:**
 - `model_plan_present`: YES/NO
 - `runtime_model_reported`: <from environment_details>
 - `runtime_mode_reported`: <mode slug>
 - `model_plan_match`: MATCH|MISMATCH|N/A
-- All gate results (PASS/FAIL)
+- `audit_proof=OK` verification result (or a clear explanation why verification could not be completed)
 - Any fixes applied
 - Final status
 
@@ -589,12 +616,10 @@ All tests must pass.
 Use `attempt_completion` with quality gate report.
 """,
     todos="""
-[ ] Run format check
-[ ] Run lint check
-[ ] Run type check
-[ ] Run test suite
+[ ] Run landing script (preferred) OR run all gates via bounded_gate.py (fallback)
 [ ] Fix any issues
-[ ] Verify all gates pass
+[ ] Verify audit proof in .kilocode/gate_runs.jsonl (audit_proof=OK)
+[ ] Verify all gates show status=pass for this bead ID
 """
 )
 ```
@@ -739,6 +764,29 @@ To resume:
 7. **Safer automation**: Auto-approve subtask spawn/close, manual approve edits
 
 ---
+
+## Landing the Plane
+
+Changes must be committed before landing. If `git status` shows uncommitted changes, commit first.
+
+**Use the landing script:**
+
+```bash
+.kilocode/tools/beads_land_plane.sh --bead-id <task-id>
+```
+
+This script:
+1. Runs beads preflight
+2. Executes all 4 quality gates via bounded_gate.py (with audit logging)
+3. Verifies audit proof in `.kilocode/gate_runs.jsonl`
+4. Closes the bead
+5. Syncs beads state
+
+If gates already passed, use `--skip-gates` (still verifies audit proof):
+
+```bash
+.kilocode/tools/beads_land_plane.sh --bead-id <task-id> --skip-gates
+```
 
 ## Integration with Beads
 

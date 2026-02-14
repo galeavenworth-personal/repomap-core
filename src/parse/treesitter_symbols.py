@@ -61,13 +61,17 @@ def _create_symbol_record(
     qualified_name: str,
 ) -> SymbolRecord:
     """Create a SymbolRecord from a tree-sitter node."""
+    start_line = node.start_point[0] + 1
+    start_col = node.start_point[1] + 1
     return SymbolRecord(
         path=relative_path,
         kind=kind,
         name=name,
         qualified_name=qualified_name,
-        start_line=node.start_point[0] + 1,
-        start_col=node.start_point[1] + 1,
+        symbol_id=f"sym:{relative_path}::{qualified_name}@L{start_line}:C{start_col}",
+        symbol_key=f"symkey:{relative_path}::{qualified_name}::{kind}",
+        start_line=start_line,
+        start_col=start_col,
         end_line=node.end_point[0] + 1,
         end_col=node.end_point[1] + 1,
         docstring_present=_has_docstring(node),
@@ -179,6 +183,8 @@ def extract_symbols_treesitter(
             kind="module",
             name=module_name.split(".")[-1] if module_name else "<unknown>",
             qualified_name=module_name,
+            symbol_id=f"sym:{relative_path}::{module_name}@L1:C1",
+            symbol_key=f"symkey:{relative_path}::{module_name}::module",
             start_line=1,
             start_col=1,
             end_line=root_node.end_point[0] + 1,
