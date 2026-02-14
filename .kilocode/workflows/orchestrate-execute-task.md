@@ -745,13 +745,18 @@ To resume:
 After all subtasks complete and quality gates pass:
 
 ```bash
-# Update issue status
-.kilocode/tools/bd update <task-id> --status done
+# Reconcile: if the PR for this task-id is already merged, ensure the Beads issue
+# cannot remain accidentally OPEN (prevents state drift line faults).
+.kilocode/tools/bd_reconcile_merged_prs.sh <task-id>
 
-# Close issue
+# Update issue status / close issue (idempotent if already closed)
+.kilocode/tools/bd update <task-id> --status done
 .kilocode/tools/bd close <task-id>
 
-# Sync to remote
+# Hygiene: detect orphaned issues if supported by the pinned bd version
+.kilocode/tools/bd_doctor_safe.sh
+
+# Sync to remote (beads-sync is authoritative)
 .kilocode/tools/bd sync
 ```
 

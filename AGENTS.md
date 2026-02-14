@@ -45,7 +45,7 @@ Sync Beads state from remote before starting work:
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Check for orphaned issues** - Run `bd doctor` to detect process failures
+3. **Check for orphaned issues** - Run `.kilocode/tools/bd_doctor_safe.sh` to detect process failures (no-op if unsupported)
 4. **Update issue status** - Close finished work, update in-progress items
 5. **Sync Beads** - Publish task state updates:
    ```bash
