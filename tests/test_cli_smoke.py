@@ -40,6 +40,7 @@ def test_readme_generate_default_output_dir_from_fixture(tmp_path: Path) -> None
     repo_root = tmp_path / "repo"
     _copy_mini_repo_fixture(repo_root)
 
+    assert not (repo_root / ".repomap").exists(), "output dir must not pre-exist"
     exit_code = main(["generate", str(repo_root)])
 
     default_out_dir = repo_root / ".repomap"
@@ -53,6 +54,7 @@ def test_readme_generate_out_dir_flag_from_fixture(tmp_path: Path) -> None:
     _copy_mini_repo_fixture(repo_root)
 
     custom_out_dir = tmp_path / "custom-artifacts"
+    assert not custom_out_dir.exists(), "custom output dir must not pre-exist"
     exit_code = main(["generate", str(repo_root), "--out-dir", str(custom_out_dir)])
 
     assert exit_code == 0
