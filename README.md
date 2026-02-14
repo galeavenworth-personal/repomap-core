@@ -10,7 +10,7 @@ The core design goal is simple: **same inputs → byte-identical outputs**. That
 
 ## What you get
 
-`repomap-core` produces an artifact directory (default `repo_map/`, commonly configured as `.repomap/`) that becomes the query surface for agents.
+`repomap-core` produces an artifact directory (default `.repomap/`) that becomes the query surface for agents.
 
 Typical artifacts include:
 
@@ -30,14 +30,11 @@ The artifact directory is designed to be:
 Generate artifacts first, then treat the artifact directory as your “truth layer”.
 
 ```bash
-# Generate artifacts (preferred output dir is a hidden folder)
+# Generate artifacts (default output dir is .repomap/)
 repomap generate .           # uses repomap.toml if present
 
-# or, in some staging snapshots / older docs, the command may be named:
-repomap analyze . --output-dir .repomap
-
 # Confirm output exists
-ls -la .repomap/  # or repo_map/
+ls -la .repomap/
 
 # (Recommended) verify determinism / contracts
 repomap verify .
