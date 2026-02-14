@@ -22,6 +22,8 @@ UnclassifiedBehavior = Literal["allow", "deny", "ignore"]
 class LayerDef(BaseModel):
     """Definition of a single architectural layer."""
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(description="Layer name (e.g., 'presentation', 'business')")
     globs: list[str] = Field(
         description="Glob patterns for files belonging to this layer"
@@ -30,6 +32,8 @@ class LayerDef(BaseModel):
 
 class LayerRule(BaseModel):
     """Allowed dependencies from one layer to others."""
+
+    model_config = ConfigDict(extra="forbid")
 
     from_layer: str = Field(alias="from", description="Source layer name")
     to: list[str] = Field(
