@@ -188,6 +188,14 @@ def _validate_jsonl(
                 )
                 continue
 
+            if seen_symbol_ids is not None:
+                symbol_id = getattr(record, "symbol_id", None)
+                if isinstance(symbol_id, str):
+                    if symbol_id in seen_symbol_ids:
+                        duplicate_symbol_ids.add(symbol_id)
+                    else:
+                        seen_symbol_ids.add(symbol_id)
+
             if not schema_present:
                 if not missing_schema_emitted:
                     _check_schema_version(
@@ -216,14 +224,6 @@ def _validate_jsonl(
                     strict_schema_version=strict_schema_version,
                 )
                 mismatch_schema_emitted = True
-
-            if seen_symbol_ids is not None:
-                symbol_id = getattr(record, "symbol_id", None)
-                if isinstance(symbol_id, str):
-                    if symbol_id in seen_symbol_ids:
-                        duplicate_symbol_ids.add(symbol_id)
-                    else:
-                        seen_symbol_ids.add(symbol_id)
 
     for symbol_id in sorted(duplicate_symbol_ids):
         result.errors.append(

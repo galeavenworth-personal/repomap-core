@@ -311,6 +311,50 @@ def test_jsonl_duplicate_symbol_id_detected(tmp_path: Path) -> None:
     assert _messages_contain(result.errors, "Duplicate symbol_id")
 
 
+def test_jsonl_duplicate_symbol_id_detected_when_schema_version_missing(
+    tmp_path: Path,
+) -> None:
+    """Duplicate symbol_id values are still detected when schema_version is missing."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+
+    duplicate_symbol_id = "sym:pkg/mod.py::pkg.mod.f@L1:C0"
+    symbol_record_a = {
+        "path": "pkg/mod.py",
+        "kind": "function",
+        "name": "f",
+        "qualified_name": "pkg.mod.f",
+        "symbol_id": duplicate_symbol_id,
+        "symbol_key": "symkey:pkg/mod.py::pkg.mod.f::function",
+        "start_line": 1,
+        "start_col": 0,
+        "end_line": 1,
+        "end_col": 10,
+        "docstring_present": False,
+    }
+    symbol_record_b = {
+        "path": "pkg/mod.py",
+        "kind": "function",
+        "name": "f",
+        "qualified_name": "pkg.mod.f",
+        "symbol_id": duplicate_symbol_id,
+        "symbol_key": "symkey:pkg/mod.py::pkg.mod.f::function",
+        "start_line": 1,
+        "start_col": 0,
+        "end_line": 1,
+        "end_col": 10,
+        "docstring_present": False,
+    }
+    payload = "\n".join([json.dumps(symbol_record_a), json.dumps(symbol_record_b)])
+    (artifacts_dir / SYMBOLS_JSONL).write_text(payload + "\n", encoding="utf-8")
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is False
+    assert _messages_contain(result.errors, "Duplicate symbol_id")
+    assert _messages_contain(result.warnings, "Missing schema_version")
+
+
 def test_jsonl_os_error(tmp_path: Path) -> None:
     """JSONL file open OSError is surfaced as a validation error."""
     artifacts_dir = tmp_path / "artifacts"

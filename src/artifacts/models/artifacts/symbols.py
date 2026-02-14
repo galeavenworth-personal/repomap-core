@@ -10,8 +10,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# Schema version constant
-SCHEMA_VERSION = 3
+# Schema version constant; must stay in sync with
+# src/contract/artifacts.py:ARTIFACT_SCHEMA_VERSION.
+SCHEMA_VERSION = 2
 
 SymbolKind = Literal["module", "class", "function", "method"]
 

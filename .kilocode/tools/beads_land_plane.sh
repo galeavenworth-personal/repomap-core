@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 
 usage() {
   cat >&2 <<'EOF'
@@ -69,10 +69,10 @@ fi
 RUN_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
 
 GATES=(
-  "ruff-format:60:30:.venv/bin/python -m ruff format --check ."
-  "ruff-check:60:30:.venv/bin/python -m ruff check ."
-  "mypy-src:120:60:.venv/bin/python -m mypy src"
-  "pytest:180:60:.venv/bin/python -m pytest -q"
+  "ruff-format:60:30:${ROOT_DIR}/.venv/bin/python -m ruff format --check ."
+  "ruff-check:60:30:${ROOT_DIR}/.venv/bin/python -m ruff check ."
+  "mypy-src:120:60:${ROOT_DIR}/.venv/bin/python -m mypy src"
+  "pytest:180:60:${ROOT_DIR}/.venv/bin/python -m pytest -q"
 )
 
 if [[ "$SKIP_GATES" != "true" ]]; then
@@ -86,7 +86,7 @@ if [[ "$SKIP_GATES" != "true" ]]; then
 
     # NOTE: $CMD is intentionally word-split to form argv for bounded_gate.
     # shellcheck disable=SC2086
-    if .venv/bin/python "${ROOT_DIR}/.kilocode/tools/bounded_gate.py" \
+    if "${ROOT_DIR}/.venv/bin/python" "${ROOT_DIR}/.kilocode/tools/bounded_gate.py" \
       --gate-id "$GATE_ID" \
       --bead-id "$BEAD_ID" \
       --run-timestamp "$RUN_TIMESTAMP" \
@@ -109,7 +109,7 @@ if [[ "$SKIP_GATES" != "true" ]]; then
 fi
 
 # Audit proof verification: require PASS records for all canonical gates.
-if ! .venv/bin/python -c "
+if ! "${ROOT_DIR}/.venv/bin/python" -c "
 import json, sys
 
 bead_id = sys.argv[1]
@@ -167,4 +167,3 @@ bead_closed: YES
 sync: ${SYNC_STATUS}
 ===========================
 EOF
-

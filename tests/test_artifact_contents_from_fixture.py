@@ -61,12 +61,7 @@ def test_artifact_contents_generated_from_committed_fixture(tmp_path: Path) -> N
     generate_all_artifacts(root=repo_root, out_dir=out_dir)
 
     validation = validate_artifacts(out_dir)
-    non_schema_mismatch_errors = [
-        m for m in validation.errors if "Schema version mismatch" not in m.message
-    ]
-    assert non_schema_mismatch_errors == [], [
-        m.to_dict() for m in non_schema_mismatch_errors
-    ]
+    assert validation.errors == [], [m.to_dict() for m in validation.errors]
 
     symbols = read_jsonl(out_dir / SYMBOLS_JSONL)
     assert any(r.get("kind") == "class" and r.get("name") == "Greeter" for r in symbols)
