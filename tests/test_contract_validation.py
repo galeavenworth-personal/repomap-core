@@ -83,6 +83,43 @@ def _write_valid_artifacts(d: Path) -> None:
         json.dumps(calls_raw_record) + "\n", encoding="utf-8"
     )
 
+    refs_record = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "ref_id": "ref:pkg/mod.py@L1:C0:name:foo",
+        "ref_kind": "name",
+        "src_span": {
+            "path": "pkg/mod.py",
+            "start_line": 1,
+            "start_col": 0,
+            "end_line": 1,
+            "end_col": 3,
+        },
+        "module": "pkg.mod",
+        "enclosing_symbol_id": "symbol:pkg/mod.py:f@L1:C0",
+        "expr": "foo",
+        "resolved_to": None,
+        "evidence": {"strategy": "syntax_only", "confidence": 0},
+    }
+    (d / "refs.jsonl").write_text(json.dumps(refs_record) + "\n", encoding="utf-8")
+
+    calls_record = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "ref_id": "ref:pkg/mod.py@L1:C0:call:foo",
+        "src_span": {
+            "path": "pkg/mod.py",
+            "start_line": 1,
+            "start_col": 0,
+            "end_line": 1,
+            "end_col": 5,
+        },
+        "callee_expr": "foo",
+        "module": "pkg.mod",
+        "enclosing_symbol_id": "symbol:pkg/mod.py:f@L1:C0",
+        "resolved_to": None,
+        "evidence": {"strategy": "syntax_only", "confidence": 0},
+    }
+    (d / "calls.jsonl").write_text(json.dumps(calls_record) + "\n", encoding="utf-8")
+
     deps_summary = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "node_count": 1,

@@ -3,21 +3,27 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from artifacts.generators import (
+    CallsGenerator,
     CallsRawGenerator,
     DepsGenerator,
     IntegrationsGenerator,
     ModulesGenerator,
+    RefsGenerator,
     SymbolsGenerator,
 )
+from artifacts.models.artifacts.calls import CallRecord
 from artifacts.models.artifacts.dependencies import DepsSummary
 from artifacts.models.artifacts.integrations import IntegrationRecord
+from artifacts.models.artifacts.refs import RefRecord
 from artifacts.models.artifacts.symbols import SymbolRecord
 from contract.artifacts import (
+    CALLS_JSONL,
     CALLS_RAW_JSONL,
     DEPS_EDGELIST,
     DEPS_SUMMARY_JSON,
     INTEGRATIONS_STATIC_JSONL,
     MODULES_JSONL,
+    REFS_JSONL,
     SYMBOLS_JSONL,
 )
 from rules.config import load_config, resolve_output_dir
@@ -66,6 +72,15 @@ def generate_all_artifacts(
     )
     symbols = [SymbolRecord(**d) for d in symbol_dicts]
 
+    modules_gen = ModulesGenerator()
+    modules_gen.generate(
+        root=root,
+        out_dir=out_dir,
+        include_patterns=include_patterns,
+        exclude_patterns=exclude_patterns,
+        nested_gitignore=nested_gitignore,
+    )
+
     deps_gen = DepsGenerator()
     _, deps_summary_dict = deps_gen.generate(
         root=root,
@@ -88,15 +103,6 @@ def generate_all_artifacts(
     )
     integrations = [IntegrationRecord(**d) for d in integration_dicts]
 
-    modules_gen = ModulesGenerator()
-    modules_gen.generate(
-        root=root,
-        out_dir=out_dir,
-        include_patterns=include_patterns,
-        exclude_patterns=exclude_patterns,
-        nested_gitignore=nested_gitignore,
-    )
-
     calls_raw_gen = CallsRawGenerator()
     calls_raw_gen.generate(
         root=root,
@@ -106,6 +112,26 @@ def generate_all_artifacts(
         nested_gitignore=nested_gitignore,
     )
 
+    refs_gen = RefsGenerator()
+    ref_dicts, _ = refs_gen.generate(
+        root=root,
+        out_dir=out_dir,
+        include_patterns=include_patterns,
+        exclude_patterns=exclude_patterns,
+        nested_gitignore=nested_gitignore,
+    )
+    [RefRecord(**d) for d in ref_dicts]
+
+    calls_gen = CallsGenerator()
+    call_dicts, _ = calls_gen.generate(
+        root=root,
+        out_dir=out_dir,
+        include_patterns=include_patterns,
+        exclude_patterns=exclude_patterns,
+        nested_gitignore=nested_gitignore,
+    )
+    [CallRecord(**d) for d in call_dicts]
+
     artifacts_list = [
         SYMBOLS_JSONL,
         MODULES_JSONL,
@@ -113,6 +139,8 @@ def generate_all_artifacts(
         DEPS_SUMMARY_JSON,
         INTEGRATIONS_STATIC_JSONL,
         CALLS_RAW_JSONL,
+        REFS_JSONL,
+        CALLS_JSONL,
     ]
 
     return {
