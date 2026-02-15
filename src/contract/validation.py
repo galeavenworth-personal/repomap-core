@@ -9,6 +9,8 @@ import orjson
 from pydantic import ValidationError
 
 from artifacts.models.artifacts.calls_raw import CallRawRecord
+from artifacts.models.artifacts.calls import CallRecord
+from artifacts.models.artifacts.refs import RefRecord
 from contract.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     TIER1_ARTIFACT_SPECS,
@@ -138,6 +140,10 @@ def _jsonl_model_for_artifact(artifact_name: str) -> type[_SchemaModel]:
         return IntegrationRecord
     if artifact_name == "calls_raw":
         return CallRawRecord
+    if artifact_name == "refs":
+        return RefRecord
+    if artifact_name == "calls":
+        return CallRecord
     msg = f"Unknown jsonl artifact: {artifact_name}"
     raise ValueError(msg)
 

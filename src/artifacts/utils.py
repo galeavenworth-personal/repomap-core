@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, Any
 
 import orjson
 
@@ -109,6 +110,19 @@ def _write_json(path: Path, obj: object) -> None:
     payload = _to_dict(obj)
     opts = orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2
     path.write_bytes(orjson.dumps(payload, option=opts))
+
+
+def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Load records from a JSONL file."""
+    records: list[dict[str, Any]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if line:
+                record = json.loads(line)
+                if isinstance(record, dict):
+                    records.append(record)
+    return records
 
 
 def _get_output_dir_name(out_dir: Path, root: Path) -> str:

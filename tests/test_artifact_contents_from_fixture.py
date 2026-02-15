@@ -8,11 +8,13 @@ from typing import Any
 
 from artifacts.write import generate_all_artifacts
 from contract.artifacts import (
+    CALLS_JSONL,
     CALLS_RAW_JSONL,
     DEPS_EDGELIST,
     DEPS_SUMMARY_JSON,
     INTEGRATIONS_STATIC_JSONL,
     MODULES_JSONL,
+    REFS_JSONL,
     SYMBOLS_JSONL,
 )
 from contract.validation import validate_artifacts
@@ -212,3 +214,22 @@ def test_artifact_contents_generated_from_committed_fixture(tmp_path: Path) -> N
             )
         )
     assert call_sort_keys == sorted(call_sort_keys)
+
+    refs_path = out_dir / REFS_JSONL
+    assert refs_path.exists()
+    refs = read_jsonl(refs_path)
+    assert refs
+
+    calls_path = out_dir / CALLS_JSONL
+    assert calls_path.exists()
+    calls = read_jsonl(calls_path)
+    assert calls
+
+    ref_ids = {str(record.get("ref_id", "")) for record in refs}
+    call_ids = {str(record.get("ref_id", "")) for record in calls}
+    assert call_ids.issubset(ref_ids)
+
+    ref_id_pattern_v2 = re.compile(r"ref:[^\n]+@L\d+:C\d+:[a-z_]+:.+")
+    for record in refs:
+        ref_id = str(record.get("ref_id", ""))
+        assert ref_id_pattern_v2.fullmatch(ref_id)
