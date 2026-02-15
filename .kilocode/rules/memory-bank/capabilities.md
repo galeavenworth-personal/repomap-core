@@ -30,24 +30,34 @@ This registry enables rapid capability matching to tasks. When you see a task, s
 - **/codebase-exploration** → Explore unfamiliar codebase systematically (new codebase, understanding structure)
 - **/friction-audit** → Lightweight ergonomics and cognitive friction audit (single-agent flow)
 
-### Orchestrator Workflows (Factory Line)
-- **/orchestrate-start-task** → Task preparation with isolated discovery, exploration, prep subtasks (multi-agent flow)
-- **/orchestrate-execute-task** → Task execution with isolated implementation subtasks (multi-agent flow)
-- **/orchestrate-refactor** → Refactoring with isolated analysis, planning, implementation subtasks (multi-agent flow)
-- **/orchestrate-pressure-test** → Adversarial pressure test of identity, friction, and leverage (multi-agent flow)
+### Orchestrator Modes (preferred)
+- **process-orchestrator** → Control-plane orchestrator for isolated specialist subtasks. Lifecycle: discover → explore → prepare → execute → gate → land. Replaces `/orchestrate-start-task`, `/orchestrate-execute-task`, `/orchestrate-refactor`.
+- **audit-orchestrator** → Adversarial audit orchestrator for pressure tests. Phases: Identity Attack → Friction Audit → Surface Minimization → Leverage Hunt → Synthesis. Replaces `/orchestrate-pressure-test`.
 
-**When to use Orchestrator workflows:**
+**When to use Orchestrator modes:**
 - Complex tasks with distinct phases
-- Need hard separation of concerns
-- Want native progress tracking
+- Need hard separation of concerns (isolated subtask contexts)
+- Want native progress tracking via todo list
 - Long-running tasks requiring resumability
-- Experimenting with parallel subtasks (future)
+- Adversarial pressure testing (audit-orchestrator)
 
 **When to use Original workflows:**
 - Straightforward tasks
 - Simpler single-agent flow preferred
 - Manageable context size
-- Comfortable with manual STOP discipline
+
+### Deprecated `/orchestrate-*` Workflows (reference-only)
+
+> These legacy workflow documents are preserved for historical reference in `.kilocode/workflows/`.
+> They are **not runtime templates**. Use the orchestrator modes above instead.
+
+| Legacy Command | Replacement |
+|---|---|
+| `/orchestrate-start-task` | `process-orchestrator` mode |
+| `/orchestrate-execute-task` | `process-orchestrator` mode |
+| `/orchestrate-refactor` | `process-orchestrator` mode |
+| `/orchestrate-pressure-test` | `audit-orchestrator` mode |
+| `/orchestrate-respond-to-pr-review` | No replacement mode; use `/respond-to-pr-review` + `github-cli-code-review` skill |
 
 ## MCP Servers (Use Cases)
 
