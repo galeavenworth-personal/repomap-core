@@ -367,6 +367,7 @@ customModes:
       prepare        | architect        | Sequential thinking prep, approach selection
       execute        | code             | Implementation with bounded subtasks
       gate           | code             | Quality gates via bounded runner
+      land           | process-orchestrator | Close/sync Beads + run landing script + final attestation/handoff
       line-fault     | fitter           | Timeout/stall/env recovery
       docs           | docs-specialist  | Documentation updates
 
@@ -385,7 +386,7 @@ customModes:
 
       ## Quality Gate Requirements
 
-      Gate runs MUST use `.kilocode/tools/bounded_gate.py`.
+      Gate runs MUST use `.venv/bin/python .kilocode/tools/bounded_gate.py`.
       Raw direct gate commands are disallowed in orchestrated flow.
       Every gate run must emit audit proof to `.kilocode/gate_runs.jsonl`.
       Preferred landing path is `.kilocode/tools/beads_land_plane.sh`.
@@ -430,7 +431,7 @@ customModes:
       - command
       - browser
       - mcp
-    fileRegex: "\\.(md|ya?ml)$|^\\.kilocode"
+    fileRegex: \.(md|ya?ml)$|^\.kilocode
     whenToUse: |
       Use for lifecycle orchestration when work should flow through isolated
       specialist subtasks (discover/explore/prepare/execute/gate/land) with
@@ -447,9 +448,10 @@ customModes:
 
       ## Sequential Thinking Session Management
 
-      - Prep exports to `.kilocode/thinking/task-<id>-prep-<YYYY-MM-DD>.json`
+      - Prep exports to `.kilocode/thinking/task-<id>-prep-<YYYY-MM-DD>.json` as plain UTF-8 JSON (uncompressed, human-readable)
       - Execution subtasks import prep session before implementation
-      - Each execution subtask exports its own session artifact
+      - Each execution subtask exports its own session artifact as plain UTF-8 JSON (uncompressed, human-readable)
+      - `.kilocode/thinking/` artifacts are internal-only and MUST NOT be committed to git
       - Required flow: `process_thought` → `generate_summary` → `export_session`
 
       ## Runtime Model Reporting Template
