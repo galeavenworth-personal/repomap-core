@@ -2,25 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from artifacts.models.artifacts.calls import CallRecord
 from artifacts.models.artifacts.refs import RefEvidence, ResolvedTo, SourceSpan
-from artifacts.utils import _write_jsonl
+from artifacts.utils import _load_jsonl, _write_jsonl
 from contract.artifacts import CALLS_JSONL, REFS_JSONL
-
-
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    """Load records from a JSONL file."""
-    records: list[dict[str, Any]] = []
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    return records
 
 
 class CallsGenerator:

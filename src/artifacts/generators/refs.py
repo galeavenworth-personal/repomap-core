@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
 
 from artifacts.models.artifacts.refs import RefEvidence, RefRecord, SourceSpan
-from artifacts.utils import _get_output_dir_name, _write_jsonl
+from artifacts.utils import _get_output_dir_name, _load_jsonl, _write_jsonl
 from contract.artifacts import CALLS_RAW_JSONL, MODULES_JSONL, REFS_JSONL, SYMBOLS_JSONL
 from parse.ast_imports import extract_imports
 from parse.name_resolution import (
@@ -48,17 +47,6 @@ def _candidate_coordinates(line: int, col: int) -> list[tuple[int, int]]:
             continue
         candidates.append(candidate)
     return candidates
-
-
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    """Load records from a JSONL file."""
-    records: list[dict[str, Any]] = []
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    return records
 
 
 def _build_symbols_by_span(
