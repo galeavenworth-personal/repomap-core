@@ -345,3 +345,4 @@ customModes:
       - mcp
     customInstructions: |
       This is a spike test mode. Your ONLY job is to attempt calling new_task to spawn an architect subtask and report whether it succeeded or failed. Include in your report: (1) whether new_task appeared in your available tools, (2) the result of calling it, (3) any error messages. Do NOT do any other work.
+    source: project
