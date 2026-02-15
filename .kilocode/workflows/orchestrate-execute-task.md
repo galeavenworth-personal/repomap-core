@@ -3,6 +3,12 @@ description: Orchestrator-based task execution workflow. Uses subtasks for imple
 auto_execution_mode: 3
 ---
 
+> **⚠️ REFERENCE DOCUMENTATION ONLY — This is not a runtime template.**
+>
+> The Process Orchestrator mode embeds this logic natively in its `roleDefinition`
+> (see `.kilocodemodes`). Do not treat the step lists below as executable instructions;
+> they are preserved as reference material for understanding the orchestration design.
+
 # Orchestrate Execute Task Workflow
 
 **Purpose:** Factory-line task execution using Orchestrator Mode with isolated implementation subtasks and session handoffs.
