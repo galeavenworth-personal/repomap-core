@@ -9,6 +9,14 @@ auto_execution_mode: 3
 > (see `.kilocodemodes`). Do not treat the step lists below as executable instructions;
 > they are preserved as reference material for understanding the orchestration design.
 
+> **⚠️ DEPRECATED (reference-only)**
+>
+> This workflow is preserved for historical reference. Prefer the mode-based entrypoints:
+> - `process-orchestrator` (discover → explore → prepare → execute → gate → land) replaces `/orchestrate-start-task`, `/orchestrate-execute-task`, `/orchestrate-refactor`.
+> - `audit-orchestrator` (Identity Attack → Friction Audit → Surface Minimization → Leverage Hunt → Synthesis) replaces `/orchestrate-pressure-test`.
+>
+> Do not treat the step lists below as executable instructions; see `.kilocodemodes` for the runtime `roleDefinition`.
+
 # Orchestrate Execute Task Workflow
 
 **Purpose:** Factory-line task execution using Orchestrator Mode with isolated implementation subtasks and session handoffs.

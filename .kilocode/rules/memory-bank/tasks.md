@@ -17,12 +17,34 @@ See `.kilocode/workflows/` for full procedures:
 - `/claims-pipeline` - Claims generation pipeline
 - `/codebase-exploration` - Systematic codebase exploration
 
-### Orchestrator Workflows (Factory Line)
-- `/orchestrate-start-task` - Task preparation with isolated subtasks
-- `/orchestrate-execute-task` - Task execution with isolated subtasks
-- `/orchestrate-refactor` - Refactoring with isolated subtasks
+### Orchestrator Modes (preferred)
+- **process-orchestrator** → Control-plane orchestrator for isolated specialist subtasks. Lifecycle: discover → explore → prepare → execute → gate → land. Replaces `/orchestrate-start-task`, `/orchestrate-execute-task`, `/orchestrate-refactor`.
+- **audit-orchestrator** → Adversarial audit orchestrator for pressure tests. Phases: Identity Attack → Friction Audit → Surface Minimization → Leverage Hunt → Synthesis. Replaces `/orchestrate-pressure-test`.
 
-**See [ORCHESTRATOR_WORKFLOWS.md](.kilocode/workflows/ORCHESTRATOR_WORKFLOWS.md) for details on when to use which.**
+**When to use Orchestrator modes:**
+- Complex tasks with distinct phases
+- Need hard separation of concerns (isolated subtask contexts)
+- Want native progress tracking via todo list
+- Long-running tasks requiring resumability
+- Adversarial pressure testing (audit-orchestrator)
+
+**When to use Original workflows:**
+- Straightforward tasks
+- Simpler single-agent flow preferred
+- Manageable context size
+
+### Deprecated `/orchestrate-*` Workflows (reference-only)
+
+> These legacy workflow documents are preserved for historical reference in `.kilocode/workflows/`.
+> They are **not runtime templates**. Use the orchestrator modes above instead.
+
+| Legacy Command | Replacement |
+|---|---|
+| `/orchestrate-start-task` | `process-orchestrator` mode |
+| `/orchestrate-execute-task` | `process-orchestrator` mode |
+| `/orchestrate-refactor` | `process-orchestrator` mode |
+| `/orchestrate-pressure-test` | `audit-orchestrator` mode |
+| `/orchestrate-respond-to-pr-review` | No replacement mode; use `/respond-to-pr-review` + `github-cli-code-review` skill |
 
 ## Common Commands
 
@@ -54,3 +76,4 @@ See `.kilocode/workflows/` for full procedures:
 - Full workflows: `.kilocode/workflows/`
 - Skills: `.kilocode/skills/`
 - Agent instructions: `AGENTS.md`
+- Mode definitions: `.kilocodemodes`

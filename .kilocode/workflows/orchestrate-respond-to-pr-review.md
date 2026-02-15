@@ -3,6 +3,18 @@ description: Orchestrator-based workflow for responding to PR review feedback. U
 auto_execution_mode: 3
 ---
 
+> **📚 Reference Documentation**
+>
+> This document is reference documentation for historical workflow design.
+> Do not load this file as a runtime template.
+
+> **⚠️ DEPRECATED (reference-only)**
+> 
+> This workflow is preserved for historical reference. No replacement orchestrator mode exists yet.
+> Prefer `/respond-to-pr-review` (monolithic workflow) + `github-cli-code-review` skill for PR review work.
+> 
+> Do not treat the step lists below as executable instructions.
+
 # Orchestrate Respond to PR Review Workflow
 
 **Purpose:** Factory-line PR review response using Orchestrator Mode. Parent coordinates; subtasks do intake, planning, implementation, verification, and **comment acknowledgement**.
