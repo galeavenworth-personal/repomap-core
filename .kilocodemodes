@@ -476,31 +476,31 @@ customModes:
         Mode: product-skeptic
         Goal: Test whether the system's identity claims hold under adversarial pressure
         Must produce: Top 3 identity vulnerabilities with severity ratings
-        Export: .kilocode/thinking/pressure-test-identity-<YYYY-MM-DD>.json
+        Export: .kilocode/thinking/pressure-test-identity-<YYYY-MM-DDTHHMMSSZ>.json
 
       Phase 2 — Friction Audit
         Mode: product-skeptic
         Goal: Map cognitive friction, wasted steps, and UX dead ends
         Must produce: Ranked friction points with impact estimates
-        Export: .kilocode/thinking/pressure-test-friction-<YYYY-MM-DD>.json
+        Export: .kilocode/thinking/pressure-test-friction-<YYYY-MM-DDTHHMMSSZ>.json
 
       Phase 3 — Surface Minimization
         Mode: product-skeptic
         Goal: Identify what can be removed without loss of capability
         Must produce: Removal candidates with impact analysis
-        Export: .kilocode/thinking/pressure-test-minimize-<YYYY-MM-DD>.json
+        Export: .kilocode/thinking/pressure-test-minimize-<YYYY-MM-DDTHHMMSSZ>.json
 
       Phase 4 — Leverage Hunt
         Mode: architect
         Goal: Find the single highest-leverage improvement opportunity
         Must produce: One highest-leverage move with rationale
-        Export: .kilocode/thinking/pressure-test-leverage-<YYYY-MM-DD>.json
+        Export: .kilocode/thinking/pressure-test-leverage-<YYYY-MM-DDTHHMMSSZ>.json
 
       Phase 5 — Synthesis + Recommendations
         Mode: architect
         Goal: Compile all findings into ranked, actionable recommendations
         Must produce: Ranked recommendation list with effort/impact scores
-        Export: .kilocode/thinking/pressure-test-synthesis-<YYYY-MM-DD>.json
+        Export: .kilocode/thinking/pressure-test-synthesis-<YYYY-MM-DDTHHMMSSZ>.json
 
       ## Orchestration Protocol
 
@@ -528,11 +528,11 @@ customModes:
       ## Highest Leverage Move
       ## Recommendations (Ranked by leverage)
       ## Session Exports
-      - .kilocode/thinking/pressure-test-identity-<date>.json
-      - .kilocode/thinking/pressure-test-friction-<date>.json
-      - .kilocode/thinking/pressure-test-minimize-<date>.json
-      - .kilocode/thinking/pressure-test-leverage-<date>.json
-      - .kilocode/thinking/pressure-test-synthesis-<date>.json
+      - .kilocode/thinking/pressure-test-identity-<YYYY-MM-DDTHHMMSSZ>.json
+      - .kilocode/thinking/pressure-test-friction-<YYYY-MM-DDTHHMMSSZ>.json
+      - .kilocode/thinking/pressure-test-minimize-<YYYY-MM-DDTHHMMSSZ>.json
+      - .kilocode/thinking/pressure-test-leverage-<YYYY-MM-DDTHHMMSSZ>.json
+      - .kilocode/thinking/pressure-test-synthesis-<YYYY-MM-DDTHHMMSSZ>.json
       ## Runtime Attestations
     groups:
       - read
@@ -570,6 +570,7 @@ customModes:
       - The report must contain all required sections, session exports, and runtime attestations
     whenToUse: |
       Use for adversarial pressure testing of repomap workflows, artifacts, and UX.
-      Automatically invoked when user mentions "pressure test", "audit", or
-      "adversarial review".
+      Automatically invoked when user mentions "pressure test", "pressure testing",
+      or "adversarial pressure test".
+      Not for compliance or security audits.
     source: project
