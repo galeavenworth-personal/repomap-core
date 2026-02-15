@@ -79,3 +79,4 @@ This registry enables rapid capability matching to tasks. When you see a task, s
 - Skills directory: `.kilocode/skills/`
 - Workflows directory: `.kilocode/workflows/`
 - MCP configuration: `.kilocode/mcp.json`
+- Mode definitions: `.kilocodemodes`

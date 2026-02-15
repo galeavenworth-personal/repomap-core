@@ -76,3 +76,4 @@ See `.kilocode/workflows/` for full procedures:
 - Full workflows: `.kilocode/workflows/`
 - Skills: `.kilocode/skills/`
 - Agent instructions: `AGENTS.md`
+- Mode definitions: `.kilocodemodes`
