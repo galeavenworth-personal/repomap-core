@@ -12,7 +12,7 @@ from contract.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     TIER1_ARTIFACT_SPECS,
 )
-from contract.models import DepsSummary, IntegrationRecord, SymbolRecord
+from contract.models import DepsSummary, IntegrationRecord, ModuleRecord, SymbolRecord
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -126,6 +126,8 @@ def validate_artifacts(
 def _jsonl_model_for_artifact(artifact_name: str) -> type[_SchemaModel]:
     if artifact_name == "symbols":
         return SymbolRecord
+    if artifact_name == "modules":
+        return ModuleRecord
     if artifact_name == "integrations":
         return IntegrationRecord
     msg = f"Unknown jsonl artifact: {artifact_name}"

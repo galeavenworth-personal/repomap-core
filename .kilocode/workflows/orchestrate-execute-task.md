@@ -450,32 +450,74 @@ This repo includes a workflow-layer bounded runner:
 
 - [`bounded_gate.py`](../tools/bounded_gate.py)
 
+**Rule:** In Orchestrator workflows, quality gates are **never** executed as raw `ruff`/`mypy`/`pytest` commands.
+They MUST be executed via [`bounded_gate.py`](../tools/bounded_gate.py) so timeouts/stalls are detected deterministically
+and gate audit records are written to [`gate_runs.jsonl`](../gate_runs.jsonl).
+
+**Audit is mandatory:** Every quality-gate run MUST include `--bead-id` and a `--run-timestamp`.
+Together these form the required run signature:
+
+`gate_run_signature = bead_id + run_timestamp`
+
 Example (format check):
 
 ```bash
+RUN_TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+
+# Proof of execution identity (include this exact pair in the subtask completion report)
+echo "gate_run_signature=bead_id=<task-id> run_timestamp=${RUN_TS}"
+
 .venv/bin/python .kilocode/tools/bounded_gate.py \
   --gate-id ruff-format \
+  --bead-id <task-id> \
+  --run-timestamp "$RUN_TS" \
   --timeout-seconds 60 \
   --stall-seconds 30 \
   --tail-lines 50 \
+  --pass-through \
+  --cwd . \
   -- \
   .venv/bin/python -m ruff format --check .
 ```
 
+**Template (copy/paste):**
+
+```bash
+RUN_TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+
+.venv/bin/python .kilocode/tools/bounded_gate.py \
+  --gate-id <gate_id> \
+  --bead-id <task-id> \
+  --run-timestamp "$RUN_TS" \
+  --timeout-seconds <timeout_seconds> \
+  --stall-seconds <stall_seconds> \
+  --tail-lines <tail_lines> \
+  --pass-through \
+  --cwd . \
+  -- \
+  <inner_cmd> <args...>
+```
+
 #### Canonical Fit Profile (repomap-core default gates)
 
-Use these as the **starting** budgets for repomap-core's offline quality gates:
+Use these as the **starting** budgets for repomap-core's offline quality gates.
 
-| gate_id | invocation | timeout_seconds | stall_seconds | tail_lines |
+**Important:** The `inner_cmd` column below is the command that appears *after* the `--` separator when invoking
+[`bounded_gate.py`](../tools/bounded_gate.py). It is **not** an instruction to run the command directly.
+
+| gate_id | inner_cmd (after `--`) | timeout_seconds | stall_seconds | tail_lines |
 |---|---|---:|---:|---:|
 | `ruff-format` | `.venv/bin/python -m ruff format --check .` | 60 | 30 | 50 |
-| `ruff-check` | `.venv/bin/python -m ruff check .` | 90 | 30 | 50 |
-| `mypy-src` | `.venv/bin/python -m mypy src` | 120 | 30 | 50 |
-| `pytest` | `.venv/bin/python -m pytest -q` | 180 | 30 | 50 |
+| `ruff-check` | `.venv/bin/python -m ruff check .` | 60 | 30 | 50 |
+| `mypy-src` | `.venv/bin/python -m mypy src` | 120 | 60 | 50 |
+| `pytest` | `.venv/bin/python -m pytest -q` | 180 | 60 | 50 |
 
 If the command faults (`timeout`/`stall`/`env_missing`), the runner emits a **Line Fault Contract JSON** to stdout and exits with code `2`.
 
 If the command completes normally, it exits with the underlying command's exit code.
+
+The runner always appends a `gate_run.v1` JSONL record (PASS/FAIL/FAULT) to
+[`.kilocode/gate_runs.jsonl`](../gate_runs.jsonl) for audit proof.
 
 **Required outputs of the bounded runner (conceptual):**
 
@@ -568,8 +610,9 @@ RUN_TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 ## Completion Proof Requirement
 
 The quality gates subtask is NOT complete until:
-1. All four gates show `status=pass` in `.kilocode/gate_runs.jsonl` for the task's bead ID
-2. The audit proof can be verified by checking the JSONL log
+1. The subtask reports the run signature:
+   - `gate_run_signature=bead_id=<task-id> run_timestamp=<RUN_TS>`
+2. All four gates show `status=pass` in [`.kilocode/gate_runs.jsonl`](../gate_runs.jsonl) for **that exact** `(bead_id, run_timestamp)` pair.
 
 **Verification command:**
 
@@ -577,6 +620,7 @@ The quality gates subtask is NOT complete until:
 .venv/bin/python -c "
 import json, sys
 bead_id = sys.argv[1]
+run_ts = sys.argv[2]
 required = {'ruff-format', 'ruff-check', 'mypy-src', 'pytest'}
 found = set()
 with open('.kilocode/gate_runs.jsonl') as f:
@@ -585,19 +629,23 @@ with open('.kilocode/gate_runs.jsonl') as f:
         if not line: continue
         try: rec = json.loads(line)
         except: continue
-        if rec.get('bead_id') == bead_id and rec.get('status') == 'pass':
+        if (
+            rec.get('bead_id') == bead_id
+            and rec.get('run_timestamp') == run_ts
+            and rec.get('status') == 'pass'
+        ):
             found.add(rec.get('gate_id'))
 missing = required - found
 if missing:
     print(f'MISSING: {sorted(missing)}', file=sys.stderr); sys.exit(1)
-print(f'audit_proof=OK bead_id={bead_id}')
-" <task-id>
+print(f'audit_proof=OK gate_run_signature=bead_id={bead_id} run_timestamp={run_ts}')
+" <task-id> <RUN_TS>
 ```
 
 ## Audit Log
 
-Every bounded gate run appends a record to `.kilocode/gate_runs.jsonl`. This append-only log provides:
-- Verifiable proof that gates passed for a specific bead ID
+Every bounded gate run appends a record to [`gate_runs.jsonl`](../gate_runs.jsonl). This append-only log provides:
+- Verifiable proof that gates passed for a specific `gate_run_signature` (`bead_id + run_timestamp`)
 - Timing data for gate execution
 - Fault records for debugging timeout/stall/env issues
 
@@ -608,6 +656,7 @@ The log is the **objective evidence** required to complete the quality gates sub
 - `runtime_model_reported`: <from environment_details>
 - `runtime_mode_reported`: <mode slug>
 - `model_plan_match`: MATCH|MISMATCH|N/A
+- `gate_run_signature=bead_id=<task-id> run_timestamp=<RUN_TS>`
 - `audit_proof=OK` verification result (or a clear explanation why verification could not be completed)
 - Any fixes applied
 - Final status
@@ -619,7 +668,7 @@ Use `attempt_completion` with quality gate report.
 [ ] Run landing script (preferred) OR run all gates via bounded_gate.py (fallback)
 [ ] Fix any issues
 [ ] Verify audit proof in .kilocode/gate_runs.jsonl (audit_proof=OK)
-[ ] Verify all gates show status=pass for this bead ID
+[ ] Verify all gates show status=pass for this gate_run_signature (bead_id + run_timestamp)
 """
 )
 ```
@@ -782,10 +831,10 @@ This script:
 4. Closes the bead
 5. Syncs beads state
 
-If gates already passed, use `--skip-gates` (still verifies audit proof):
+If gates already passed, use `--skip-gates` with an explicit `--run-timestamp` to verify a specific prior run signature:
 
 ```bash
-.kilocode/tools/beads_land_plane.sh --bead-id <task-id> --skip-gates
+.kilocode/tools/beads_land_plane.sh --bead-id <task-id> --skip-gates --run-timestamp <RUN_TS>
 ```
 
 ## Integration with Beads
