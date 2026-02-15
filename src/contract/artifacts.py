@@ -57,4 +57,9 @@ TIER1_ARTIFACT_SPECS: dict[str, Tier1ArtifactSpec] = {
         format="jsonl",
         required_fields_note="IntegrationRecord fields required by contract.",
     ),
+    "calls_raw": Tier1ArtifactSpec(
+        filename=CALLS_RAW_JSONL,
+        format="jsonl",
+        required_fields_note="CallRawRecord fields required by contract.",
+    ),
 }

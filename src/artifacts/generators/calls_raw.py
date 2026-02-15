@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from artifacts.models.artifacts.calls_raw import CallEvidence, CallRawRecord
@@ -21,13 +22,15 @@ class CallsRawGenerator:
 
     def generate(
         self,
-        root,
-        out_dir,
-        include_patterns: list[str] | None = None,
-        exclude_patterns: list[str] | None = None,
-        nested_gitignore: bool = False,
+        root: Path,
+        out_dir: Path,
+        **kwargs: Any,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Generate calls_raw artifact."""
+        include_patterns: list[str] | None = kwargs.get("include_patterns")
+        exclude_patterns: list[str] | None = kwargs.get("exclude_patterns")
+        nested_gitignore: bool = kwargs.get("nested_gitignore", False)
+
         out_dir.mkdir(parents=True, exist_ok=True)
 
         out_dir_name = _get_output_dir_name(out_dir, root)

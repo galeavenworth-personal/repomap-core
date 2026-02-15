@@ -74,7 +74,7 @@ def test_extract_calls_treesitter_enclosing_scope_function(tmp_path: Path) -> No
     records = extract_calls_treesitter(str(file_path), str(repo_root))
 
     assert len(records) == 1
-    assert records[0]["enclosing_symbol_id"] == "symbol:sample.py:outer@L1"
+    assert records[0]["enclosing_symbol_id"] == "symbol:sample.py:outer@L1:C0"
 
 
 def test_extract_calls_treesitter_enclosing_scope_class_method(tmp_path: Path) -> None:
@@ -89,7 +89,27 @@ def test_extract_calls_treesitter_enclosing_scope_class_method(tmp_path: Path) -
     records = extract_calls_treesitter(str(file_path), str(repo_root))
 
     assert len(records) == 1
-    assert records[0]["enclosing_symbol_id"] == "symbol:sample.py:method@L2"
+    assert records[0]["enclosing_symbol_id"] == "symbol:sample.py:method@L2:C4"
+
+
+def test_extract_calls_treesitter_same_line_lambdas_have_distinct_enclosing_ids(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    file_path = _write_python_file(
+        repo_root,
+        "sample.py",
+        "x = (lambda: foo(), lambda: bar())\n",
+    )
+
+    records = extract_calls_treesitter(str(file_path), str(repo_root))
+
+    assert len(records) == 2
+    ids = [str(record["enclosing_symbol_id"]) for record in records]
+    assert ids[0] != ids[1]
+    assert ids[0] == "symbol:sample.py:<lambda>@L1:C5"
+    assert ids[1] == "symbol:sample.py:<lambda>@L1:C20"
 
 
 def test_calls_raw_generator_is_byte_deterministic(tmp_path: Path) -> None:

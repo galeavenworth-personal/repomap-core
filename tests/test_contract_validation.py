@@ -9,6 +9,7 @@ import pytest
 
 from contract.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
+    CALLS_RAW_JSONL,
     DEPS_EDGELIST,
     DEPS_SUMMARY_JSON,
     INTEGRATIONS_STATIC_JSONL,
@@ -62,6 +63,25 @@ def _write_valid_artifacts(d: Path) -> None:
         "package_root": ".",
     }
     (d / MODULES_JSONL).write_text(json.dumps(module_record) + "\n", encoding="utf-8")
+
+    calls_raw_record = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "ref_id": "ref:pkg/mod.py@L1:C0:call:foo",
+        "src_span": {
+            "path": "pkg/mod.py",
+            "start_line": 1,
+            "start_col": 0,
+            "end_line": 1,
+            "end_col": 5,
+        },
+        "callee_expr": "foo",
+        "enclosing_symbol_id": "symbol:pkg/mod.py:f@L1:C0",
+        "resolved_to": None,
+        "evidence": {"strategy": "syntax_only"},
+    }
+    (d / CALLS_RAW_JSONL).write_text(
+        json.dumps(calls_raw_record) + "\n", encoding="utf-8"
+    )
 
     deps_summary = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
@@ -567,3 +587,42 @@ def test_jsonl_model_for_artifact_unknown() -> None:
     """Unknown JSONL artifact names raise ValueError."""
     with pytest.raises(ValueError, match="Unknown jsonl artifact"):
         _jsonl_model_for_artifact("nonexistent")
+
+
+def test_jsonl_model_for_artifact_calls_raw() -> None:
+    """calls_raw JSONL artifact resolves to a known model."""
+    model = _jsonl_model_for_artifact("calls_raw")
+    assert model.__name__ == "CallRawRecord"
+
+
+def test_missing_calls_raw_artifact_reported(tmp_path: Path) -> None:
+    """Missing calls_raw.jsonl is reported as a required artifact error."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+    (artifacts_dir / CALLS_RAW_JSONL).unlink()
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is False
+    assert any(
+        m.artifact == "calls_raw" and "Required artifact file is missing" in m.message
+        for m in result.errors
+    )
+
+
+def test_calls_raw_schema_validation_failure_reported(tmp_path: Path) -> None:
+    """Schema-invalid calls_raw.jsonl records are reported with schema errors."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+    (artifacts_dir / CALLS_RAW_JSONL).write_text(
+        json.dumps({"schema_version": ARTIFACT_SCHEMA_VERSION}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is False
+    assert any(
+        m.artifact == "calls_raw" and "Schema validation failed" in m.message
+        for m in result.errors
+    )

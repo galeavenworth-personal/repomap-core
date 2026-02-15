@@ -14,8 +14,8 @@ def _module_symbol_id(relative_path: str) -> str:
     return f"module:{relative_path}"
 
 
-def _symbol_id(relative_path: str, name: str, start_line: int) -> str:
-    return f"symbol:{relative_path}:{name}@L{start_line}"
+def _symbol_id(relative_path: str, name: str, start_line: int, start_col: int) -> str:
+    return f"symbol:{relative_path}:{name}@L{start_line}:C{start_col}"
 
 
 def _decode_node_text(source_bytes: bytes, node: Node) -> str:
@@ -77,6 +77,7 @@ def _traverse_calls(
 ) -> None:
     pushed = False
     node_start_line = node.start_point[0] + 1
+    node_start_col = node.start_point[1]
 
     if node.type == "class_definition":
         class_name = _extract_name(
@@ -84,7 +85,9 @@ def _traverse_calls(
             node.child_by_field_name("name"),
             "<class>",
         )
-        scope_stack.append(_symbol_id(relative_path, class_name, node_start_line))
+        scope_stack.append(
+            _symbol_id(relative_path, class_name, node_start_line, node_start_col)
+        )
         pushed = True
     elif node.type == "function_definition":
         function_name = _extract_name(
@@ -92,10 +95,14 @@ def _traverse_calls(
             node.child_by_field_name("name"),
             "<function>",
         )
-        scope_stack.append(_symbol_id(relative_path, function_name, node_start_line))
+        scope_stack.append(
+            _symbol_id(relative_path, function_name, node_start_line, node_start_col)
+        )
         pushed = True
     elif node.type == "lambda":
-        scope_stack.append(_symbol_id(relative_path, "<lambda>", node_start_line))
+        scope_stack.append(
+            _symbol_id(relative_path, "<lambda>", node_start_line, node_start_col)
+        )
         pushed = True
 
     if node.type == "call":
