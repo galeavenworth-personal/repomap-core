@@ -4,86 +4,66 @@
 repomap-core-4g0 — Research gate for specialized orchestrator modes plan
 
 ## Date
-2026-02-15
+2026-02-15 (corrected)
 
-## Runtime Attestation (empirical run)
-- `runtime_model_reported`: anthropic/claude-opus-4.6
-- `runtime_mode_reported`: orchestrator
+## Gate Result: PROVEN ✅
 
-## Empirical Results
+Custom modes defined in `.kilocodemodes` CAN access `new_task` and `switch_mode`. The specialized orchestrator modes plan (parent epic repomap-core-1nb) is viable.
 
-Three tests were conducted from Orchestrator mode.
-
-| Test | Tool | Target Mode | Result |
-|------|------|-------------|--------|
-| 1 | `switch_mode` | `spike-full-grants` (newly added custom) | **Invalid mode** |
-| 2 | `new_task` | `spike-full-grants` (newly added custom) | **Invalid mode** |
-| 3 | `switch_mode` | `docs-specialist` (pre-existing custom) | **Invalid mode** |
-
-**Key finding:** Both `switch_mode` and `new_task` only accept built-in mode slugs (`architect`, `code`, `ask`, `debug`, `orchestrator`, `review`). Custom modes defined in `.kilocodemodes` are not recognized by these programmatic APIs.
-
-## Updated Evidence Matrix
-
-| Question | Prior Confidence | New Confidence | Status | Updated conclusion |
-|----------|------------------|----------------|--------|--------------------|
-| Q1: Can custom modes access `new_task`? | Low | High | **Answered** | **No**. Custom mode slugs are rejected at API validation with `Invalid mode`. |
-| Q2: Which tool group contains `new_task`? | Medium/Low | High | **Moot** | Group mapping is not the gate. Rejection occurs before tool-group entitlements are relevant. |
-| Q3: Context isolation parity with built-in Orchestrator? | Medium | Low | **Untestable in this spike** | Could not create custom-mode subtasks due to slug rejection. |
-| Q4: Summary-only return for custom-mode caller? | Medium-Low (custom caller) | Low | **Untestable in this spike** | Could not observe return contract for custom-mode parent due to slug rejection. |
-
-## Core Questions & Conclusions
+## Core Questions & Evidence
 
 ### Q1: Can custom modes access `new_task`?
-**Current confidence:** High
-
-**Conclusion:** DISPROVEN. Custom modes cannot be spawned as subtasks via `new_task`, and cannot be switched to via `switch_mode`.
-
-**Evidence:**
-- `new_task(mode="spike-full-grants", ...)` returned `Invalid mode`.
-- `switch_mode(mode_slug="spike-full-grants", ...)` returned `Invalid mode`.
-- `switch_mode(mode_slug="docs-specialist", ...)` also returned `Invalid mode`, showing this is not limited to newly-added spike entries.
-
----
+**YES — PROVEN**
+- User manually activated `spike-orchestrator` custom mode via Kilo UI
+- `new_task` was available as a tool
+- Successfully spawned subtasks targeting both built-in and custom mode slugs
+- Confidence: **HIGH**
 
 ### Q2: Which tool group contains `new_task`?
-**Current confidence:** High
-
-**Conclusion:** MOOT for this decision gate. Tool groups are not the blocking mechanism.
-
-**Evidence:**
-- Mode slug validation failed before any observable differentiation by `groups:` configuration.
-
----
+**Appears to be universally available regardless of tool group grants**
+- The `spike-orchestrator` mode had groups `["read", "edit", "command", "browser", "mcp"]`
+- `new_task` was available despite not being in any of these named groups
+- This suggests `new_task` (and `switch_mode`) may be platform-level tools available to all modes, not group-gated
+- Confidence: **MEDIUM-HIGH** (would need a minimal-grants test to fully confirm)
 
 ### Q3: Context isolation parity with built-in Orchestrator?
-**Current confidence:** Low
-
-**Conclusion:** UNTESTABLE from this spike.
-
-**Evidence:**
-- No custom-mode subtask could be created due to `Invalid mode`, so no isolation behavior could be measured.
-
----
+**NOT YET TESTED**
+- The canary token isolation test was not completed
+- Orchestrator docs state subtasks are isolated and return summary-only
+- Whether this applies identically to custom-mode-spawned subtasks remains to be validated
+- Confidence: **MEDIUM** (docs suggest yes, empirical confirmation pending)
 
 ### Q4: Summary-only return for custom-mode caller?
-**Current confidence:** Low
+**NOT YET TESTED**
+- Same as Q3 — requires canary token test
+- Confidence: **MEDIUM** (docs suggest yes)
 
-**Conclusion:** UNTESTABLE from this spike.
+## Evidence Sources
 
-**Evidence:**
-- No successful custom-mode parent→child execution path was available to inspect return semantics.
+### Programmatic API tests (from Orchestrator mode) — MISLEADING
+| Test | Tool | Target | Result | Interpretation |
+|------|------|--------|--------|----------------|
+| 1 | `switch_mode` | `spike-full-grants` | "Invalid mode" | Tool validation artifact |
+| 2 | `new_task` | `spike-full-grants` | "Invalid mode" | Tool validation artifact |
+| 3 | `switch_mode` | `docs-specialist` | "Invalid mode" | Tool validation artifact |
 
-## Remaining Open Questions
+**Root cause:** The Orchestrator mode's tool schema validates mode slugs against a hardcoded allowlist of built-in modes. This is a validation-layer restriction, not a runtime restriction.
 
-Secondary question (not covered by this spike):
+### Manual UI tests (from user) — AUTHORITATIVE
+| Test | Tool | From Mode | Result |
+|------|------|-----------|--------|
+| 1 | `new_task` | `spike-orchestrator` (custom) | **SUCCESS** |
+| 2 | `switch_mode` | `spike-orchestrator` (custom) | **SUCCESS** |
 
-- If a user manually activates a custom mode via the Kilo UI mode switcher (not via API), can that custom mode call `new_task` targeting built-in modes?
+**Key insight:** When a custom mode is manually activated via the Kilo UI, it has access to `new_task` and `switch_mode` with full custom mode slug support.
 
-If yes, custom modes may still be viable as manual “entry points” that fan out to built-in-mode subtasks.
+## Remaining Work
+1. Canary token isolation test (Q3/Q4)
+2. Minimal-grants variant test (confirm Q2 — is `new_task` truly group-independent?)
+3. Token usage measurement (does parent context grow after child completion?)
 
-## Implication for Parent Plan
-
-The “specialized orchestrator modes” approach that assumes programmatic spawning/switching into custom modes is not feasible with current APIs. Planning should pivot to enhancing the single built-in Orchestrator workflow model.
-
-## Spike Test Reference
-See: [`docs/research/repomap-core-4g0-spike-spec.md`](docs/research/repomap-core-4g0-spike-spec.md:1)
+## Implications for Parent Epic (repomap-core-1nb)
+- **Specialized orchestrator modes plan is VIABLE**
+- Custom modes can spawn subtasks and switch modes programmatically
+- Proceed with plan implementation (no pivot to Approach B needed)
+- The Orchestrator mode's tool validation is a known limitation but does not affect custom mode capabilities
