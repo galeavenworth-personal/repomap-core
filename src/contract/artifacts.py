@@ -16,6 +16,7 @@ MODULES_JSONL = "modules.jsonl"
 DEPS_EDGELIST = "deps.edgelist"
 DEPS_SUMMARY_JSON = "deps_summary.json"
 INTEGRATIONS_STATIC_JSONL = "integrations_static.jsonl"
+CALLS_RAW_JSONL = "calls_raw.jsonl"
 
 
 @dataclass(frozen=True)
@@ -55,5 +56,10 @@ TIER1_ARTIFACT_SPECS: dict[str, Tier1ArtifactSpec] = {
         filename=INTEGRATIONS_STATIC_JSONL,
         format="jsonl",
         required_fields_note="IntegrationRecord fields required by contract.",
+    ),
+    "calls_raw": Tier1ArtifactSpec(
+        filename=CALLS_RAW_JSONL,
+        format="jsonl",
+        required_fields_note="CallRawRecord fields required by contract.",
     ),
 }

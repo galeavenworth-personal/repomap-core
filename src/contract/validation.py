@@ -8,11 +8,17 @@ from typing import TYPE_CHECKING, Any, Protocol
 import orjson
 from pydantic import ValidationError
 
+from artifacts.models.artifacts.calls_raw import CallRawRecord
 from contract.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     TIER1_ARTIFACT_SPECS,
 )
-from contract.models import DepsSummary, IntegrationRecord, ModuleRecord, SymbolRecord
+from contract.models import (
+    DepsSummary,
+    IntegrationRecord,
+    ModuleRecord,
+    SymbolRecord,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -130,6 +136,8 @@ def _jsonl_model_for_artifact(artifact_name: str) -> type[_SchemaModel]:
         return ModuleRecord
     if artifact_name == "integrations":
         return IntegrationRecord
+    if artifact_name == "calls_raw":
+        return CallRawRecord
     msg = f"Unknown jsonl artifact: {artifact_name}"
     raise ValueError(msg)
 

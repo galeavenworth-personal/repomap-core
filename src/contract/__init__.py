@@ -14,12 +14,40 @@ from contract.artifacts import (
     TIER1_ARTIFACT_SPECS,
     Tier1ArtifactSpec,
 )
-from contract.models import DepsSummary, IntegrationRecord, ModuleRecord, SymbolRecord
-from contract.validation import (
-    ValidationMessage,
-    ValidationResult,
-    validate_artifacts,
-)
+
+
+def __getattr__(name: str) -> object:
+    if name in {"DepsSummary", "IntegrationRecord", "ModuleRecord", "SymbolRecord"}:
+        from contract.models import (
+            DepsSummary,
+            IntegrationRecord,
+            ModuleRecord,
+            SymbolRecord,
+        )
+
+        return {
+            "DepsSummary": DepsSummary,
+            "IntegrationRecord": IntegrationRecord,
+            "ModuleRecord": ModuleRecord,
+            "SymbolRecord": SymbolRecord,
+        }[name]
+
+    if name in {"ValidationMessage", "ValidationResult", "validate_artifacts"}:
+        from contract.validation import (
+            ValidationMessage,
+            ValidationResult,
+            validate_artifacts,
+        )
+
+        return {
+            "ValidationMessage": ValidationMessage,
+            "ValidationResult": ValidationResult,
+            "validate_artifacts": validate_artifacts,
+        }[name]
+
+    msg = f"module 'contract' has no attribute {name!r}"
+    raise AttributeError(msg)
+
 
 __all__ = [
     "ARTIFACT_SCHEMA_VERSION",
