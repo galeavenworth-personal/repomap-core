@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from artifacts.generators import (
+    CallsRawGenerator,
     DepsGenerator,
     IntegrationsGenerator,
     ModulesGenerator,
@@ -12,6 +13,7 @@ from artifacts.models.artifacts.dependencies import DepsSummary
 from artifacts.models.artifacts.integrations import IntegrationRecord
 from artifacts.models.artifacts.symbols import SymbolRecord
 from contract.artifacts import (
+    CALLS_RAW_JSONL,
     DEPS_EDGELIST,
     DEPS_SUMMARY_JSON,
     INTEGRATIONS_STATIC_JSONL,
@@ -95,12 +97,22 @@ def generate_all_artifacts(
         nested_gitignore=nested_gitignore,
     )
 
+    calls_raw_gen = CallsRawGenerator()
+    calls_raw_gen.generate(
+        root=root,
+        out_dir=out_dir,
+        include_patterns=include_patterns,
+        exclude_patterns=exclude_patterns,
+        nested_gitignore=nested_gitignore,
+    )
+
     artifacts_list = [
         SYMBOLS_JSONL,
         MODULES_JSONL,
         DEPS_EDGELIST,
         DEPS_SUMMARY_JSON,
         INTEGRATIONS_STATIC_JSONL,
+        CALLS_RAW_JSONL,
     ]
 
     return {

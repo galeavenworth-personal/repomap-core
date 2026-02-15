@@ -8,6 +8,7 @@ from typing import Any
 
 from artifacts.write import generate_all_artifacts
 from contract.artifacts import (
+    CALLS_RAW_JSONL,
     DEPS_EDGELIST,
     DEPS_SUMMARY_JSON,
     INTEGRATIONS_STATIC_JSONL,
@@ -162,3 +163,52 @@ def test_artifact_contents_generated_from_committed_fixture(tmp_path: Path) -> N
         for record in modules
     }
     assert observed_modules == expected_modules
+
+    calls_raw = read_jsonl(out_dir / CALLS_RAW_JSONL)
+    assert {str(r.get("callee_expr", "")) for r in calls_raw} == {
+        "Greeter",
+        "compute_value",
+        "greeter.greet",
+    }
+
+    ref_id_pattern = re.compile(r"ref:[^\n]+@L\d+:C\d+:call:.+")
+    for record in calls_raw:
+        assert "schema_version" in record
+        assert record.get("resolved_to") is None
+
+        evidence = record.get("evidence")
+        assert isinstance(evidence, dict)
+        assert evidence.get("strategy") == "syntax_only"
+
+        src_span = record.get("src_span")
+        assert isinstance(src_span, dict)
+        assert _to_int(src_span.get("start_line", 0)) >= 1
+        assert _to_int(src_span.get("start_col", 0)) >= 1
+        assert _to_int(src_span.get("end_line", 0)) >= 1
+        assert _to_int(src_span.get("end_col", 0)) >= 1
+
+        callee_expr = str(record.get("callee_expr", ""))
+        ref_id = str(record.get("ref_id", ""))
+        assert ref_id_pattern.fullmatch(ref_id)
+        assert ref_id == (
+            f"ref:{src_span['path']}"
+            f"@L{src_span['start_line']}"
+            f":C{src_span['start_col']}"
+            f":call:{callee_expr}"
+        )
+
+    call_sort_keys: list[tuple[str, int, int, str, str, str]] = []
+    for record in calls_raw:
+        src_span = record.get("src_span")
+        assert isinstance(src_span, dict)
+        call_sort_keys.append(
+            (
+                str(src_span.get("path", "")),
+                _to_int(src_span.get("start_line", 0)),
+                _to_int(src_span.get("start_col", 0)),
+                "call",
+                str(record.get("enclosing_symbol_id", "")),
+                str(record.get("callee_expr", "")),
+            )
+        )
+    assert call_sort_keys == sorted(call_sort_keys)

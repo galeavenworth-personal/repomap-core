@@ -8,7 +8,9 @@ import pytest
 from artifacts.generators import deps as deps_module
 from artifacts.generators import integrations as integrations_module
 from artifacts.generators import modules as modules_module
+from artifacts.generators import calls_raw as calls_raw_module
 from artifacts.generators import symbols as symbols_module
+from artifacts.generators.calls_raw import CallsRawGenerator
 from artifacts.generators.deps import DepsGenerator
 from artifacts.generators.integrations import IntegrationsGenerator
 from artifacts.generators.modules import ModulesGenerator
@@ -62,6 +64,7 @@ def _run_generators(
     monkeypatch.setattr(
         integrations_module, "find_python_files", _spy_find_python_files
     )
+    monkeypatch.setattr(calls_raw_module, "find_python_files", _spy_find_python_files)
 
     SymbolsGenerator().generate(
         root=repo_root,
@@ -79,6 +82,11 @@ def _run_generators(
         nested_gitignore=nested_gitignore,
     )
     ModulesGenerator().generate(
+        root=repo_root,
+        out_dir=out_dir,
+        nested_gitignore=nested_gitignore,
+    )
+    CallsRawGenerator().generate(
         root=repo_root,
         out_dir=out_dir,
         nested_gitignore=nested_gitignore,
@@ -104,8 +112,8 @@ def test_generator_filelist_parity(
         monkeypatch=monkeypatch,
     )
 
-    assert len(observed) == 4
-    assert observed[0] == observed[1] == observed[2] == observed[3]
+    assert len(observed) == 5
+    assert observed[0] == observed[1] == observed[2] == observed[3] == observed[4]
 
     if nested_gitignore:
         assert "nested/skip.py" not in observed[0]

@@ -16,6 +16,7 @@ MODULES_JSONL = "modules.jsonl"
 DEPS_EDGELIST = "deps.edgelist"
 DEPS_SUMMARY_JSON = "deps_summary.json"
 INTEGRATIONS_STATIC_JSONL = "integrations_static.jsonl"
+CALLS_RAW_JSONL = "calls_raw.jsonl"
 
 
 @dataclass(frozen=True)
