@@ -210,26 +210,11 @@ def build_symbols_index(
     return index
 
 
-def build_name_table(
-    file_path: str,
-    modules_index: ModulesIndex,
+def _add_local_def_bindings(
+    table: NameTable,
+    module_name: str,
     symbols_index: SymbolsIndex,
-    imports: dict[str, list[tuple[int, str, str, int]]],
-    repo_root: Path | None = None,
-) -> NameTable:
-    """Build per-module name table from local defs, imports, and aliases."""
-    module_name = modules_index.get(file_path)
-    if module_name is None:
-        return {}
-
-    module_to_path = _invert_modules_index(modules_index)
-    symbols_by_qualified_name, module_symbols = _build_symbol_lookup(
-        symbols_index,
-        modules_index,
-    )
-
-    table: NameTable = {}
-
+) -> None:
     for symbol in symbols_index.get(module_name, []):
         if _is_top_level_local_def(module_name, symbol):
             table[symbol.name] = NameBinding(
@@ -243,6 +228,13 @@ def build_name_table(
                 target_module=module_name,
             )
 
+
+def _add_import_module_bindings(
+    table: NameTable,
+    imports: dict[str, list[tuple[int, str, str, int]]],
+    module_to_path: dict[str, str],
+    module_symbols: dict[str, SymbolInfo],
+) -> None:
     for _, imported_module, asname, _ in imports.get("import", []):
         if not isinstance(imported_module, str):
             continue
@@ -266,6 +258,13 @@ def build_name_table(
             target_module=target_module if target_path is not None else None,
         )
 
+
+def _add_import_from_bindings(
+    table: NameTable,
+    imports: dict[str, list[tuple[int, str, str, int]]],
+    symbols_by_qualified_name: dict[str, SymbolInfo],
+    modules_index: ModulesIndex,
+) -> None:
     for _, imported_module, name_alias, _ in imports.get("import_from", []):
         if not isinstance(imported_module, str) or not isinstance(name_alias, str):
             continue
@@ -293,6 +292,14 @@ def build_name_table(
             ),
         )
 
+
+def _add_relative_import_bindings(
+    table: NameTable,
+    imports: dict[str, list[tuple[int, str, str, int]]],
+    module_name: str,
+    symbols_by_qualified_name: dict[str, SymbolInfo],
+    modules_index: ModulesIndex,
+) -> None:
     for _, relative_module, name_alias, level in imports.get("relative_import", []):
         if not isinstance(relative_module, str) or not isinstance(name_alias, str):
             continue
@@ -323,6 +330,12 @@ def build_name_table(
             ),
         )
 
+
+def _add_trivial_alias_bindings(
+    table: NameTable,
+    file_path: str,
+    repo_root: Path | None,
+) -> None:
     for alias_name, source_name in _extract_trivial_aliases(file_path, repo_root):
         source_binding = table.get(source_name)
         if source_binding is None:
@@ -337,6 +350,39 @@ def build_name_table(
             target_path=source_binding.target_path,
             target_module=source_binding.target_module,
         )
+
+
+def build_name_table(
+    file_path: str,
+    modules_index: ModulesIndex,
+    symbols_index: SymbolsIndex,
+    imports: dict[str, list[tuple[int, str, str, int]]],
+    repo_root: Path | None = None,
+) -> NameTable:
+    """Build per-module name table from local defs, imports, and aliases."""
+    module_name = modules_index.get(file_path)
+    if module_name is None:
+        return {}
+
+    module_to_path = _invert_modules_index(modules_index)
+    symbols_by_qualified_name, module_symbols = _build_symbol_lookup(
+        symbols_index,
+        modules_index,
+    )
+
+    table: NameTable = {}
+
+    _add_local_def_bindings(table, module_name, symbols_index)
+    _add_import_module_bindings(table, imports, module_to_path, module_symbols)
+    _add_import_from_bindings(table, imports, symbols_by_qualified_name, modules_index)
+    _add_relative_import_bindings(
+        table,
+        imports,
+        module_name,
+        symbols_by_qualified_name,
+        modules_index,
+    )
+    _add_trivial_alias_bindings(table, file_path, repo_root)
 
     return table
 

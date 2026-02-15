@@ -16,8 +16,8 @@ class CallRecord(BaseModel):
     src_span: SourceSpan
     callee_expr: str
     module: str
-    enclosing_symbol_id: str | None
-    resolved_to: ResolvedTo | None
+    enclosing_symbol_id: str | None = None
+    resolved_to: ResolvedTo | None = None
     resolved_base_to: ResolvedTo | None = None
     member: str | None = None
     evidence: RefEvidence

@@ -24,8 +24,8 @@ class ResolvedTo(BaseModel):
     qualified_name: str
     resolution: str
     confidence: int
-    path: str | None
-    dst_module: str | None
+    path: str | None = None
+    dst_module: str | None = None
 
 
 class RefEvidence(BaseModel):
@@ -44,9 +44,9 @@ class RefRecord(BaseModel):
     ref_kind: str
     src_span: SourceSpan
     module: str
-    enclosing_symbol_id: str | None
+    enclosing_symbol_id: str | None = None
     expr: str
-    resolved_to: ResolvedTo | None
+    resolved_to: ResolvedTo | None = None
     evidence: RefEvidence
     resolved_base_to: ResolvedTo | None = None
     member: str | None = None
