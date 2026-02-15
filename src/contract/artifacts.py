@@ -17,6 +17,8 @@ DEPS_EDGELIST = "deps.edgelist"
 DEPS_SUMMARY_JSON = "deps_summary.json"
 INTEGRATIONS_STATIC_JSONL = "integrations_static.jsonl"
 CALLS_RAW_JSONL = "calls_raw.jsonl"
+REFS_JSONL = "refs.jsonl"
+CALLS_JSONL = "calls.jsonl"
 
 
 @dataclass(frozen=True)
@@ -61,5 +63,15 @@ TIER1_ARTIFACT_SPECS: dict[str, Tier1ArtifactSpec] = {
         filename=CALLS_RAW_JSONL,
         format="jsonl",
         required_fields_note="CallRawRecord fields required by contract.",
+    ),
+    "refs": Tier1ArtifactSpec(
+        filename=REFS_JSONL,
+        format="jsonl",
+        required_fields_note="RefRecord fields required by contract.",
+    ),
+    "calls": Tier1ArtifactSpec(
+        filename=CALLS_JSONL,
+        format="jsonl",
+        required_fields_note="CallRecord fields required by contract.",
     ),
 }
