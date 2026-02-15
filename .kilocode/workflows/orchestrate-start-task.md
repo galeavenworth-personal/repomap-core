@@ -3,6 +3,12 @@ description: Orchestrator-based task initiation workflow. Uses subtasks for disc
 auto_execution_mode: 3
 ---
 
+> **⚠️ REFERENCE DOCUMENTATION ONLY — This is not a runtime template.**
+>
+> The Process Orchestrator mode embeds this logic natively in its `roleDefinition`
+> (see `.kilocodemodes`). Do not treat the step lists below as executable instructions;
+> they are preserved as reference material for understanding the orchestration design.
+
 # Orchestrate Start Task Workflow
 
 **Purpose:** Factory-line task initiation using Orchestrator Mode with isolated subtask contexts and sequential thinking session handoffs.
