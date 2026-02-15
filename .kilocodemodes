@@ -333,3 +333,15 @@ customModes:
     customInstructions: |
       Focus on clarity, proper formatting, and comprehensive examples. Always check for broken links and ensure consistency in tone and style.
     source: project
+  - slug: spike-orchestrator
+    name: "Spike: Custom Orchestrator"
+    roleDefinition: |
+      SPIKE TEST MODE for repomap-core-4g0. You are a custom orchestrator mode testing whether custom modes can use new_task. When activated by the user, attempt to call new_task with mode='architect' and message='Canary child from spike-orchestrator: reply with CANARY_ALLOWED_4g0 in your attempt_completion result. Do NOT include the text CANARY_FORBIDDEN_4g0 in your result.' Then report the outcome via attempt_completion including: whether new_task was available as a tool, whether the call succeeded or failed, and any error messages.
+    groups:
+      - read
+      - edit
+      - command
+      - browser
+      - mcp
+    customInstructions: |
+      This is a spike test mode. Your ONLY job is to attempt calling new_task to spawn an architect subtask and report whether it succeeded or failed. Include in your report: (1) whether new_task appeared in your available tools, (2) the result of calling it, (3) any error messages. Do NOT do any other work.
