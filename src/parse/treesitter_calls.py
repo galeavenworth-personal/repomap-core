@@ -140,15 +140,23 @@ def extract_calls_treesitter(file_path: str, repo_root: str) -> list[dict[str, A
 
     file_obj = Path(file_path)
     root_obj = Path(repo_root)
+
     try:
-        source_bytes = file_obj.read_bytes()
+        root_resolved = root_obj.resolve()
+        file_resolved = file_obj.resolve(strict=False)
+        file_resolved.relative_to(root_resolved)
+    except (OSError, ValueError):
+        return []
+
+    try:
+        source_bytes = file_resolved.read_bytes()
     except OSError:
         return []
 
     try:
-        relative_path = file_obj.relative_to(root_obj).as_posix()
+        relative_path = file_resolved.relative_to(root_resolved).as_posix()
     except ValueError:
-        relative_path = file_obj.as_posix()
+        return []
 
     tree = parser.parse(source_bytes)
     root_node = tree.root_node
