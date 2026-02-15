@@ -3,6 +3,12 @@ description: Orchestrator-based adversarial reasoning workflow to pressure-test 
 auto_execution_mode: 3
 ---
 
+> **📚 Reference Documentation**
+>
+> This document is reference documentation. The Audit Orchestrator mode
+> (`audit-orchestrator` in `.kilocodemodes`) embeds this logic natively.
+> Do not load this file at runtime—use the Audit Orchestrator mode directly.
+
 # Orchestrate Pressure Test Workflow
 
 **Purpose:** Adversarial orchestration that stress tests repomap’s identity (“why use this tool?”), ergonomics (“where is the friction?”), and leverage (“what’s the narrowest high-impact move?”).
@@ -14,6 +20,8 @@ auto_execution_mode: 3
 ---
 
 ## Overview
+
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
@@ -45,11 +53,17 @@ auto_execution_mode: 3
 
 ## Parent Task: Orchestration
 
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
+
 ### Step 0: Runtime Model Report (MANDATORY)
+
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
 
 Report the runtime model/mode from `environment_details` in parent + every subtask.
 
 ### Step 1: Initialize Todo List
+
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
 
 ```python
 update_todo_list(
@@ -66,6 +80,8 @@ update_todo_list(
 ```
 
 ### Step 2: Spawn Identity Attack Subtask
+
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
 
 ```python
 new_task(
@@ -158,6 +174,8 @@ Use `attempt_completion` with a structured Identity Attack report.
 
 ### Step 3: Update Progress
 
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
+
 ```python
 update_todo_list(
     todos="""
@@ -173,6 +191,8 @@ update_todo_list(
 ```
 
 ### Step 4: Spawn Friction Audit Subtask
+
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
 
 ```python
 new_task(
@@ -265,6 +285,8 @@ Use `attempt_completion` with a structured Friction Audit report.
 
 ### Step 5: Update Progress
 
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
+
 ```python
 update_todo_list(
     todos="""
@@ -280,6 +302,8 @@ update_todo_list(
 ```
 
 ### Step 6: Spawn Surface Minimization Subtask
+
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
 
 ```python
 new_task(
@@ -371,6 +395,8 @@ Use `attempt_completion` with a structured Surface Minimization report.
 
 ### Step 7: Update Progress
 
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
+
 ```python
 update_todo_list(
     todos="""
@@ -386,6 +412,8 @@ update_todo_list(
 ```
 
 ### Step 8: Spawn Leverage Hunt Subtask
+
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
 
 ```python
 new_task(
@@ -462,6 +490,8 @@ Use `attempt_completion` with a structured Leverage Hunt report.
 
 ### Step 9: Update Progress
 
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
+
 ```python
 update_todo_list(
     todos="""
@@ -477,6 +507,8 @@ update_todo_list(
 ```
 
 ### Step 10: Spawn Synthesis Subtask
+
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
 
 ```python
 new_task(
@@ -547,6 +579,8 @@ Use `attempt_completion` with the final Pressure Test Report.
 
 ### Step 11: Update Progress
 
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
+
 ```python
 update_todo_list(
     todos="""
@@ -562,6 +596,8 @@ update_todo_list(
 ```
 
 ### Step 12: Present Pressure Test Report + STOP
+
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
 
 Compile the synthesis output into a report and STOP. Example format:
 
@@ -625,6 +661,8 @@ update_todo_list(
 ---
 
 ## Philosophy
+
+> ⚙️ **Handled natively by Audit Orchestrator mode.**
 
 This workflow turns orchestration into **epistemic pressure testing**:
 
