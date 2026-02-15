@@ -3,6 +3,20 @@ description: Orchestrator-based refactoring workflow. Uses subtasks for analysis
 auto_execution_mode: 3
 ---
 
+> **⚠️ REFERENCE DOCUMENTATION ONLY — This is not a runtime template.**
+>
+> The Process Orchestrator mode embeds this logic natively in its `roleDefinition`
+> (see `.kilocodemodes`). Do not treat the step lists below as executable instructions;
+> they are preserved as reference material for understanding the orchestration design.
+
+> **⚠️ DEPRECATED (reference-only)**
+> 
+> This workflow is preserved for historical reference. Prefer the mode-based entrypoints:
+> - `process-orchestrator` (discover → explore → prepare → execute → gate → land) replaces `/orchestrate-start-task`, `/orchestrate-execute-task`, `/orchestrate-refactor`.
+> - `audit-orchestrator` (Identity Attack → Friction Audit → Surface Minimization → Leverage Hunt → Synthesis) replaces `/orchestrate-pressure-test`.
+> 
+> Do not treat the step lists below as executable instructions; see `.kilocodemodes` for the runtime `roleDefinition`.
+
 # Orchestrate Refactor Workflow
 
 **Purpose:** Factory-line refactoring using Orchestrator Mode with isolated analysis, planning, and implementation subtasks.

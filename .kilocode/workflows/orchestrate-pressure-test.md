@@ -9,6 +9,13 @@ auto_execution_mode: 3
 > (`audit-orchestrator` in `.kilocodemodes`) embeds this logic natively.
 > Do not load this file at runtime—use the Audit Orchestrator mode directly.
 
+> **⚠️ DEPRECATED (reference-only)**
+> 
+> This workflow is preserved for historical reference. Prefer the mode-based entrypoints:
+> - `audit-orchestrator` (Identity Attack → Friction Audit → Surface Minimization → Leverage Hunt → Synthesis) replaces `/orchestrate-pressure-test`.
+> 
+> Do not treat the step lists below as executable instructions; see `.kilocodemodes` for the runtime `roleDefinition`.
+
 # Orchestrate Pressure Test Workflow
 
 **Purpose:** Adversarial orchestration that stress tests repomap’s identity (“why use this tool?”), ergonomics (“where is the friction?”), and leverage (“what’s the narrowest high-impact move?”).
