@@ -24,6 +24,32 @@ _RAW_ENCLOSING_PATTERN = re.compile(
 )
 
 
+def _normalize_enclosing_path(path: str) -> str:
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def _candidate_coordinates(line: int, col: int) -> list[tuple[int, int]]:
+    candidates: list[tuple[int, int]] = []
+    for candidate in [
+        (line, col),
+        (line, col - 1),
+        (line - 1, col),
+        (line - 1, col - 1),
+        (line, col + 1),
+        (line + 1, col),
+        (line + 1, col + 1),
+    ]:
+        if candidate[0] < 1 or candidate[1] < 1:
+            continue
+        if candidate in candidates:
+            continue
+        candidates.append(candidate)
+    return candidates
+
+
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     """Load records from a JSONL file."""
     records: list[dict[str, Any]] = []
@@ -53,7 +79,9 @@ def _build_symbols_by_span(
         if not isinstance(symbol_id, str):
             continue
 
-        symbols_by_span[(path, start_line, start_col)] = symbol_id
+        symbols_by_span[(_normalize_enclosing_path(path), start_line, start_col)] = (
+            symbol_id
+        )
 
     return symbols_by_span
 
@@ -70,10 +98,19 @@ def _canonicalize_enclosing_id(
     if not match:
         return raw_id
 
-    path = match.group("path")
+    path = _normalize_enclosing_path(match.group("path"))
+    if raw_id.startswith("symbol:") and ":" in path:
+        candidate_path, _symbol_name = path.rsplit(":", 1)
+        if "/" in candidate_path or candidate_path.endswith(".py"):
+            path = candidate_path
     line = int(match.group("line"))
     col = int(match.group("col"))
-    return symbols_by_span.get((path, line, col), raw_id)
+    for candidate_line, candidate_col in _candidate_coordinates(line, col):
+        canonical = symbols_by_span.get((path, candidate_line, candidate_col))
+        if canonical is not None:
+            return canonical
+
+    return raw_id
 
 
 class RefsGenerator:
@@ -135,6 +172,7 @@ class RefsGenerator:
                 modules_index,
                 symbols_index,
                 imports,
+                repo_root=root,
             )
 
             for call_record in calls_by_path.get(relative_path, []):

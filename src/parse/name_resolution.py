@@ -107,9 +107,14 @@ def _is_top_level_local_def(module_name: str, symbol: SymbolInfo) -> bool:
     return "." not in remainder
 
 
-def _extract_trivial_aliases(file_path: str) -> list[tuple[str, str]]:
+def _extract_trivial_aliases(
+    file_path: str,
+    repo_root: Path | None = None,
+) -> list[tuple[str, str]]:
     """Extract module-scope trivial aliases: `target = source` name-to-name only."""
     source = Path(file_path)
+    if not source.is_absolute() and repo_root is not None:
+        source = repo_root / source
     try:
         tree = ast.parse(source.read_text(encoding="utf-8"), file_path)
     except (OSError, SyntaxError, UnicodeDecodeError):
@@ -210,6 +215,7 @@ def build_name_table(
     modules_index: ModulesIndex,
     symbols_index: SymbolsIndex,
     imports: dict[str, list[tuple[int, str, str, int]]],
+    repo_root: Path | None = None,
 ) -> NameTable:
     """Build per-module name table from local defs, imports, and aliases."""
     module_name = modules_index.get(file_path)
@@ -240,12 +246,13 @@ def build_name_table(
     for _, imported_module, asname, _ in imports.get("import", []):
         if not isinstance(imported_module, str):
             continue
-        local_name = (
-            asname
-            if isinstance(asname, str) and asname
-            else imported_module.split(".", 1)[0]
-        )
-        target_module = imported_module
+        if isinstance(asname, str) and asname:
+            local_name = asname
+            target_module = imported_module
+        else:
+            top_level_module = imported_module.split(".", 1)[0]
+            local_name = top_level_module
+            target_module = top_level_module
         target_path = module_to_path.get(target_module)
         module_symbol = module_symbols.get(target_module)
         table[local_name] = NameBinding(
@@ -316,7 +323,7 @@ def build_name_table(
             ),
         )
 
-    for alias_name, source_name in _extract_trivial_aliases(file_path):
+    for alias_name, source_name in _extract_trivial_aliases(file_path, repo_root):
         source_binding = table.get(source_name)
         if source_binding is None:
             continue

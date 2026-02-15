@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -221,6 +222,61 @@ def test_build_name_table_import_module(tmp_path: Path) -> None:
     assert table["mod"].strategy == "module_import_module"
 
 
+def test_build_name_table_trivial_alias_resolves_outside_repo_cwd(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    file_path = _write_python_file(
+        repo_root,
+        "pkg/use_mod.py",
+        "from pkg.mod import func\nalias = func\nalias()\n",
+    )
+    _write_python_file(repo_root, "pkg/mod.py", "def func():\n    return 1\n")
+
+    modules_index = {
+        "pkg/use_mod.py": "pkg.use_mod",
+        "pkg/mod.py": "pkg.mod",
+    }
+    symbol_records: list[dict[str, object]] = [
+        {
+            "path": "pkg/mod.py",
+            "symbol_id": "sym:pkg/mod.py::pkg.mod.func@L1:C1",
+            "qualified_name": "pkg.mod.func",
+            "name": "func",
+            "kind": "function",
+        }
+    ]
+    symbols_index = build_symbols_index(symbol_records, modules_index)
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir(parents=True, exist_ok=True)
+    original_cwd = Path.cwd()
+    try:
+        os.chdir(elsewhere)
+        table = build_name_table(
+            "pkg/use_mod.py",
+            modules_index,
+            symbols_index,
+            extract_imports(file_path),
+            repo_root=repo_root,
+        )
+    finally:
+        os.chdir(original_cwd)
+
+    resolved_to, resolved_base_to, member, strategy, confidence = resolve_call(
+        "alias",
+        table,
+        modules_index,
+    )
+
+    assert resolved_to is not None
+    assert resolved_to.qualified_name == "pkg.mod.func"
+    assert resolved_base_to is None
+    assert member is None
+    assert strategy == "module_alias_assignment"
+    assert confidence > 0
+
+
 def test_resolve_call_local_def(tmp_path: Path) -> None:
     file_path = _write_python_file(tmp_path, "pkg/mod.py", "def foo():\n    return 1\n")
     modules_index = {"pkg/mod.py": "pkg.mod"}
@@ -330,6 +386,38 @@ def test_resolve_call_dotted(tmp_path: Path) -> None:
 
     resolved_to, resolved_base_to, member, strategy, confidence = resolve_call(
         "mod.func",
+        table,
+        modules_index,
+    )
+
+    assert resolved_to is None
+    assert resolved_base_to is not None
+    assert resolved_base_to.qualified_name == "pkg.mod"
+    assert member == "func"
+    assert strategy == "module_import_module"
+    assert confidence > 0
+
+
+def test_resolve_call_dotted_import_without_asname(tmp_path: Path) -> None:
+    file_path = _write_python_file(
+        tmp_path,
+        "pkg/use_mod.py",
+        "import pkg.mod\n",
+    )
+    modules_index = {
+        "pkg/use_mod.py": "pkg.use_mod",
+        "pkg/mod.py": "pkg.mod",
+    }
+    symbols_index = build_symbols_index([], modules_index)
+    table = build_name_table(
+        "pkg/use_mod.py",
+        modules_index,
+        symbols_index,
+        extract_imports(file_path),
+    )
+
+    resolved_to, resolved_base_to, member, strategy, confidence = resolve_call(
+        "pkg.mod.func",
         table,
         modules_index,
     )
@@ -511,3 +599,32 @@ def test_calls_records_sort_key_is_stable(tmp_path: Path) -> None:
             )
         )
     assert sort_keys == sorted(sort_keys)
+
+
+def test_refs_enclosing_symbol_id_is_canonical_symbol_id(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    _write_python_file(
+        repo_root,
+        "pkg/mod.py",
+        "class C:\n"
+        "    def method(self):\n"
+        "        return helper()\n\n"
+        "def helper():\n"
+        "    return 1\n",
+    )
+
+    out_dir = tmp_path / "artifacts"
+    _run_resolution_pipeline(repo_root, out_dir)
+    refs = _read_jsonl(out_dir / REFS_JSONL)
+
+    helper_call = next(
+        record
+        for record in refs
+        if _src_span_path(record) == "pkg/mod.py"
+        and str(record.get("expr", "")) == "helper"
+    )
+
+    enclosing_symbol_id = helper_call.get("enclosing_symbol_id")
+    assert isinstance(enclosing_symbol_id, str)
+    assert enclosing_symbol_id.startswith("sym:")
+    assert enclosing_symbol_id == "sym:pkg/mod.py::pkg.mod.C.method@L2:C5"
