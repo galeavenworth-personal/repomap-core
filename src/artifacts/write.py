@@ -120,7 +120,8 @@ def generate_all_artifacts(
         exclude_patterns=exclude_patterns,
         nested_gitignore=nested_gitignore,
     )
-    [RefRecord(**d) for d in ref_dicts]
+    for d in ref_dicts:
+        RefRecord(**d)
 
     calls_gen = CallsGenerator()
     call_dicts, _ = calls_gen.generate(
@@ -130,7 +131,8 @@ def generate_all_artifacts(
         exclude_patterns=exclude_patterns,
         nested_gitignore=nested_gitignore,
     )
-    [CallRecord(**d) for d in call_dicts]
+    for d in call_dicts:
+        CallRecord(**d)
 
     artifacts_list = [
         SYMBOLS_JSONL,
