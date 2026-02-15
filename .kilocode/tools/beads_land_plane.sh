@@ -14,11 +14,12 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  .kilocode/tools/beads_land_plane.sh --bead-id <id> [--skip-gates] [--no-sync]
+  .kilocode/tools/beads_land_plane.sh --bead-id <id> [--skip-gates --run-timestamp <ts>] [--no-sync]
 
 Parameters:
   --bead-id <id>   (required)
   --skip-gates     Skip running gates; still requires audit proof exists.
+  --run-timestamp  ISO 8601 UTC timestamp to verify (required when --skip-gates is set)
   --no-sync        Skip bd sync at the end.
 EOF
 }
@@ -26,6 +27,7 @@ EOF
 BEAD_ID=""
 SKIP_GATES="false"
 NO_SYNC="false"
+RUN_TIMESTAMP=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -45,6 +47,15 @@ while [[ $# -gt 0 ]]; do
     --no-sync)
       NO_SYNC="true"
       shift
+      ;;
+    --run-timestamp)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: --run-timestamp requires a value" >&2
+        usage
+        exit 2
+      fi
+      RUN_TIMESTAMP="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -66,7 +77,17 @@ fi
 
 "${ROOT_DIR}/.kilocode/tools/beads_preflight.sh"
 
-RUN_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
+if [[ "$SKIP_GATES" == "true" ]]; then
+  if [[ -z "$RUN_TIMESTAMP" ]]; then
+    echo "ERROR: --skip-gates requires --run-timestamp <ts> (gate_run_signature must be specific)" >&2
+    usage
+    exit 2
+  fi
+else
+  if [[ -z "$RUN_TIMESTAMP" ]]; then
+    RUN_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")"
+  fi
+fi
 
 GATES=(
   "ruff-format:60:30:${ROOT_DIR}/.venv/bin/python -m ruff format --check ."
@@ -108,11 +129,12 @@ if [[ "$SKIP_GATES" != "true" ]]; then
   done
 fi
 
-# Audit proof verification: require PASS records for all canonical gates.
+# Audit proof verification: require PASS records for all canonical gates for this run signature.
 if ! "${ROOT_DIR}/.venv/bin/python" -c "
 import json, sys
 
 bead_id = sys.argv[1]
+run_ts = sys.argv[2]
 required = {'ruff-format', 'ruff-check', 'mypy-src', 'pytest'}
 found = set()
 
@@ -132,7 +154,11 @@ with f:
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if rec.get('bead_id') == bead_id and rec.get('status') == 'pass':
+        if (
+            rec.get('bead_id') == bead_id
+            and rec.get('run_timestamp') == run_ts
+            and rec.get('status') == 'pass'
+        ):
             found.add(rec.get('gate_id'))
 
 missing = required - found
@@ -140,8 +166,8 @@ if missing:
     print(f'audit_proof=MISSING gates={sorted(missing)}', file=sys.stderr)
     sys.exit(1)
 
-print(f'audit_proof=OK bead_id={bead_id}')
-" "$BEAD_ID"; then
+print(f'audit_proof=OK gate_run_signature=bead_id={bead_id} run_timestamp={run_ts}')
+" "$BEAD_ID" "$RUN_TIMESTAMP"; then
   exit 3
 fi
 
@@ -161,6 +187,7 @@ cat <<EOF
 === LAND PLANE SUMMARY ===
 bead_id: ${BEAD_ID}
 run_timestamp: ${RUN_TIMESTAMP}
+gate_run_signature=bead_id=${BEAD_ID} run_timestamp=${RUN_TIMESTAMP}
 gates: ALL PASS
 audit_proof: OK
 bead_closed: YES

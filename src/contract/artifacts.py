@@ -12,6 +12,7 @@ ARTIFACT_SCHEMA_VERSION = 2
 
 # Tier-1 artifact filename constants (stable contract identifiers).
 SYMBOLS_JSONL = "symbols.jsonl"
+MODULES_JSONL = "modules.jsonl"
 DEPS_EDGELIST = "deps.edgelist"
 DEPS_SUMMARY_JSON = "deps_summary.json"
 INTEGRATIONS_STATIC_JSONL = "integrations_static.jsonl"
@@ -34,6 +35,11 @@ TIER1_ARTIFACT_SPECS: dict[str, Tier1ArtifactSpec] = {
         filename=SYMBOLS_JSONL,
         format="jsonl",
         required_fields_note="SymbolRecord fields required by contract.",
+    ),
+    "modules": Tier1ArtifactSpec(
+        filename=MODULES_JSONL,
+        format="jsonl",
+        required_fields_note="ModuleRecord fields required by contract.",
     ),
     "deps_edgelist": Tier1ArtifactSpec(
         filename=DEPS_EDGELIST,

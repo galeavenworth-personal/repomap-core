@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from artifacts.generators import (
     DepsGenerator,
     IntegrationsGenerator,
+    ModulesGenerator,
     SymbolsGenerator,
 )
 from artifacts.models.artifacts.dependencies import DepsSummary
@@ -14,6 +15,7 @@ from contract.artifacts import (
     DEPS_EDGELIST,
     DEPS_SUMMARY_JSON,
     INTEGRATIONS_STATIC_JSONL,
+    MODULES_JSONL,
     SYMBOLS_JSONL,
 )
 from rules.config import load_config, resolve_output_dir
@@ -84,8 +86,18 @@ def generate_all_artifacts(
     )
     integrations = [IntegrationRecord(**d) for d in integration_dicts]
 
+    modules_gen = ModulesGenerator()
+    modules_gen.generate(
+        root=root,
+        out_dir=out_dir,
+        include_patterns=include_patterns,
+        exclude_patterns=exclude_patterns,
+        nested_gitignore=nested_gitignore,
+    )
+
     artifacts_list = [
         SYMBOLS_JSONL,
+        MODULES_JSONL,
         DEPS_EDGELIST,
         DEPS_SUMMARY_JSON,
         INTEGRATIONS_STATIC_JSONL,
