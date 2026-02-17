@@ -604,7 +604,7 @@ customModes:
 
       ## Composability Pattern
 
-      1. Assess plant health (spawn factory-inspector or read directly)
+      1. Assess plant health (spawn fitter for line/workflow health checks, or read directly)
       2. Plan workflow system changes
       3. Spawn tactical orchestrator (process-orchestrator or audit-orchestrator)
          via new_task with a handoff packet
@@ -624,7 +624,7 @@ customModes:
       - edit
       - command
       - mcp
-    fileRegex: ^\.kilocode|^\.kilocodemodes$|^AGENTS\.md$|^docs/
+    fileRegex: ^(\.kilocode/|\.kilocodemodes$|AGENTS\.md$|docs/)
     whenToUse: |
       Use for workflow system ownership: creating/modifying modes, skills,
       contracts, fit profiles, gate configurations, or orchestration patterns.
