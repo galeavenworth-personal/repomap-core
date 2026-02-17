@@ -26,11 +26,17 @@ Required keys (one per line, `key: value`):
 - `state`: `SUCCESS` | `ERROR` | `PARTIAL`
 - `summary`: one sentence
 
-Optional keys:
+Conditional keys:
 
 - `error_code`: stable identifier for machine routing (e.g., `E_MISSING_INPUT`, `E_TOOL_FAILURE`)
-- `retry_recommended`: `yes` | `no`
+- `retry_recommended`: `yes` | `no` (**required when `state: ERROR`**; optional otherwise)
 - `retry_hint`: short instruction if retry is recommended
+
+Guidance by state:
+
+- `state: SUCCESS`: work completed; omit error-oriented keys unless needed for edge cases.
+- `state: ERROR`: include failure details; `retry_recommended` is mandatory.
+- `state: PARTIAL`: include completed subset plus explicit limitations and next-step guidance.
 
 ### `## Deliverables`
 
@@ -48,7 +54,8 @@ Required keys:
 
 - `runtime_model_reported`: string
 - `runtime_mode_reported`: string
-- `files_created`: array-like bullet list (paths)
+- `files_created`: list key followed by one repo-relative path per bullet line (`- path`)
+- `files_modified`: list key followed by one repo-relative path per bullet line (`- path`)
 
 Optional keys:
 
@@ -66,8 +73,8 @@ summary: Created composability contracts and a summary document; formats include
 - .kilocode/contracts/composability/return_format.md — child→parent parseable markdown return convention
 
 ## Evidence
-- docs/research/nested-new-task-experiment-2026-02-15.md — nesting works, isolation, todos propagation, plain-text return
-- docs/research/orchestrator-composability-analysis-2026-02-15.md — validated heuristic table + $/depth estimate
+- docs/examples/illustrative/nested-new-task-experiment.md — illustrative placeholder path (for format demonstration only)
+- docs/examples/illustrative/orchestrator-composability-analysis.md — illustrative placeholder path (for format demonstration only)
 
 ## Runtime Attestation
 runtime_model_reported: openai/gpt-5.2
@@ -75,4 +82,35 @@ runtime_mode_reported: architect
 files_created:
 - .kilocode/contracts/composability/handoff_packet.md
 - .kilocode/contracts/composability/return_format.md
+files_modified:
+- .kilocode/contracts/composability/error_propagation.md
+```
+
+Notes:
+
+- Paths in `## Evidence` examples are illustrative placeholders and may not exist in the current repository.
+- Paths in runtime attestation lists MUST be repo-relative.
+
+## Markdown Example (PARTIAL)
+
+```markdown
+## Status
+state: PARTIAL
+summary: Updated return-format schema and examples, but deferred depth-policy revisions due to pending review alignment.
+
+## Deliverables
+- .kilocode/contracts/composability/return_format.md — clarified status semantics and attestation serialization
+
+## Evidence
+- docs/examples/illustrative/review-ledger.md — illustrative placeholder path (for format demonstration only)
+
+## Runtime Attestation
+runtime_model_reported: openai/gpt-5.2
+runtime_mode_reported: architect
+files_created:
+- (none)
+files_modified:
+- .kilocode/contracts/composability/return_format.md
+limitations:
+- Deferred dependent contract changes pending cross-file consistency pass.
 ```

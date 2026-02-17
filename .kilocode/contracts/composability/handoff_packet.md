@@ -9,6 +9,11 @@ This contract standardizes the **only two structured input channels** the parent
 1. `new_task.message` — an arbitrary string (recommended: embed a JSON handoff packet)
 2. `new_task.todos` — a checklist that becomes the child’s reminders table
 
+### Notation
+
+- Dotted names such as `new_task.message` and `new_task.todos` refer to **tool parameter names**, not nested JSON fields inside `handoff_packet`.
+- Inside the JSON handoff object, use the explicit keys shown below (for example: `task_id`, `objective`, `evidence`).
+
 This contract is intended to make orchestration **composable**: parents can spawn children (including sub-orchestrators) with bounded, explicit context.
 
 ## Minimum MVP Fields
@@ -70,6 +75,8 @@ The `todos` string SHOULD be a structured markdown checklist.
 
 Parent passes the following as the FIRST block in `new_task.message`:
 
+> Note: evidence `path` values in this example are illustrative placeholders for schema demonstration and may not exist in the current repository.
+
 ```json
 {
   "handoff_schema": "composability.handoff_packet.v1",
@@ -77,17 +84,17 @@ Parent passes the following as the FIRST block in `new_task.message`:
   "objective": "Draft composability pattern contracts and summary documentation.",
   "evidence": [
     {
-      "path": "docs/research/nested-new-task-experiment-2026-02-15.md",
+      "path": "docs/examples/illustrative/nested-new-task-experiment.md",
       "purpose": "Empirical evidence: nested new_task works; isolation; todos propagation; plain-text returns; cost.",
       "required": true
     },
     {
-      "path": "docs/research/orchestrator-composability-analysis-2026-02-15.md",
+      "path": "docs/examples/illustrative/orchestrator-composability-analysis.md",
       "purpose": "Architecture analysis + validated heuristic table + cost estimate per nesting level.",
       "required": true
     },
     {
-      "path": ".kilocode/contracts/line_health/line_fault_contract.md",
+      "path": "docs/examples/illustrative/line-fault-contract-reference.md",
       "purpose": "Reference contract template style (Purpose → Minimum MVP Fields → Example).",
       "required": true
     }

@@ -23,17 +23,25 @@ Child MUST follow the return-format contract and set:
 - `## Status`
   - `state: ERROR`
   - `error_code: ...` (recommended)
-  - `retry_recommended: yes|no`
-  - `retry_hint: ...` (recommended if yes)
+  - `retry_recommended: yes|no` (**required when `state: ERROR`**)
+  - `retry_hint: ...` (recommended when `retry_recommended: yes`)
+
+For non-`ERROR` states (`SUCCESS`, `PARTIAL`), `retry_recommended` is optional and may be omitted.
 
 ## Retry Policy (MVP)
+
+Definitions:
+
+- **attempt**: one execution of the child task.
+- **retry**: an additional attempt after an initial failed attempt.
+- Formula: `total_attempts = 1 + max_retries`.
 
 - Child retries: **0 by default**
   - Rationale: the parent owns orchestration and should decide whether to rerun.
 
-- Parent retries a child: **max 1 retry** unless:
+- Parent retries a child: **max_retries = 1** by default (so `total_attempts = 2`) unless:
   - the parent has applied a material mitigation (e.g., changed inputs, reduced scope, corrected constraints)
-  - then allow **max 2 total attempts**
+  - then allow **max_retries = 2** (so `total_attempts = 3`)
 
 - Escalation after retries:
   - escalate to a different mode (e.g., fitter for line faults)
@@ -77,5 +85,7 @@ retry_hint: Include paths to evidence docs in the handoff packet and ensure they
 runtime_model_reported: openai/gpt-5.2
 runtime_mode_reported: architect
 files_created:
+- (none)
+files_modified:
 - (none)
 ```

@@ -26,7 +26,11 @@ But nesting also **multiplies fixed overhead** (system prompt + rules + environm
   - Rationale: allows a bounded “factory” chain of up to **4 agents total** (Strategic → Tactical → Sub-orchestrator → Specialist) while keeping overhead and parsing complexity bounded.
 
 - `cost_overhead_per_level_usd`: **~$0.08 per level** (system prompt overhead)
-  - Evidence: 3-level nesting test cost ~$0.25, implying ~$0.08/level baseline overhead.
+  - Approximation details:
+    - **Incremental assumption:** each added nesting level contributes about `$0.08` fixed overhead.
+    - **Cumulative estimate formula:** `estimated_overhead_usd ≈ depth × 0.08`.
+    - **Example (depth=3):** `3 × 0.08 = 0.24`, approximately `$0.25` after rounding/variance.
+  - Treat this as an estimate, not an exact billing model.
 
 ## Depth Guidance
 
@@ -40,7 +44,7 @@ But nesting also **multiplies fixed overhead** (system prompt + rules + environm
 | 1 | 2 | parent → child | Single bounded deliverable; isolation is desired; parent can parse a single return. | process-orchestrator → architect (draft a contract) |
 | 2 | 3 | parent → child → grandchild | Child must delegate a bounded specialist task (e.g., gate failure recovery, a narrow spike, or a small supporting subtask). | process-orchestrator → code → fitter (gate failure recovery); or plant-manager → process-orchestrator → specialist |
 | 3 | 4 | parent → child → grandchild → great-grandchild | Deliberate multi-tier factory pattern where the tactical layer still needs to spawn a sub-orchestrator before reaching a specialist. **Recommended max.** | plant-manager → tactical orchestrator → sub-orchestrator → specialist |
-| 4+ | 5+ | deeper recursion | Avoid by default. Only use if (a) each step is very small, (b) cost is explicitly approved, (c) return parsing is standardized and enforced. | (avoid) |
+| 4+ | 5+ | deeper recursion | Exception-only. Avoid by default; allow only when (a) each step is very small, (b) cost is explicitly approved, (c) return parsing is standardized and enforced. | (exception-only) |
 
 ## Warnings
 
@@ -72,8 +76,8 @@ But nesting also **multiplies fixed overhead** (system prompt + rules + environm
     },
     {
       "depth": 4,
-      "when": "Avoid by default; only with explicit approval and standardized return parsing",
-      "example": "(avoid depth 4+)"
+      "when": "Exception-only: avoid by default; use only with explicit approval and standardized return parsing",
+      "example": "(exception-only; avoid routine depth 4+)"
     }
   ],
   "warnings": [
