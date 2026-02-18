@@ -49,7 +49,6 @@ git status                 # Uncommitted changes
 ## References
 
 - **Checkpoints:** `.kilocode/checkpoints/` (session history)
-- **Plans:** `plans/`, `docs/` (strategic context)
 - **Issues:** `bd show <id>` (task details)
 - **PRs:** `gh pr view` (code review context)
 - **Config:** `pyproject.toml`, `repomap.toml` (tech stack)

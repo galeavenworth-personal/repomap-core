@@ -122,6 +122,5 @@ See:
 
 ## References
 
-- Full assessment: [`plans/kilo_code_assessment_and_roadmap.md`](../plans/kilo_code_assessment_and_roadmap.md)
 - Setup notes: [`docs/KILO_CODE_VSCODE_SETUP_NOTES.md`](../docs/KILO_CODE_VSCODE_SETUP_NOTES.md)
 - Windsurf artifacts: `.windsurf/` (ready for migration)
