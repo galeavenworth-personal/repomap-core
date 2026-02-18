@@ -18,8 +18,8 @@ See `.kilocode/workflows/` for full procedures:
 - `/codebase-exploration` - Systematic codebase exploration
 
 ### Orchestrator Modes (preferred)
-- **process-orchestrator** → Control-plane orchestrator for isolated specialist subtasks. Lifecycle: discover → explore → prepare → execute → gate → land. Replaces `/orchestrate-start-task`, `/orchestrate-execute-task`, `/orchestrate-refactor`.
-- **audit-orchestrator** → Adversarial audit orchestrator for pressure tests. Phases: Identity Attack → Friction Audit → Surface Minimization → Leverage Hunt → Synthesis. Replaces `/orchestrate-pressure-test`.
+- **process-orchestrator** → Control-plane orchestrator for isolated specialist subtasks. Lifecycle: discover → explore → prepare → execute → gate → land.
+- **audit-orchestrator** → Adversarial audit orchestrator for pressure tests. Phases: Identity Attack → Friction Audit → Surface Minimization → Leverage Hunt → Synthesis.
 
 **When to use Orchestrator modes:**
 - Complex tasks with distinct phases
@@ -32,19 +32,6 @@ See `.kilocode/workflows/` for full procedures:
 - Straightforward tasks
 - Simpler single-agent flow preferred
 - Manageable context size
-
-### Deprecated `/orchestrate-*` Workflows (reference-only)
-
-> These legacy workflow documents are preserved for historical reference in `.kilocode/workflows/`.
-> They are **not runtime templates**. Use the orchestrator modes above instead.
-
-| Legacy Command | Replacement |
-|---|---|
-| `/orchestrate-start-task` | `process-orchestrator` mode |
-| `/orchestrate-execute-task` | `process-orchestrator` mode |
-| `/orchestrate-refactor` | `process-orchestrator` mode |
-| `/orchestrate-pressure-test` | `audit-orchestrator` mode |
-| `/orchestrate-respond-to-pr-review` | No replacement mode; use `/respond-to-pr-review` + `github-cli-code-review` skill |
 
 ## Common Commands
 

@@ -146,10 +146,10 @@ update_todo_list(
 
 ---
 
-## Related Workflows
+## Related Modes
 
-- [`/orchestrate-pressure-test`](./orchestrate-pressure-test.md) — Full adversarial pressure test
-- [`/orchestrate-start-task`](./orchestrate-start-task.md) — Task preparation pattern
+- **audit-orchestrator** — Full adversarial pressure test (multi-phase orchestrated)
+- **process-orchestrator** — Task preparation and execution (multi-phase orchestrated)
 
 ---
 

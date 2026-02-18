@@ -80,4 +80,3 @@ All must pass before committing.
 
 - Architecture: `repomap.toml`
 - Agent instructions: `AGENTS.md`
-- Plans: `plans/`

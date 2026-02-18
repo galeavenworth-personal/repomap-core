@@ -36,4 +36,3 @@ repomap-core focuses on deterministic scanning + artifact generation. Workflow-l
 
 - Layer config: [`repomap.toml`](../../../repomap.toml) (authoritative)
 - Package manifest: [`pyproject.toml`](../../../pyproject.toml)
-- Plans: [`plans/`](../../../plans/)
