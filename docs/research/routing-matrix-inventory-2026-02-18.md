@@ -3,7 +3,7 @@
 **Date:** 2026-02-18
 **Bead:** `repomap-core-4f0.6`
 **Status:** Complete
-**Next:** `repomap-core-4f0.7` consumes this inventory to build [`commands.toml`](../../.kilocode/commands.toml)
+**Next:** `repomap-core-4f0.7` consumes this inventory to build `.kilocode/commands.toml` (internal; does not exist yet — created in 4f0.7)
 
 ---
 
@@ -176,7 +176,7 @@ All modes defined in [`.kilocodemodes`](../../.kilocodemodes).
 
 ## 6. Grounded Routing Matrix — Draft TOML
 
-This is the corrected routing matrix for `repomap-core-4f0.7` to formalize as [`commands.toml`](../../.kilocode/commands.toml).
+This is the corrected routing matrix for `repomap-core-4f0.7` to formalize as `.kilocode/commands.toml` (internal; created in 4f0.7).
 
 Every entry references only verified infrastructure from sections 1–5 above.
 
@@ -229,8 +229,9 @@ verb = "gate"
 noun = "quality"
 skill = "cli"
 composite = ["format_ruff", "check_ruff", "check_mypy", "test_pytest"]
-tool = ".kilocode/tools/beads_land_plane.sh"
+tool = ".kilocode/tools/bounded_gate.py"  # orchestrates sub-commands; NOT beads_land_plane.sh
 receipt_required = true
+notes = "Expands composite into sequential bounded_gate.py invocations"
 
 # --- Beads Task Tracking ---
 
@@ -298,7 +299,7 @@ noun = "docs"
 skill = "context7-docs-ops"
 tool = "mcp--context7--query___docs"
 receipt_required = false
-notes = "Requires resolve_library_id first"
+notes = "Requires resolve_library (commands.resolve_library) first"
 
 [commands.resolve_library]
 verb = "resolve"
@@ -452,8 +453,9 @@ verb = "land"
 noun = "plane"
 skill = "beads-local-db-ops"
 composite = ["gate_quality", "close_issue", "sync_push"]
-tool = ".kilocode/tools/beads_land_plane.sh"
+tool = ".kilocode/tools/beads_land_plane.sh --bead-id {id}"
 receipt_required = true
+notes = "beads_land_plane.sh requires --bead-id; performs quality gates + bead closure"
 ```
 
 ---
@@ -475,7 +477,7 @@ receipt_required = true
 
 ---
 
-## 8. Verb Vocabulary (Verified — 15 verbs)
+## 8. Verb Vocabulary (Verified — 25 verbs)
 
 | Verb | Semantic Weight | Operation Family | Bindings |
 |------|----------------|-----------------|----------|
@@ -507,7 +509,7 @@ receipt_required = true
 
 **Count:** 25 verbs (exceeds the original 12; reflects actual operations)
 
-## 9. Noun Vocabulary (Verified — 19 nouns)
+## 9. Noun Vocabulary (Verified — 27 nouns)
 
 | Noun | Domain Object | Bindings |
 |------|--------------|----------|
@@ -545,7 +547,7 @@ receipt_required = true
 
 ## 10. Binding Count
 
-**Total command entries:** 34 (within the ~50 active bindings target from original exploration)
+**Total command entries:** 33 (within the ~50 active bindings target from original exploration)
 
 | Category | Count |
 |----------|-------|
@@ -559,13 +561,13 @@ receipt_required = true
 | Session Monitoring | 3 |
 | PR Review | 2 |
 | Composite Landing | 1 |
-| **Total** | **34** (33 atomic + 1 composite landing) |
+| **Total** | **33** (31 atomic + 2 composite) |
 
 ---
 
 ## 11. Next Steps
 
-1. **`repomap-core-4f0.7`:** Take the TOML draft from Section 6 and create the actual [`.kilocode/commands.toml`](../../.kilocode/commands.toml) file with schema validation
+1. **`repomap-core-4f0.7`:** Take the TOML draft from Section 6 and create the actual `.kilocode/commands.toml` file with schema validation
 2. **`repomap-core-4f0.8`:** Compress the quality gate workflow to command dialect and measure token savings
 3. Vocabulary sizes (25 verbs × 27 nouns) are larger than the 15×15 RISC target — consider pruning or compositing in 4f0.7
 
@@ -575,5 +577,5 @@ receipt_required = true
 
 - Original exploration: [`command-dialect-exploration.md`](command-dialect-exploration.md)
 - Review with corrections: [`command-dialect-exploration-review.md`](command-dialect-exploration-review.md)
-- Plant roadmap: [`plans/roadmap-plant-infrastructure.md`](../../plans/roadmap-plant-infrastructure.md)
-- Thinking session: [`.kilocode/thinking/`](../../.kilocode/thinking/) (thoughts 545–547)
+- Plant roadmap: `plans/roadmap-plant-infrastructure.md` (internal; not yet checked in)
+- Thinking session: `.kilocode/thinking/` (internal/ephemeral; thoughts 545–547)
