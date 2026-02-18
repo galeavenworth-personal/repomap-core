@@ -23,6 +23,9 @@ Usage:
     # Full receipt extraction for a specific task
     python3 .kilocode/tools/kilo_session_monitor.py receipts [TASK_ID]
 
+    # Show subtask tree with cost rollup
+    python3 .kilocode/tools/kilo_session_monitor.py children [TASK_ID]
+
 NOTE: This script is gitignored. It reads from Kilo Code's internal
 storage format (~/.config/Code/User/globalStorage/kilocode.kilo-code/tasks/).
 This format is not a public API and may change between versions.
@@ -31,7 +34,9 @@ This format is not a public API and may change between versions.
 import json
 import datetime
 import sys
+import uuid
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 KILO_STORAGE = Path.home() / ".config/Code/User/globalStorage/kilocode.kilo-code"
@@ -281,6 +286,206 @@ def cmd_receipts(task_id: str | None = None) -> None:
     print(json.dumps(receipts, indent=2))
 
 
+@dataclass
+class SpawnEvent:
+    """A newTask tool call in a parent task."""
+
+    index: int
+    new_task_ts: int
+    result_ts: int | None
+    mode: str
+    label: str  # first line of message content
+
+
+@dataclass
+class TaskCost:
+    """Aggregated cost info for a task."""
+
+    task_id: str
+    total_cost: float
+    tokens_in: int
+    tokens_out: int
+    api_calls: int
+
+
+@dataclass
+class ChildMatch:
+    """A matched child task with its spawn context."""
+
+    spawn: SpawnEvent
+    child_task_id: str
+    cost: TaskCost | None
+
+
+def uuid7_timestamp_ms(task_id: str) -> int | None:
+    """Extract millisecond timestamp from a UUID v7 task directory name."""
+    try:
+        u = uuid.UUID(task_id)
+        int_val: int = u.int  # type: ignore[assignment]
+        return int_val >> 80
+    except (ValueError, AttributeError):
+        return None
+
+
+def extract_spawns(task_id: str) -> list[SpawnEvent]:
+    """Find newTask tool calls and their corresponding subtask_result messages."""
+    ui = load_ui_messages(task_id)
+    spawns: list[SpawnEvent] = []
+
+    for i, m in enumerate(ui):
+        if m.get("ask") != "tool":
+            continue
+        try:
+            data = json.loads(m["text"])
+        except (json.JSONDecodeError, KeyError):
+            continue
+        if data.get("tool") != "newTask":
+            continue
+
+        # Extract label from message content (first non-empty line)
+        content = data.get("content", data.get("message", ""))
+        label = ""
+        for line in str(content).splitlines():
+            stripped = line.strip().lstrip("#").strip()
+            if stripped:
+                label = stripped[:80]
+                break
+
+        # Find subsequent subtask_result
+        result_ts = None
+        for j in range(i + 1, len(ui)):
+            if ui[j].get("say") == "subtask_result":
+                result_ts = ui[j]["ts"]
+                break
+
+        spawns.append(
+            SpawnEvent(
+                index=len(spawns),
+                new_task_ts=m["ts"],
+                result_ts=result_ts,
+                mode=data.get("mode", "?"),
+                label=label,
+            )
+        )
+
+    return spawns
+
+
+def correlate_children(spawns: list[SpawnEvent]) -> list[ChildMatch]:
+    """Match each spawn to a child task directory by UUID v7 timing."""
+    if not spawns:
+        return []
+
+    # Build index of all task dirs with their UUID v7 timestamps
+    all_tasks: list[tuple[str, int]] = []
+    if TASKS_DIR.exists():
+        for d in TASKS_DIR.iterdir():
+            ts = uuid7_timestamp_ms(d.name)
+            if ts is not None:
+                all_tasks.append((d.name, ts))
+    all_tasks.sort(key=lambda x: x[1])
+
+    matches: list[ChildMatch] = []
+    for spawn in spawns:
+        # Child must be created after newTask call, before subtask_result
+        lower = spawn.new_task_ts
+        upper = spawn.result_ts if spawn.result_ts else spawn.new_task_ts + 120_000
+        candidates = [
+            (name, ts) for name, ts in all_tasks if lower < ts < upper
+        ]
+
+        if len(candidates) == 1:
+            child_id = candidates[0][0]
+            cost = get_task_cost(child_id)
+            matches.append(ChildMatch(spawn=spawn, child_task_id=child_id, cost=cost))
+        elif len(candidates) > 1:
+            # Pick closest to spawn time
+            candidates.sort(key=lambda x: x[1] - lower)
+            child_id = candidates[0][0]
+            cost = get_task_cost(child_id)
+            matches.append(ChildMatch(spawn=spawn, child_task_id=child_id, cost=cost))
+        else:
+            # No match found
+            matches.append(ChildMatch(spawn=spawn, child_task_id="(unresolved)", cost=None))
+
+    return matches
+
+
+def get_task_cost(task_id: str) -> TaskCost:
+    """Extract cost info from a task's ui_messages."""
+    ui = load_ui_messages(task_id)
+    total_cost = 0.0
+    total_in = 0
+    total_out = 0
+    api_calls = 0
+
+    for m in ui:
+        if m.get("say") == "api_req_started":
+            try:
+                data = json.loads(m["text"])
+                total_cost += data.get("cost", 0)
+                total_in += data.get("tokensIn", 0)
+                total_out += data.get("tokensOut", 0)
+                api_calls += 1
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+    return TaskCost(
+        task_id=task_id,
+        total_cost=total_cost,
+        tokens_in=total_in,
+        tokens_out=total_out,
+        api_calls=api_calls,
+    )
+
+
+def cmd_children(task_id: str | None = None) -> None:
+    """Show subtask tree with cost rollup for a parent task."""
+    task_id = task_id or get_current_task_id()
+    if not task_id:
+        print("ERROR: No tasks found")
+        return
+
+    spawns = extract_spawns(task_id)
+    if not spawns:
+        print(f"Task: {task_id}")
+        print("No subtask spawns found (no newTask calls in this task).")
+        return
+
+    matches = correlate_children(spawns)
+    parent_cost = get_task_cost(task_id)
+
+    # Calculate rollup
+    child_total = sum(
+        m.cost.total_cost for m in matches if m.cost is not None
+    )
+    rollup = parent_cost.total_cost + child_total
+
+    print(f"Task: {task_id} ({len(spawns)} subtasks)")
+    print(f"Total Cost (parent + children): ${rollup:.4f}")
+    print()
+    print(
+        f"  Parent: ${parent_cost.total_cost:.4f}"
+        f"  (tokens: {parent_cost.tokens_in:,} in, {parent_cost.tokens_out:,} out,"
+        f" {parent_cost.api_calls} API calls)"
+    )
+    print()
+    print("  Children:")
+    for m in matches:
+        child_short = m.child_task_id[:13] + "..." if len(m.child_task_id) > 16 else m.child_task_id
+        cost_str = f"${m.cost.total_cost:.4f}" if m.cost else "   n/a "
+        tok_str = (
+            f"({m.cost.tokens_in:,} in, {m.cost.tokens_out:,} out)"
+            if m.cost
+            else ""
+        )
+        print(
+            f"  #{m.spawn.index + 1:<2} {child_short:<16} [{m.spawn.mode:<12}]"
+            f" {cost_str}  {tok_str}"
+        )
+        print(f"       {m.spawn.label}")
+
+
 def _classify_message(say: str, ask: str, text: str) -> str:
     """Classify a message into a human-readable label."""
     if ask == "tool":
@@ -352,9 +557,12 @@ def main() -> None:
     elif cmd == "receipts":
         task_id = args[1] if len(args) > 1 else None
         cmd_receipts(task_id)
+    elif cmd == "children":
+        task_id = args[1] if len(args) > 1 else None
+        cmd_children(task_id)
     else:
         print(f"Unknown command: {cmd}")
-        print("Commands: whoami, timeline, cost, tools, tail, receipts")
+        print("Commands: whoami, timeline, cost, tools, tail, receipts, children")
 
 
 if __name__ == "__main__":
