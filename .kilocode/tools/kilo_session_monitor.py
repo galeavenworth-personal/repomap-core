@@ -34,10 +34,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-KILO_STORAGE = (
-    Path.home()
-    / ".config/Code/User/globalStorage/kilocode.kilo-code"
-)
+KILO_STORAGE = Path.home() / ".config/Code/User/globalStorage/kilocode.kilo-code"
 TASKS_DIR = KILO_STORAGE / "tasks"
 
 
@@ -244,11 +241,13 @@ def cmd_receipts(task_id: str | None = None) -> None:
         elif ask == "tool":
             try:
                 data = json.loads(text)
-                receipts["tool_calls"].append({
-                    "tool": data.get("tool"),
-                    "path": data.get("path"),
-                    "ts": m["ts"],
-                })
+                receipts["tool_calls"].append(
+                    {
+                        "tool": data.get("tool"),
+                        "path": data.get("path"),
+                        "ts": m["ts"],
+                    }
+                )
                 if data.get("tool") in (
                     "appliedDiff",
                     "newFileCreated",
@@ -261,11 +260,13 @@ def cmd_receipts(task_id: str | None = None) -> None:
         elif ask == "use_mcp_server":
             try:
                 data = json.loads(text)
-                receipts["mcp_calls"].append({
-                    "server": data.get("serverName"),
-                    "tool": data.get("toolName"),
-                    "ts": m["ts"],
-                })
+                receipts["mcp_calls"].append(
+                    {
+                        "server": data.get("serverName"),
+                        "tool": data.get("toolName"),
+                        "ts": m["ts"],
+                    }
+                )
             except (json.JSONDecodeError, KeyError):
                 pass
         elif say == "api_req_started":

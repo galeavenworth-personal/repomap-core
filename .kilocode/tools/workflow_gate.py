@@ -82,16 +82,12 @@ def validate_modes(root: Path) -> dict[str, Any]:
         return _result("mode-validation", findings)
 
     if not isinstance(data, dict):
-        findings.append(
-            f"Expected top-level dict, got {type(data).__name__}"
-        )
+        findings.append(f"Expected top-level dict, got {type(data).__name__}")
         return _result("mode-validation", findings)
 
     modes = data.get("customModes")
     if not isinstance(modes, list):
-        findings.append(
-            "Missing or invalid 'customModes' key (expected list)"
-        )
+        findings.append("Missing or invalid 'customModes' key (expected list)")
         return _result("mode-validation", findings)
 
     slugs_seen: dict[str, int] = {}
@@ -179,15 +175,11 @@ def validate_skills(root: Path) -> dict[str, Any]:
 
             fm = yaml.safe_load(frontmatter_text)
         except Exception as exc:
-            findings.append(
-                f"SKILL.md in {entry.name}/ frontmatter parse error: {exc}"
-            )
+            findings.append(f"SKILL.md in {entry.name}/ frontmatter parse error: {exc}")
             continue
 
         if not isinstance(fm, dict):
-            findings.append(
-                f"SKILL.md in {entry.name}/ frontmatter is not a dict"
-            )
+            findings.append(f"SKILL.md in {entry.name}/ frontmatter is not a dict")
             continue
 
         for field in SKILL_FRONTMATTER_FIELDS:
@@ -275,9 +267,7 @@ def validate_coherence(root: Path) -> dict[str, Any]:
                 try:
                     re.compile(file_regex)
                 except re.error as exc:
-                    findings.append(
-                        f"Mode '{slug}': fileRegex does not compile: {exc}"
-                    )
+                    findings.append(f"Mode '{slug}': fileRegex does not compile: {exc}")
 
         # Groups validation
         groups = mode.get("groups")
