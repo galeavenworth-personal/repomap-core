@@ -7,10 +7,10 @@
 repomap-core-82w
 
 ## Inputs / evidence reviewed
-- Imported and reviewed thinking session export: [`.kilocode/thinking/task-repomap-core-82w-prep-2026-02-15.json`](.kilocode/thinking/task-repomap-core-82w-prep-2026-02-15.json)
+- Imported and reviewed thinking session export: `.kilocode/thinking/task-repomap-core-82w-prep-2026-02-15.json` (local-only file, not tracked in git)
 - Evidence that thinking session filenames are *not* reliably bead-keyed (cannot safely glob by bead id):
-  - [`.kilocode/thinking/pr-12-review-response-plan-2026-02-15.json`](.kilocode/thinking/pr-12-review-response-plan-2026-02-15.json)
-  - [`.kilocode/thinking/adversarial-workflows-design-2026-02-12.json`](.kilocode/thinking/adversarial-workflows-design-2026-02-12.json)
+  - `.kilocode/thinking/pr-12-review-response-plan-2026-02-15.json` (local-only file, not tracked in git)
+  - `.kilocode/thinking/adversarial-workflows-design-2026-02-12.json` (local-only file, not tracked in git)
 
 ## Decision summary
 - **§10a — Receipt persistence format:** **Option C-refined (Hybrid with JSONL manifest)**
