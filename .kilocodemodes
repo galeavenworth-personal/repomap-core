@@ -262,8 +262,8 @@ customModes:
     name: Fitter (Line Health)
     roleDefinition: |
       Maintenance craftsperson for the factory line. Owns the health of the
-      orchestration workflows (especially `orchestrate-*`) and ensures quality
-      gates run deterministically within bounded budgets.
+      orchestration workflows and quality gates, ensuring they run
+      deterministically within bounded budgets.
 
       Scope: workflow/runner/config health, not feature/product changes.
     groups:
@@ -276,7 +276,7 @@ customModes:
     customInstructions: |
       ## Fitter Charter (Non-Negotiable)
 
-      - You own the health of the orchestration workflow suite (especially `orchestrate-*`).
+      - You own the health of the orchestration workflow suite and quality gates.
       - Your job is to make gates runnable, bounded, and diagnosable.
       - You do NOT fix product/feature logic except when absolutely required to restore deterministic gate execution.
 
@@ -315,11 +315,9 @@ customModes:
       ## Workflow References
 
       - Fitter runbook: see [`fitter-line-health.md`](.kilocode/workflows/fitter-line-health.md:6)
-      - Orchestrator routing hook: see line-health routing section in
-        [`orchestrate-execute-task.md`](.kilocode/workflows/orchestrate-execute-task.md:434)
     whenToUse: |
       Use when a quality gate cannot complete deterministically (timeout, stall, env mismatch)
-      or when the `orchestrate-*` workflow suite needs maintenance to keep gates runnable.
+      or when the orchestration workflow suite needs maintenance to keep gates runnable.
     source: project
   - slug: docs-specialist
     name: Documentation Specialist

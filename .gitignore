@@ -46,8 +46,9 @@ Thumbs.db
 # NOTE: `.kilocode/`, `.kilocodemodes`, and `.kilocodeignore` are intentionally tracked in this repo.
 # Do NOT ignore them globally, or new workflow/tooling files won't be added by default.
 
-# plans (internal iteration docs, repo noise reduction)
+# plans and research (internal iteration docs, repo noise reduction)
 plans/
+docs/research/
 
 # Browser/tooling artifacts
 screenshots/
