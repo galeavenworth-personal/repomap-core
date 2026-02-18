@@ -68,6 +68,66 @@ def fmt_ts(ts: int | float) -> str:
     return datetime.datetime.fromtimestamp(ts / 1000).strftime("%H:%M:%S.%f")[:-3]
 
 
+def _safe_float(val: float | int | str | None, default: float = 0.0) -> float:
+    """Defensively coerce a numeric-like value to float."""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(val: float | int | str | None, default: int = 0) -> int:
+    """Defensively coerce a numeric-like value to int."""
+    if val is None:
+        return default
+    try:
+        return int(float(val))
+    except (TypeError, ValueError):
+        return default
+
+
+def _aggregate_costs(
+    ui: list[dict],
+) -> tuple[float, int, int, int, int, int, Counter[str]]:
+    """Aggregate cost/token/provider metrics from api_req_started messages."""
+    total_cost = 0.0
+    total_in = 0
+    total_out = 0
+    total_cache_reads = 0
+    total_cache_writes = 0
+    api_calls = 0
+    providers: Counter[str] = Counter()
+
+    for m in ui:
+        if m.get("say") != "api_req_started":
+            continue
+        try:
+            data = json.loads(m["text"])
+        except (json.JSONDecodeError, KeyError):
+            continue
+
+        total_cost += _safe_float(data.get("cost"), 0.0)
+        total_in += _safe_int(data.get("tokensIn"), 0)
+        total_out += _safe_int(data.get("tokensOut"), 0)
+        total_cache_reads += _safe_int(data.get("cacheReads"), 0)
+        total_cache_writes += _safe_int(data.get("cacheWrites"), 0)
+        api_calls += 1
+        provider = data.get("inferenceProvider", "unknown")
+        providers[str(provider) if provider is not None else "unknown"] += 1
+
+    return (
+        total_cost,
+        total_in,
+        total_out,
+        total_cache_reads,
+        total_cache_writes,
+        api_calls,
+        providers,
+    )
+
+
 def cmd_whoami() -> None:
     """Print the current task ID and basic session info."""
     task_id = get_current_task_id()
@@ -115,28 +175,15 @@ def cmd_cost(task_id: str | None = None) -> None:
         return
     ui = load_ui_messages(task_id)
 
-    total_cost = 0.0
-    total_in = 0
-    total_out = 0
-    total_cache_reads = 0
-    total_cache_writes = 0
-    api_calls = 0
-    providers = Counter()
-
-    for m in ui:
-        if m.get("say") == "api_req_started":
-            try:
-                data = json.loads(m["text"])
-                total_cost += data.get("cost", 0)
-                total_in += data.get("tokensIn", 0)
-                total_out += data.get("tokensOut", 0)
-                total_cache_reads += data.get("cacheReads", 0)
-                total_cache_writes += data.get("cacheWrites", 0)
-                api_calls += 1
-                provider = data.get("inferenceProvider", "unknown")
-                providers[provider] += 1
-            except (json.JSONDecodeError, KeyError):
-                pass
+    (
+        total_cost,
+        total_in,
+        total_out,
+        total_cache_reads,
+        total_cache_writes,
+        api_calls,
+        providers,
+    ) = _aggregate_costs(ui)
 
     print(f"Task: {task_id}")
     print(f"API Calls:    {api_calls}")
@@ -321,6 +368,8 @@ def uuid7_timestamp_ms(task_id: str) -> int | None:
     """Extract millisecond timestamp from a UUID v7 task directory name."""
     try:
         u = uuid.UUID(task_id)
+        if u.variant != uuid.RFC_4122 or u.version != 7:
+            return None
         int_val: int = u.int  # type: ignore[assignment]
         return int_val >> 80
     except (ValueError, AttributeError):
@@ -331,6 +380,8 @@ def extract_spawns(task_id: str) -> list[SpawnEvent]:
     """Find newTask tool calls and their corresponding subtask_result messages."""
     ui = load_ui_messages(task_id)
     spawns: list[SpawnEvent] = []
+    result_indices = [i for i, m in enumerate(ui) if m.get("say") == "subtask_result"]
+    consumed_result_indices: set[int] = set()
 
     for i, m in enumerate(ui):
         if m.get("ask") != "tool":
@@ -351,17 +402,25 @@ def extract_spawns(task_id: str) -> list[SpawnEvent]:
                 label = stripped[:80]
                 break
 
-        # Find subsequent subtask_result
+        # Find next unused subtask_result after this spawn
         result_ts = None
-        for j in range(i + 1, len(ui)):
-            if ui[j].get("say") == "subtask_result":
-                result_ts = ui[j]["ts"]
-                break
+        spawn_ts = int(m.get("ts", 0))
+        for j in result_indices:
+            if j in consumed_result_indices or j <= i:
+                continue
+            candidate_ts = ui[j].get("ts")
+            if not isinstance(candidate_ts, int | float):
+                continue
+            if candidate_ts < spawn_ts:
+                continue
+            result_ts = int(candidate_ts)
+            consumed_result_indices.add(j)
+            break
 
         spawns.append(
             SpawnEvent(
                 index=len(spawns),
-                new_task_ts=m["ts"],
+                new_task_ts=spawn_ts,
                 result_ts=result_ts,
                 mode=data.get("mode", "?"),
                 label=label,
@@ -386,27 +445,34 @@ def correlate_children(spawns: list[SpawnEvent]) -> list[ChildMatch]:
     all_tasks.sort(key=lambda x: x[1])
 
     matches: list[ChildMatch] = []
+    used_child_ids: set[str] = set()
     for spawn in spawns:
         # Child must be created after newTask call, before subtask_result
         lower = spawn.new_task_ts
         upper = spawn.result_ts if spawn.result_ts else spawn.new_task_ts + 120_000
         candidates = [
-            (name, ts) for name, ts in all_tasks if lower < ts < upper
+            (name, ts)
+            for name, ts in all_tasks
+            if lower <= ts <= upper and name not in used_child_ids
         ]
 
         if len(candidates) == 1:
             child_id = candidates[0][0]
             cost = get_task_cost(child_id)
+            used_child_ids.add(child_id)
             matches.append(ChildMatch(spawn=spawn, child_task_id=child_id, cost=cost))
         elif len(candidates) > 1:
             # Pick closest to spawn time
             candidates.sort(key=lambda x: x[1] - lower)
             child_id = candidates[0][0]
             cost = get_task_cost(child_id)
+            used_child_ids.add(child_id)
             matches.append(ChildMatch(spawn=spawn, child_task_id=child_id, cost=cost))
         else:
             # No match found
-            matches.append(ChildMatch(spawn=spawn, child_task_id="(unresolved)", cost=None))
+            matches.append(
+                ChildMatch(spawn=spawn, child_task_id="(unresolved)", cost=None)
+            )
 
     return matches
 
@@ -414,21 +480,7 @@ def correlate_children(spawns: list[SpawnEvent]) -> list[ChildMatch]:
 def get_task_cost(task_id: str) -> TaskCost:
     """Extract cost info from a task's ui_messages."""
     ui = load_ui_messages(task_id)
-    total_cost = 0.0
-    total_in = 0
-    total_out = 0
-    api_calls = 0
-
-    for m in ui:
-        if m.get("say") == "api_req_started":
-            try:
-                data = json.loads(m["text"])
-                total_cost += data.get("cost", 0)
-                total_in += data.get("tokensIn", 0)
-                total_out += data.get("tokensOut", 0)
-                api_calls += 1
-            except (json.JSONDecodeError, KeyError):
-                pass
+    total_cost, total_in, total_out, _, _, api_calls, _ = _aggregate_costs(ui)
 
     return TaskCost(
         task_id=task_id,
@@ -456,9 +508,7 @@ def cmd_children(task_id: str | None = None) -> None:
     parent_cost = get_task_cost(task_id)
 
     # Calculate rollup
-    child_total = sum(
-        m.cost.total_cost for m in matches if m.cost is not None
-    )
+    child_total = sum(m.cost.total_cost for m in matches if m.cost is not None)
     rollup = parent_cost.total_cost + child_total
 
     print(f"Task: {task_id} ({len(spawns)} subtasks)")
@@ -472,12 +522,14 @@ def cmd_children(task_id: str | None = None) -> None:
     print()
     print("  Children:")
     for m in matches:
-        child_short = m.child_task_id[:13] + "..." if len(m.child_task_id) > 16 else m.child_task_id
+        child_short = (
+            m.child_task_id[:13] + "..."
+            if len(m.child_task_id) > 16
+            else m.child_task_id
+        )
         cost_str = f"${m.cost.total_cost:.4f}" if m.cost else "   n/a "
         tok_str = (
-            f"({m.cost.tokens_in:,} in, {m.cost.tokens_out:,} out)"
-            if m.cost
-            else ""
+            f"({m.cost.tokens_in:,} in, {m.cost.tokens_out:,} out)" if m.cost else ""
         )
         print(
             f"  #{m.spawn.index + 1:<2} {child_short:<16} [{m.spawn.mode:<12}]"
