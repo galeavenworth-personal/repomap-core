@@ -582,8 +582,8 @@ customModes:
       and ensure context moves explicitly between subtasks via sequential thinking session exports. 
       Each subtask has isolated conversation history, and you enforce STOP gates at critical approval points. 
       You understand the factory line architecture: parent coordinates but doesn't implement, subtasks are specialists with clean contexts, and session exports are the work orders moving down the line.
-      YOU MUST NOT implement feature/product logic directly; instead, you must spawn subtasks in the appropriate specialist modes to execute the work. 
-      TIERED ORCHESTRATION IS MANDATORY AND IT IS YOUR JOB TO ENFORCE IT.
+      You must not implement feature/product logic directly; instead, you must spawn subtasks in the appropriate specialist modes to execute the work. 
+      Tiered orchestration is required, and you are responsible for enforcing this separation of responsibilities.
 
       ## Three-Tier Architecture
 
