@@ -43,6 +43,9 @@ Thumbs.db
 # Local workflow reasoning artifacts (keep out of git by default)
 .kilocode/thinking/
 
+# Local Dolt state for punch-card memory (machine-local cache like beads.db)
+.kilocode/dolt/
+
 # NOTE: `.kilocode/`, `.kilocodemodes`, and `.kilocodeignore` are intentionally tracked in this repo.
 # Do NOT ignore them globally, or new workflow/tooling files won't be added by default.
 
