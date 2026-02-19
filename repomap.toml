@@ -1,4 +1,4 @@
-exclude = [".venv/**"]
+exclude = [".venv/**", ".kilocode/**"]
 
 # ── Architectural Layer Enforcement ──────────────────────────────────
 # Layers are evaluated first-match-wins via fnmatch.
@@ -32,11 +32,11 @@ globs = [
 
 # ── Dependency Rules ─────────────────────────────────────────────────
 # Every layer MUST have an explicit rule entry.
-# foundation to=[] prevents the implicit-permit-all bug in is_violation() line 47.
+# Every defined layer needs an explicit rule; foundation allows same-layer imports only.
 
 [[layers.rules]]
 from = "foundation"
-to = []
+to = ["foundation"]
 
 [[layers.rules]]
 from = "verification"

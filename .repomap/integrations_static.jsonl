@@ -1,13 +1,3 @@
-{"evidence":"import: argparse","line":20,"path":".kilocode/tools/bounded_gate.py","schema_version":2,"symbol":null,"tag":"cli"}
-{"evidence":"import: json","line":21,"path":".kilocode/tools/bounded_gate.py","schema_version":2,"symbol":null,"tag":"serialization"}
-{"evidence":"import: json","line":34,"path":".kilocode/tools/kilo_session_monitor.py","schema_version":2,"symbol":null,"tag":"serialization"}
-{"evidence":"import_from: pathlib.Path","line":40,"path":".kilocode/tools/kilo_session_monitor.py","schema_version":2,"symbol":null,"tag":"file_io"}
-{"evidence":"import: argparse","line":24,"path":".kilocode/tools/workflow_gate.py","schema_version":2,"symbol":null,"tag":"cli"}
-{"evidence":"import: json","line":25,"path":".kilocode/tools/workflow_gate.py","schema_version":2,"symbol":null,"tag":"serialization"}
-{"evidence":"import_from: pathlib.Path","line":28,"path":".kilocode/tools/workflow_gate.py","schema_version":2,"symbol":null,"tag":"file_io"}
-{"evidence":"import: yaml","line":71,"path":".kilocode/tools/workflow_gate.py","schema_version":2,"symbol":null,"tag":"serialization"}
-{"evidence":"import: yaml","line":173,"path":".kilocode/tools/workflow_gate.py","schema_version":2,"symbol":null,"tag":"serialization"}
-{"evidence":"import: yaml","line":242,"path":".kilocode/tools/workflow_gate.py","schema_version":2,"symbol":null,"tag":"serialization"}
 {"evidence":"import_from: pathlib.Path","line":8,"path":"src/artifacts/__init__.py","schema_version":2,"symbol":null,"tag":"file_io"}
 {"evidence":"import_from: pathlib.Path","line":5,"path":"src/artifacts/generators/calls.py","schema_version":2,"symbol":null,"tag":"file_io"}
 {"evidence":"import_from: pathlib.Path","line":5,"path":"src/artifacts/generators/calls_raw.py","schema_version":2,"symbol":null,"tag":"file_io"}

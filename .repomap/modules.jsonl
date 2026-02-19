@@ -1,6 +1,3 @@
-{"is_package":false,"module":".kilocode.tools.bounded_gate","package_root":".","path":".kilocode/tools/bounded_gate.py"}
-{"is_package":false,"module":".kilocode.tools.kilo_session_monitor","package_root":".","path":".kilocode/tools/kilo_session_monitor.py"}
-{"is_package":false,"module":".kilocode.tools.workflow_gate","package_root":".","path":".kilocode/tools/workflow_gate.py"}
 {"is_package":true,"module":"artifacts","package_root":"src","path":"src/artifacts/__init__.py"}
 {"is_package":true,"module":"artifacts.generators","package_root":"src","path":"src/artifacts/generators/__init__.py"}
 {"is_package":false,"module":"artifacts.generators.calls","package_root":"src","path":"src/artifacts/generators/calls.py"}

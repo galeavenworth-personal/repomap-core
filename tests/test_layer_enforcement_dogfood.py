@@ -38,7 +38,7 @@ def test_every_layer_has_rule_entry() -> None:
     allowed_deps = build_allowed_deps(config.layers)
 
     assert layer_names == set(allowed_deps.keys())
-    assert allowed_deps["foundation"] == set()
+    assert allowed_deps["foundation"] == {"foundation"}
 
 
 def test_all_src_files_classified() -> None:
@@ -81,11 +81,8 @@ def test_violation_detection_with_real_config() -> None:
         is_violation("verification", "foundation", allowed_deps, unclassified) is False
     )
 
-    # same-layer import is not a violation (foundation -> foundation not in to=[])
-    # Note: is_violation checks if to_layer is in allowed set; same-layer is
-    # only allowed if explicitly listed. foundation to=[] means foundation
-    # cannot depend on foundation either.
-    assert is_violation("foundation", "foundation", allowed_deps, unclassified) is True
+    # same-layer import within foundation is allowed (foundation to=["foundation"])
+    assert is_violation("foundation", "foundation", allowed_deps, unclassified) is False
 
     # unclassified source layer -> any target: not a violation when allow mode
     assert is_violation(None, "foundation", allowed_deps, unclassified) is False
