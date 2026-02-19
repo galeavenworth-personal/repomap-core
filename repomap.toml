@@ -1,1 +1,47 @@
 exclude = [".venv/**"]
+
+# ── Architectural Layer Enforcement ──────────────────────────────────
+# Layers are evaluated first-match-wins via fnmatch.
+# Order: most-specific first (interface, verification) then broadest (foundation).
+
+[layers]
+unclassified = "allow"
+
+# Interface layer: CLI entry point
+[[layers.layer]]
+name = "interface"
+globs = ["src/cli.py"]
+
+# Verification layer: determinism checks
+[[layers.layer]]
+name = "verification"
+globs = ["src/verify/**"]
+
+# Foundation layer: core modules (depends on nothing)
+[[layers.layer]]
+name = "foundation"
+globs = [
+    "src/artifacts/**",
+    "src/rules/**",
+    "src/parse/**",
+    "src/scan/**",
+    "src/graph/**",
+    "src/contract/**",
+    "src/utils.py",
+]
+
+# ── Dependency Rules ─────────────────────────────────────────────────
+# Every layer MUST have an explicit rule entry.
+# foundation to=[] prevents the implicit-permit-all bug in is_violation() line 47.
+
+[[layers.rules]]
+from = "foundation"
+to = []
+
+[[layers.rules]]
+from = "verification"
+to = ["foundation"]
+
+[[layers.rules]]
+from = "interface"
+to = ["foundation", "verification"]

@@ -1,99 +1,776 @@
 {
   "cycles": [],
-  "edge_count": 151,
+  "edge_count": 340,
   "fan_in": {
-    "__future__": 23,
-    "argparse": 1,
-    "artifacts.generators": 1,
-    "artifacts.generators.deps": 1,
-    "artifacts.generators.integrations": 1,
-    "artifacts.generators.symbols": 1,
+    "__future__": 47,
+    "argparse": 3,
+    "artifacts.generators": 2,
+    "artifacts.generators.calls": 3,
+    "artifacts.generators.calls_raw": 4,
+    "artifacts.generators.deps": 3,
+    "artifacts.generators.integrations": 2,
+    "artifacts.generators.modules": 3,
+    "artifacts.generators.refs": 3,
+    "artifacts.generators.symbols": 4,
+    "artifacts.models.artifacts.calls": 4,
+    "artifacts.models.artifacts.calls_raw": 4,
     "artifacts.models.artifacts.dependencies": 5,
     "artifacts.models.artifacts.integrations": 6,
+    "artifacts.models.artifacts.modules": 2,
+    "artifacts.models.artifacts.refs": 7,
     "artifacts.models.artifacts.symbols": 5,
+    "artifacts.summaries": 1,
     "artifacts.summaries.builders": 2,
-    "artifacts.utils": 3,
-    "artifacts.write": 3,
-    "ast": 1,
+    "artifacts.utils": 7,
+    "artifacts.write": 4,
+    "ast": 2,
     "cli": 2,
-    "collections": 1,
-    "collections.abc": 2,
-    "contract.artifacts": 6,
+    "collections": 3,
+    "collections.abc": 3,
+    "contract.artifacts": 19,
     "contract.models": 2,
-    "contract.validation": 2,
-    "dataclasses": 4,
-    "enum": 1,
+    "contract.validation": 4,
+    "dataclasses": 6,
+    "datetime": 2,
     "filecmp": 1,
     "fnmatch": 2,
     "gitignore_parser": 1,
     "graph.algos": 2,
+    "json": 9,
     "orjson": 2,
-    "parse.ast_imports": 3,
-    "parse.treesitter_symbols": 2,
-    "pathlib": 15,
-    "pydantic": 5,
-    "pytest": 2,
-    "rules.config": 8,
-    "rules.layers": 3,
-    "scan.files": 4,
-    "sys": 2,
+    "os": 3,
+    "parse.ast_imports": 6,
+    "parse.name_resolution": 3,
+    "parse.treesitter_calls": 3,
+    "parse.treesitter_symbols": 3,
+    "pathlib": 33,
+    "pkg_a.core": 2,
+    "pydantic": 9,
+    "pytest": 8,
+    "re": 4,
+    "requests": 1,
+    "rules.config": 13,
+    "rules.layers": 5,
+    "scan": 1,
+    "scan.files": 8,
+    "shlex": 1,
+    "shutil": 3,
+    "signal": 1,
+    "subprocess": 1,
+    "sys": 5,
     "tempfile": 1,
+    "threading": 1,
+    "time": 1,
     "tomllib": 1,
-    "tree_sitter": 1,
+    "tree_sitter": 2,
     "tree_sitter_python": 1,
-    "typing": 16,
-    "utils": 3,
-    "verify.verify": 3
+    "typing": 28,
+    "unittest.mock": 1,
+    "utils": 5,
+    "uuid": 1,
+    "verify.verify": 3,
+    "yaml": 1
   },
   "fan_out": {
-    "src.artifacts": 1,
-    "src.artifacts.generators": 3,
-    "src.artifacts.generators.deps": 12,
-    "src.artifacts.generators.integrations": 8,
-    "src.artifacts.generators.symbols": 11,
-    "src.artifacts.models": 3,
-    "src.artifacts.models.artifacts.dependencies": 2,
-    "src.artifacts.models.artifacts.integrations": 3,
-    "src.artifacts.models.artifacts.symbols": 3,
-    "src.artifacts.summaries": 1,
-    "src.artifacts.summaries.builders": 5,
-    "src.artifacts.utils": 7,
-    "src.artifacts.write": 9,
-    "src.cli": 8,
-    "src.contract": 3,
-    "src.contract.artifacts": 2,
-    "src.contract.models": 3,
-    "src.contract.validation": 8,
-    "src.graph": 1,
-    "src.graph.algos": 3,
-    "src.parse": 2,
-    "src.parse.ast_imports": 4,
-    "src.parse.treesitter_symbols": 6,
-    "src.rules": 2,
-    "src.rules.config": 7,
-    "src.rules.layers": 4,
-    "src.scan": 1,
-    "src.scan.files": 6,
-    "src.utils": 2,
-    "src.verify": 1,
-    "src.verify.verify": 6,
+    ".kilocode.tools.bounded_gate": 13,
+    ".kilocode.tools.kilo_session_monitor": 7,
+    ".kilocode.tools.workflow_gate": 8,
+    "artifacts": 5,
+    "artifacts.generators": 7,
+    "artifacts.generators.calls": 7,
+    "artifacts.generators.calls_raw": 8,
+    "artifacts.generators.deps": 12,
+    "artifacts.generators.integrations": 8,
+    "artifacts.generators.modules": 7,
+    "artifacts.generators.refs": 10,
+    "artifacts.generators.symbols": 11,
+    "artifacts.models": 7,
+    "artifacts.models.artifacts.calls": 4,
+    "artifacts.models.artifacts.calls_raw": 3,
+    "artifacts.models.artifacts.dependencies": 2,
+    "artifacts.models.artifacts.integrations": 3,
+    "artifacts.models.artifacts.modules": 3,
+    "artifacts.models.artifacts.refs": 3,
+    "artifacts.models.artifacts.symbols": 3,
+    "artifacts.summaries": 1,
+    "artifacts.summaries.builders": 5,
+    "artifacts.utils": 8,
+    "artifacts.write": 11,
+    "cli": 8,
+    "contract": 3,
+    "contract.artifacts": 2,
+    "contract.models": 5,
+    "contract.validation": 11,
+    "graph": 1,
+    "graph.algos": 3,
+    "parse": 4,
+    "parse.ast_imports": 4,
+    "parse.name_resolution": 7,
+    "parse.treesitter_calls": 5,
+    "parse.treesitter_symbols": 6,
+    "rules": 2,
+    "rules.config": 6,
+    "rules.layers": 4,
+    "scan": 1,
+    "scan.files": 6,
+    "tests.fixtures.mini_repo.pkg_a.integrations": 2,
+    "tests.fixtures.mini_repo.pkg_a.use_core": 1,
+    "tests.test_artifact_contents_from_fixture": 9,
+    "tests.test_artifact_generators_filelist_parity": 13,
+    "tests.test_calls_raw": 7,
     "tests.test_cli_smoke": 6,
+    "tests.test_compute_layer_violations": 3,
+    "tests.test_config_strict_validation": 4,
+    "tests.test_contract_validation": 8,
     "tests.test_import_boundary_no_monorepo": 3,
-    "tests.test_verify_determinism": 5
+    "tests.test_layer_enforcement_dogfood": 4,
+    "tests.test_layers_rules": 3,
+    "tests.test_module_naming_canonical": 8,
+    "tests.test_refs_calls": 15,
+    "tests.test_scan_symlink_escape": 6,
+    "tests.test_verify_determinism": 5,
+    "utils": 2,
+    "verify": 1,
+    "verify.verify": 6
   },
-  "layer_violations": [],
-  "node_count": 76,
+  "layer_violations": [
+    {
+      "from_file": "src/artifacts/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.write"
+    },
+    {
+      "from_file": "src/artifacts/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "rules.config"
+    },
+    {
+      "from_file": "src/artifacts/generators/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.generators.calls"
+    },
+    {
+      "from_file": "src/artifacts/generators/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.generators.calls_raw"
+    },
+    {
+      "from_file": "src/artifacts/generators/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.generators.deps"
+    },
+    {
+      "from_file": "src/artifacts/generators/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.generators.integrations"
+    },
+    {
+      "from_file": "src/artifacts/generators/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.generators.modules"
+    },
+    {
+      "from_file": "src/artifacts/generators/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.generators.refs"
+    },
+    {
+      "from_file": "src/artifacts/generators/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.generators.symbols"
+    },
+    {
+      "from_file": "src/artifacts/generators/calls.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.calls"
+    },
+    {
+      "from_file": "src/artifacts/generators/calls.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.refs"
+    },
+    {
+      "from_file": "src/artifacts/generators/calls.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.utils"
+    },
+    {
+      "from_file": "src/artifacts/generators/calls.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/artifacts/generators/calls_raw.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.calls_raw"
+    },
+    {
+      "from_file": "src/artifacts/generators/calls_raw.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.utils"
+    },
+    {
+      "from_file": "src/artifacts/generators/calls_raw.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/artifacts/generators/calls_raw.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "parse.treesitter_calls"
+    },
+    {
+      "from_file": "src/artifacts/generators/calls_raw.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "scan.files"
+    },
+    {
+      "from_file": "src/artifacts/generators/deps.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.dependencies"
+    },
+    {
+      "from_file": "src/artifacts/generators/deps.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.summaries.builders"
+    },
+    {
+      "from_file": "src/artifacts/generators/deps.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.utils"
+    },
+    {
+      "from_file": "src/artifacts/generators/deps.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/artifacts/generators/deps.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "graph.algos"
+    },
+    {
+      "from_file": "src/artifacts/generators/deps.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "parse.ast_imports"
+    },
+    {
+      "from_file": "src/artifacts/generators/deps.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "rules.config"
+    },
+    {
+      "from_file": "src/artifacts/generators/deps.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "scan.files"
+    },
+    {
+      "from_file": "src/artifacts/generators/deps.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "utils"
+    },
+    {
+      "from_file": "src/artifacts/generators/integrations.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.integrations"
+    },
+    {
+      "from_file": "src/artifacts/generators/integrations.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.utils"
+    },
+    {
+      "from_file": "src/artifacts/generators/integrations.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/artifacts/generators/integrations.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "parse.ast_imports"
+    },
+    {
+      "from_file": "src/artifacts/generators/integrations.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "scan.files"
+    },
+    {
+      "from_file": "src/artifacts/generators/modules.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.utils"
+    },
+    {
+      "from_file": "src/artifacts/generators/modules.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/artifacts/generators/modules.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "scan.files"
+    },
+    {
+      "from_file": "src/artifacts/generators/modules.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "utils"
+    },
+    {
+      "from_file": "src/artifacts/generators/refs.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.refs"
+    },
+    {
+      "from_file": "src/artifacts/generators/refs.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.utils"
+    },
+    {
+      "from_file": "src/artifacts/generators/refs.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/artifacts/generators/refs.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "parse.ast_imports"
+    },
+    {
+      "from_file": "src/artifacts/generators/refs.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "parse.name_resolution"
+    },
+    {
+      "from_file": "src/artifacts/generators/refs.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "scan.files"
+    },
+    {
+      "from_file": "src/artifacts/generators/symbols.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.symbols"
+    },
+    {
+      "from_file": "src/artifacts/generators/symbols.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.utils"
+    },
+    {
+      "from_file": "src/artifacts/generators/symbols.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/artifacts/generators/symbols.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "parse.treesitter_symbols"
+    },
+    {
+      "from_file": "src/artifacts/generators/symbols.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "rules.config"
+    },
+    {
+      "from_file": "src/artifacts/generators/symbols.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "rules.layers"
+    },
+    {
+      "from_file": "src/artifacts/generators/symbols.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "scan.files"
+    },
+    {
+      "from_file": "src/artifacts/generators/symbols.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "utils"
+    },
+    {
+      "from_file": "src/artifacts/models/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.calls"
+    },
+    {
+      "from_file": "src/artifacts/models/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.calls_raw"
+    },
+    {
+      "from_file": "src/artifacts/models/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.dependencies"
+    },
+    {
+      "from_file": "src/artifacts/models/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.integrations"
+    },
+    {
+      "from_file": "src/artifacts/models/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.modules"
+    },
+    {
+      "from_file": "src/artifacts/models/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.refs"
+    },
+    {
+      "from_file": "src/artifacts/models/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.symbols"
+    },
+    {
+      "from_file": "src/artifacts/models/artifacts/calls.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.refs"
+    },
+    {
+      "from_file": "src/artifacts/models/artifacts/calls.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/artifacts/models/artifacts/calls_raw.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/artifacts/models/artifacts/modules.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/artifacts/models/artifacts/refs.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/artifacts/summaries/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.summaries.builders"
+    },
+    {
+      "from_file": "src/artifacts/summaries/builders.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.dependencies"
+    },
+    {
+      "from_file": "src/artifacts/summaries/builders.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "rules.config"
+    },
+    {
+      "from_file": "src/artifacts/summaries/builders.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "rules.layers"
+    },
+    {
+      "from_file": "src/artifacts/utils.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.integrations"
+    },
+    {
+      "from_file": "src/artifacts/write.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.generators"
+    },
+    {
+      "from_file": "src/artifacts/write.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.calls"
+    },
+    {
+      "from_file": "src/artifacts/write.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.dependencies"
+    },
+    {
+      "from_file": "src/artifacts/write.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.integrations"
+    },
+    {
+      "from_file": "src/artifacts/write.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.refs"
+    },
+    {
+      "from_file": "src/artifacts/write.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.symbols"
+    },
+    {
+      "from_file": "src/artifacts/write.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/artifacts/write.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "rules.config"
+    },
+    {
+      "from_file": "src/contract/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/contract/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.models"
+    },
+    {
+      "from_file": "src/contract/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.validation"
+    },
+    {
+      "from_file": "src/contract/models.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.calls_raw"
+    },
+    {
+      "from_file": "src/contract/models.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.dependencies"
+    },
+    {
+      "from_file": "src/contract/models.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.integrations"
+    },
+    {
+      "from_file": "src/contract/models.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.modules"
+    },
+    {
+      "from_file": "src/contract/models.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.symbols"
+    },
+    {
+      "from_file": "src/contract/validation.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.calls"
+    },
+    {
+      "from_file": "src/contract/validation.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.calls_raw"
+    },
+    {
+      "from_file": "src/contract/validation.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.refs"
+    },
+    {
+      "from_file": "src/contract/validation.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.artifacts"
+    },
+    {
+      "from_file": "src/contract/validation.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "contract.models"
+    },
+    {
+      "from_file": "src/graph/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "graph.algos"
+    },
+    {
+      "from_file": "src/graph/algos.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "utils"
+    },
+    {
+      "from_file": "src/parse/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "parse.ast_imports"
+    },
+    {
+      "from_file": "src/parse/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "parse.name_resolution"
+    },
+    {
+      "from_file": "src/parse/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "parse.treesitter_calls"
+    },
+    {
+      "from_file": "src/parse/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "parse.treesitter_symbols"
+    },
+    {
+      "from_file": "src/parse/name_resolution.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.refs"
+    },
+    {
+      "from_file": "src/parse/name_resolution.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "parse.ast_imports"
+    },
+    {
+      "from_file": "src/parse/treesitter_calls.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "parse.treesitter_symbols"
+    },
+    {
+      "from_file": "src/parse/treesitter_symbols.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.symbols"
+    },
+    {
+      "from_file": "src/rules/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "rules.config"
+    },
+    {
+      "from_file": "src/rules/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "rules.layers"
+    },
+    {
+      "from_file": "src/rules/config.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "artifacts.models.artifacts.integrations"
+    },
+    {
+      "from_file": "src/rules/layers.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "rules.config"
+    },
+    {
+      "from_file": "src/scan/__init__.py",
+      "from_layer": "foundation",
+      "to_layer": "foundation",
+      "to_module": "scan.files"
+    },
+    {
+      "from_file": "src/verify/__init__.py",
+      "from_layer": "verification",
+      "to_layer": "verification",
+      "to_module": "verify.verify"
+    }
+  ],
+  "node_count": 96,
   "schema_version": 2,
   "top_modules": [
     "__future__",
-    "typing",
     "pathlib",
-    "rules.config",
-    "artifacts.models.artifacts.integrations",
+    "typing",
     "contract.artifacts",
-    "artifacts.models.artifacts.dependencies",
-    "artifacts.models.artifacts.symbols",
+    "rules.config",
+    "json",
     "pydantic",
-    "dataclasses"
+    "pytest",
+    "scan.files",
+    "artifacts.models.artifacts.refs"
   ]
 }
