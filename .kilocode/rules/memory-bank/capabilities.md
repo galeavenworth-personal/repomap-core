@@ -46,6 +46,24 @@ This registry enables rapid capability matching to tasks. When you see a task, s
 - Simpler single-agent flow preferred
 - Manageable context size
 
+### Thinker Modes (composable thinking styles)
+- **thinker-abstract** → Generate competing problem frames. Contracts: `.kilocode/contracts/thinking/abstract_thinking.md`
+- **thinker-adversarial** → Falsify plans, enumerate failure modes. Contracts: `.kilocode/contracts/thinking/adversarial_thinking.md`
+- **thinker-systems** → Find feedback loops, bottlenecks, leverage. Contracts: `.kilocode/contracts/thinking/systems_thinking.md`
+- **thinker-concrete** → Collapse ambiguity into executable steps. Contracts: `.kilocode/contracts/thinking/concrete_thinking.md`
+- **thinker-epistemic** → Separate know/believe/guess, assign confidence. Contracts: `.kilocode/contracts/thinking/epistemic_thinking.md`
+
+**When to use Thinker modes:**
+- Spawned by orchestrators following a thinking plan (not invoked directly by users)
+- Complex decisions requiring structured reasoning with enforceable quality constraints
+- Composable: chain via thinking plans under `.kilocode/contracts/thinking/plans/`
+
+**Thinking Plans (delegation recipes):**
+- `design-subsystem.md` — Abstract → Systems → Adversarial → Concrete
+- `debug-incident.md` — Concrete → Research → Adversarial → Concrete
+- `evaluate-dependency.md` — Abstract → Systems → Adversarial → Concrete
+- `strategic-decision.md` — Abstract → Epistemic → Adversarial → Concrete
+
 ## MCP Servers (Use Cases)
 
 - **context7** (`mcp--context7--*`) → Library documentation lookup, up-to-date API references
