@@ -54,7 +54,7 @@ Thumbs.db
 # Do NOT ignore them globally, or new workflow/tooling files won't be added by default.
 
 # plans and research (internal iteration docs, repo noise reduction)
-plans/
+/plans/
 docs/research/
 
 # Browser/tooling artifacts
