@@ -1,0 +1,405 @@
+# =============================================================================
+# Routing Matrix — commands.toml
+# =============================================================================
+#
+# Bead:    repomap-core-4f0.7
+# Source:  Grounded routing matrix inventory (repomap-core-4f0.6)
+# Updated: 2026-02-20
+#
+# Structure: verb + noun → skill binding + tool invocation
+# All paths verified against .kilocode/ contents on this branch.
+#
+# Skills:
+#   "cli"    = Raw CLI command (no skill dir)
+#   "native" = Kilo built-in tool (new_task, switch_mode, etc.)
+#   Other    = .kilocode/skills/{skill_id}/SKILL.md
+#
+# =============================================================================
+
+# ─── Schema Metadata ────────────────────────────────────────────────────────
+
+[meta]
+version = "1.0.0"
+inventory_date = "2026-02-20"
+source_bead = "repomap-core-4f0.6"
+total_bindings = 44  # 40 atomic + 4 composite
+
+# ─── Quality Gates (receipt_required = true via bounded_gate.py) ────────────
+
+[commands.format_ruff]
+verb = "format"
+noun = "ruff"
+skill = "cli"
+tool = ".venv/bin/python -m ruff format --check ."
+gate_wrapper = ".kilocode/tools/bounded_gate.py"
+receipt_required = true
+
+[commands.check_ruff]
+verb = "check"
+noun = "ruff"
+skill = "cli"
+tool = ".venv/bin/python -m ruff check ."
+gate_wrapper = ".kilocode/tools/bounded_gate.py"
+receipt_required = true
+
+[commands.check_mypy]
+verb = "check"
+noun = "mypy"
+skill = "cli"
+tool = ".venv/bin/python -m mypy src"
+gate_wrapper = ".kilocode/tools/bounded_gate.py"
+receipt_required = true
+
+[commands.test_pytest]
+verb = "test"
+noun = "pytest"
+skill = "cli"
+tool = ".venv/bin/python -m pytest -q"
+gate_wrapper = ".kilocode/tools/bounded_gate.py"
+receipt_required = true
+
+# ─── Composite: Quality Gate ────────────────────────────────────────────────
+
+[commands.gate_quality]
+verb = "gate"
+noun = "quality"
+skill = "cli"
+composite = ["format_ruff", "check_ruff", "check_mypy", "test_pytest"]
+tool = ".kilocode/tools/bounded_gate.py"
+receipt_required = true
+notes = "Expands composite into sequential bounded_gate.py invocations"
+
+# ─── Beads Task Tracking ───────────────────────────────────────────────────
+
+[commands.sync_remote]
+verb = "sync"
+noun = "remote"
+skill = "beads-local-db-ops"
+tool = ".kilocode/tools/bd sync --no-push"
+receipt_required = false
+
+[commands.sync_push]
+verb = "sync"
+noun = "push"
+skill = "beads-local-db-ops"
+tool = ".kilocode/tools/bd sync"
+receipt_required = false
+
+[commands.claim_issue]
+verb = "claim"
+noun = "issue"
+skill = "beads-local-db-ops"
+tool = ".kilocode/tools/bd update {id} --status in_progress"
+receipt_required = false
+
+[commands.close_issue]
+verb = "close"
+noun = "issue"
+skill = "beads-local-db-ops"
+tool = ".kilocode/tools/bd close {id}"
+receipt_required = false
+
+[commands.show_issue]
+verb = "show"
+noun = "issue"
+skill = "beads-local-db-ops"
+tool = ".kilocode/tools/bd show {id}"
+receipt_required = false
+
+[commands.list_ready]
+verb = "list"
+noun = "ready"
+skill = "beads-local-db-ops"
+tool = ".kilocode/tools/bd ready"
+receipt_required = false
+
+[commands.diagnose_issues]
+verb = "diagnose"
+noun = "issues"
+skill = "beads-local-db-ops"
+tool = ".kilocode/tools/bd_doctor_safe.sh"
+receipt_required = false
+
+# ─── Code Search & Retrieval ───────────────────────────────────────────────
+
+[commands.retrieve_codebase]
+verb = "retrieve"
+noun = "codebase"
+skill = "repomap-codebase-retrieval"
+tool = "mcp--augment___context___engine--codebase___retrieval"
+receipt_required = false
+
+[commands.query_docs]
+verb = "query"
+noun = "docs"
+skill = "context7-docs-ops"
+tool = "mcp--context7--query___docs"
+receipt_required = false
+notes = "Requires resolve_library first"
+
+[commands.resolve_library]
+verb = "resolve"
+noun = "library"
+skill = "context7-docs-ops"
+tool = "mcp--context7--resolve___library___id"
+receipt_required = false
+
+# ─── SonarQube Inspection ──────────────────────────────────────────────────
+
+[commands.search_issues]
+verb = "search"
+noun = "issues"
+skill = "sonarqube-ops"
+tool = "mcp--sonarqube--search_sonar_issues_in_projects"
+receipt_required = false
+
+[commands.inspect_quality_gate]
+verb = "inspect"
+noun = "quality-gate"
+skill = "sonarqube-ops"
+tool = "mcp--sonarqube--get_project_quality_gate_status"
+receipt_required = false
+
+[commands.inspect_measures]
+verb = "inspect"
+noun = "measures"
+skill = "sonarqube-ops"
+tool = "mcp--sonarqube--get_component_measures"
+receipt_required = false
+
+# ─── Structured Reasoning ──────────────────────────────────────────────────
+
+[commands.decompose_task]
+verb = "decompose"
+noun = "task"
+skill = "sequential-thinking-default"
+tool = "mcp--sequentialthinking--process_thought"
+receipt_required = false
+
+[commands.summarize_thinking]
+verb = "summarize"
+noun = "thinking"
+skill = "sequential-thinking-default"
+tool = "mcp--sequentialthinking--generate_summary"
+receipt_required = false
+
+[commands.export_session]
+verb = "export"
+noun = "session"
+skill = "sequential-thinking-default"
+tool = "mcp--sequentialthinking--export_session"
+receipt_required = false
+
+[commands.import_session]
+verb = "import"
+noun = "session"
+skill = "sequential-thinking-default"
+tool = "mcp--sequentialthinking--import_session"
+receipt_required = false
+
+# ─── Orchestration: Generic ────────────────────────────────────────────────
+
+[commands.spawn_subtask]
+verb = "spawn"
+noun = "subtask"
+skill = "native"
+tool = "new_task"
+receipt_required = false
+notes = "Requires mode slug and handoff packet"
+
+# ─── Orchestration: Mode-Routed Dispatch ───────────────────────────────────
+# Each dispatch entry maps to a specific mode target via new_task.
+
+[commands.dispatch_fitter]
+verb = "dispatch"
+noun = "fitter"
+skill = "native"
+tool = "new_task"
+target_mode = "fitter"
+contract = ".kilocode/contracts/line_health/line_fault_contract.md"
+receipt_required = false
+
+[commands.dispatch_code]
+verb = "dispatch"
+noun = "code"
+skill = "native"
+tool = "new_task"
+target_mode = "code"
+contract = ".kilocode/contracts/composability/handoff_packet.md"
+receipt_required = false
+
+[commands.dispatch_architect]
+verb = "dispatch"
+noun = "architect"
+skill = "native"
+tool = "new_task"
+target_mode = "architect"
+contract = ".kilocode/contracts/composability/handoff_packet.md"
+receipt_required = false
+
+[commands.dispatch_docs]
+verb = "dispatch"
+noun = "docs-specialist"
+skill = "native"
+tool = "new_task"
+target_mode = "docs-specialist"
+contract = ".kilocode/contracts/composability/handoff_packet.md"
+receipt_required = false
+
+[commands.dispatch_product_skeptic]
+verb = "dispatch"
+noun = "product-skeptic"
+skill = "native"
+tool = "new_task"
+target_mode = "product-skeptic"
+contract = ".kilocode/contracts/composability/handoff_packet.md"
+receipt_required = false
+
+[commands.dispatch_code_simplifier]
+verb = "dispatch"
+noun = "code-simplifier"
+skill = "native"
+tool = "new_task"
+target_mode = "code-simplifier"
+contract = ".kilocode/contracts/composability/handoff_packet.md"
+receipt_required = false
+
+# ─── Orchestration: Thinker Mode Dispatch ──────────────────────────────────
+# Thinker modes are composable thinking specialists with enforceable contracts.
+
+[commands.dispatch_thinker_abstract]
+verb = "dispatch"
+noun = "thinker-abstract"
+skill = "native"
+tool = "new_task"
+target_mode = "thinker-abstract"
+contract = ".kilocode/contracts/thinking/abstract_thinking.md"
+receipt_required = false
+
+[commands.dispatch_thinker_adversarial]
+verb = "dispatch"
+noun = "thinker-adversarial"
+skill = "native"
+tool = "new_task"
+target_mode = "thinker-adversarial"
+contract = ".kilocode/contracts/thinking/adversarial_thinking.md"
+receipt_required = false
+
+[commands.dispatch_thinker_systems]
+verb = "dispatch"
+noun = "thinker-systems"
+skill = "native"
+tool = "new_task"
+target_mode = "thinker-systems"
+contract = ".kilocode/contracts/thinking/systems_thinking.md"
+receipt_required = false
+
+[commands.dispatch_thinker_concrete]
+verb = "dispatch"
+noun = "thinker-concrete"
+skill = "native"
+tool = "new_task"
+target_mode = "thinker-concrete"
+contract = ".kilocode/contracts/thinking/concrete_thinking.md"
+receipt_required = false
+
+[commands.dispatch_thinker_epistemic]
+verb = "dispatch"
+noun = "thinker-epistemic"
+skill = "native"
+tool = "new_task"
+target_mode = "thinker-epistemic"
+contract = ".kilocode/contracts/thinking/epistemic_thinking.md"
+receipt_required = false
+
+# ─── Plant Validation ──────────────────────────────────────────────────────
+
+[commands.validate_plant]
+verb = "validate"
+noun = "plant"
+skill = "cli"
+tool = ".venv/bin/python .kilocode/tools/workflow_gate.py"
+receipt_required = true
+
+# ─── Session Monitoring ────────────────────────────────────────────────────
+
+[commands.monitor_session]
+verb = "monitor"
+noun = "session"
+skill = "cli"
+tool = "python3 .kilocode/tools/kilo_session_monitor.py whoami"
+receipt_required = false
+
+[commands.inspect_cost]
+verb = "inspect"
+noun = "cost"
+skill = "cli"
+tool = "python3 .kilocode/tools/kilo_session_monitor.py cost"
+receipt_required = false
+
+[commands.inspect_timeline]
+verb = "inspect"
+noun = "timeline"
+skill = "cli"
+tool = "python3 .kilocode/tools/kilo_session_monitor.py timeline --last 20"
+receipt_required = false
+
+# ─── PR Review ─────────────────────────────────────────────────────────────
+
+[commands.fetch_pr]
+verb = "fetch"
+noun = "pr"
+skill = "github-cli-code-review"
+tool = "gh pr view --json number,title,body,reviewDecision,reviews,comments"
+receipt_required = false
+
+[commands.list_pr_comments]
+verb = "list"
+noun = "pr-comments"
+skill = "github-cli-code-review"
+tool = "gh pr view --json reviews,comments"
+receipt_required = false
+
+# ─── Composite: Land Plane (full session landing) ──────────────────────────
+
+[commands.land_plane]
+verb = "land"
+noun = "plane"
+skill = "beads-local-db-ops"
+composite = ["gate_quality", "close_issue", "sync_push"]
+tool = ".kilocode/tools/beads_land_plane.sh --bead-id {id}"
+receipt_required = true
+notes = "beads_land_plane.sh requires --bead-id; performs quality gates + bead closure"
+
+# ─── Composite: Thinking Plan Execution ────────────────────────────────────
+# Composable thinking plans chain thinker mode dispatches in sequence.
+
+[commands.execute_thinking_plan]
+verb = "execute"
+noun = "thinking-plan"
+skill = "native"
+composite = ["dispatch_thinker_abstract", "dispatch_thinker_adversarial", "dispatch_thinker_concrete"]
+notes = "Template. Actual plan comes from .kilocode/contracts/thinking/plans/*.md"
+receipt_required = false
+
+# ─── Composite: Dispatch Process Orchestrator ──────────────────────────────
+
+[commands.dispatch_process_orchestrator]
+verb = "dispatch"
+noun = "process-orchestrator"
+skill = "native"
+tool = "new_task"
+target_mode = "process-orchestrator"
+contract = ".kilocode/contracts/composability/handoff_packet.md"
+receipt_required = false
+notes = "Tier 2 tactical orchestrator — lifecycle: discover→explore→prepare→execute→gate→land"
+
+[commands.dispatch_audit_orchestrator]
+verb = "dispatch"
+noun = "audit-orchestrator"
+skill = "native"
+tool = "new_task"
+target_mode = "audit-orchestrator"
+contract = ".kilocode/contracts/composability/handoff_packet.md"
+receipt_required = false
+notes = "Tier 2 tactical orchestrator — adversarial pressure testing"
