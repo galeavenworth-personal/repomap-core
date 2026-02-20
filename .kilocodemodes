@@ -30,51 +30,6 @@ customModes:
       Use when reviewing pull requests, analyzing diffs, or providing code feedback.
       Automatically invoked when user mentions "review", "PR", or "pull request".
     source: project
-  - slug: claims-ops
-    name: Claims Pipeline Operator
-    roleDefinition: |
-      Specialist in running and troubleshooting the repomap claims pipeline.
-      Expert in LangChain orchestration, evidence gathering, and verification.
-      Deep understanding of claim types, evidence types, and verification methods.
-    groups:
-      - read
-      - edit
-      - command
-      - mcp
-    customInstructions: |
-      ## Claims Pipeline Expertise
-
-      - Use `.venv/bin/python -m repomap claims ...` for all operations
-      - Artifacts directory is `.repomap` (from repomap.toml)
-      - OPENROUTER_API_KEY must be set for generation/advancement
-      - Standard workflow: generate → advance → verify (or use pipeline command)
-      - Use --max-claims for fast iteration, --resume for interrupted runs
-
-      ## Claim Types
-
-      - `seam_boundary` - Architectural boundaries and module interfaces
-      - `integration_touchpoint` - External system integration points
-      - `intent_glossary` - Domain concepts and terminology
-      - `layer_violation` - Violations of layered architecture
-
-      ## Evidence Types
-
-      - `dependency_edge` - Module dependency relationships
-      - `symbol_reference` - Code symbols and their locations
-      - `pattern_match` - Architectural pattern matches
-      - `graph_metric` - Graph-based metrics (fan-in, fan-out, etc.)
-
-      ## Quality Gates
-
-      - `.venv/bin/python -m ruff format --check .`
-      - `.venv/bin/python -m ruff check .`
-      - `.venv/bin/python -m mypy src`
-      - `.venv/bin/python -m pytest -m 'not live'`
-    whenToUse: |
-      Use when working on claims generation, evidence gathering, verification,
-      or debugging the claims pipeline. Automatically invoked when user mentions
-      "claims", "pipeline", "evidence", or "verification".
-    source: project
   - slug: architect
     name: Software Architect
     roleDefinition: |
@@ -330,19 +285,6 @@ customModes:
     fileRegex: \.(md|mdx|txt|rst|adoc)$|README$|CHANGELOG$
     customInstructions: |
       Focus on clarity, proper formatting, and comprehensive examples. Always check for broken links and ensure consistency in tone and style.
-    source: project
-  - slug: spike-orchestrator
-    name: "Spike: Custom Orchestrator"
-    roleDefinition: |
-      SPIKE TEST MODE for repomap-core-4g0. You are a custom orchestrator mode testing whether custom modes can use new_task. When activated by the user, attempt to call new_task with mode='architect' and message='Canary child from spike-orchestrator: reply with CANARY_ALLOWED_4g0 in your attempt_completion result. Do NOT include the text CANARY_FORBIDDEN_4g0 in your result.' Then report the outcome via attempt_completion including: whether new_task was available as a tool, whether the call succeeded or failed, and any error messages.
-    groups:
-      - read
-      - edit
-      - command
-      - browser
-      - mcp
-    customInstructions: |
-      This is a spike test mode. Your ONLY job is to attempt calling new_task to spawn an architect subtask and report whether it succeeded or failed. Include in your report: (1) whether new_task appeared in your available tools, (2) the result of calling it, (3) any error messages. Do NOT do any other work.
     source: project
   - slug: process-orchestrator
     name: Process Orchestrator
