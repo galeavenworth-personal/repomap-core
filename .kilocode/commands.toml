@@ -31,7 +31,7 @@ verb = "format"
 noun = "ruff"
 skill = "cli"
 tool = ".venv/bin/python -m ruff format --check ."
-gate_wrapper = ".kilocode/tools/bounded_gate.py"
+gate_wrapper = ".venv/bin/python .kilocode/tools/bounded_gate.py"
 receipt_required = true
 
 [commands.check_ruff]
@@ -39,7 +39,7 @@ verb = "check"
 noun = "ruff"
 skill = "cli"
 tool = ".venv/bin/python -m ruff check ."
-gate_wrapper = ".kilocode/tools/bounded_gate.py"
+gate_wrapper = ".venv/bin/python .kilocode/tools/bounded_gate.py"
 receipt_required = true
 
 [commands.check_mypy]
@@ -47,7 +47,7 @@ verb = "check"
 noun = "mypy"
 skill = "cli"
 tool = ".venv/bin/python -m mypy src"
-gate_wrapper = ".kilocode/tools/bounded_gate.py"
+gate_wrapper = ".venv/bin/python .kilocode/tools/bounded_gate.py"
 receipt_required = true
 
 [commands.test_pytest]
@@ -55,7 +55,7 @@ verb = "test"
 noun = "pytest"
 skill = "cli"
 tool = ".venv/bin/python -m pytest -q"
-gate_wrapper = ".kilocode/tools/bounded_gate.py"
+gate_wrapper = ".venv/bin/python .kilocode/tools/bounded_gate.py"
 receipt_required = true
 
 # ─── Composite: Quality Gate ────────────────────────────────────────────────
@@ -65,7 +65,7 @@ verb = "gate"
 noun = "quality"
 skill = "cli"
 composite = ["format_ruff", "check_ruff", "check_mypy", "test_pytest"]
-tool = ".kilocode/tools/bounded_gate.py"
+tool = ".venv/bin/python .kilocode/tools/bounded_gate.py"
 receipt_required = true
 notes = "Expands composite into sequential bounded_gate.py invocations"
 
@@ -318,7 +318,8 @@ receipt_required = false
 verb = "validate"
 noun = "plant"
 skill = "cli"
-tool = ".venv/bin/python .kilocode/tools/workflow_gate.py"
+tool = ".venv/bin/python .kilocode/tools/bounded_gate.py --gate-id workflow-validation -- .venv/bin/python .kilocode/tools/workflow_gate.py"
+gate_wrapper = ".venv/bin/python .kilocode/tools/bounded_gate.py"
 receipt_required = true
 
 # ─── Session Monitoring ────────────────────────────────────────────────────
