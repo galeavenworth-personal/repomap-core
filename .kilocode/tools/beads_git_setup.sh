@@ -17,7 +17,8 @@ if ! "${ROOT_DIR}/.kilocode/tools/bd" --version >/dev/null 2>&1; then
 fi
 
 git config merge.beads.name "Beads JSONL merge"
-git config merge.beads.driver "${ROOT_DIR}/.kilocode/tools/bd merge-driver %O %A %B"
+# v0.52 format: bd merge %A %O %A %B (not merge-driver %O %A %B)
+git config merge.beads.driver "${ROOT_DIR}/.kilocode/tools/bd merge %A %O %A %B"
 
 echo "Configured merge.beads.driver:"
 git config --get merge.beads.driver
