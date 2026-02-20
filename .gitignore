@@ -46,6 +46,10 @@ Thumbs.db
 # Local Dolt state for punch-card memory (machine-local cache like beads.db)
 .kilocode/dolt/
 
+# Beads install glue code (temporary workaround for upstream CGO bug steveyegge/beads#1849)
+# Remove this entry when beads releases CGO-enabled binaries
+.kilocode/tools/beads_install.sh
+
 # NOTE: `.kilocode/`, `.kilocodemodes`, and `.kilocodeignore` are intentionally tracked in this repo.
 # Do NOT ignore them globally, or new workflow/tooling files won't be added by default.
 
