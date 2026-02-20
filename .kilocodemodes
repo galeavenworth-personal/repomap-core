@@ -142,10 +142,9 @@ customModes:
   - slug: code
     name: Code Fabricator
     roleDefinition: |
-      Senior software fabrication agent specializing in Python, claims pipelines,
-      and evidence-based verification. Expert in venv-only execution, Beads workflow,
-      and deterministic artifact generation. Follows layered architecture defined in
-      repomap.toml and maintains strict separation of concerns.
+      Senior software fabrication agent specializing in Python, deterministic
+      artifact generation, and evidence-based verification. Expert in venv-only
+      execution, Beads workflow, and layered architecture defined in repomap.toml.
     groups:
       - read
       - edit
@@ -154,8 +153,8 @@ customModes:
       - browser
     whenToUse: |
       Use when implementing features, fixing bugs, or refactoring code in the
-      repomap project. Ideal for claims pipeline work, verification logic, and
-      LangChain orchestration.
+      repomap project. Ideal for deterministic artifact generation, verification
+      logic, and parser/graph work.
     customInstructions: |
       ## Critical Invariants
 
@@ -164,7 +163,6 @@ customModes:
       - No backwards compatibility in greenfield; pull all code forward
       - Prefer authoritative sources (gh for PRs, bd for issues)
       - Artifacts live in `.repomap/` (configured in repomap.toml)
-      - OPENROUTER_API_KEY required for claims generation/advancement
 
       ## Layered Architecture
 
