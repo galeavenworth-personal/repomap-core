@@ -1,11 +1,17 @@
 ---
 description: Meta-workflow for software fabrication task initiation. Orchestrates beads task discovery, codebase exploration, and task preparation in a single invocation.
 auto_execution_mode: 3
+punch_card: start-task
 ---
 
 # Start Task Workflow
 
-A meta-workflow that orchestrates the initial phases of software fabrication task execution. This workflow consolidates task discovery, context gathering, and preparation into a single, streamlined invocation.
+A meta-workflow that orchestrates the initial phases of software fabrication task execution.
+This workflow consolidates task discovery, context gathering, and preparation into a single,
+streamlined invocation.
+
+**Punch Card:** `start-task` (7 rows, 6 required)
+**Commands Reference:** [`.kilocode/commands.toml`](../commands.toml)
 
 ## Usage
 
@@ -13,47 +19,52 @@ A meta-workflow that orchestrates the initial phases of software fabrication tas
 /start-task <task-id>
 ```
 
-Example:
-```
-/start-task repomap-609.3
-```
-
 ## What This Workflow Does
 
-This workflow executes three sequential phases:
+Three sequential phases, each driven by commands.toml routes:
 
-1. **Task Discovery** — Fetch task details from beads, including parent epic context
-2. **Codebase Exploration** — Gather semantic and structural understanding of relevant code
-3. **Task Preparation** — Transform the task into actionable, well-scoped work
+1. **Task Discovery** — Fetch task details from beads
+2. **Codebase Exploration** — Gather semantic understanding of relevant code
+3. **Task Preparation** — Transform the task into actionable work via sequential thinking
 
-## Phase 1: Task Discovery (Beads)
+**Exit Gate:** `checkpoint punch-card` must PASS before returning to parent.
+
+---
+
+## Phase 1: Task Discovery
 
 **Objective:** Understand what needs to be done and why.
 
-**Actions:**
-- Preflight Beads setup (fail-fast):
+**Steps:**
 
-  ```bash
-  .kilocode/tools/beads_preflight.sh
-  ```
+1. Preflight Beads setup (fail-fast):
 
-  If it reports `.beads/ not initialized`, run once per clone:
+   ```bash
+   .kilocode/tools/beads_preflight.sh
+   ```
 
-  ```bash
-  .kilocode/tools/bd init
-  ```
+   If it reports `.beads/ not initialized`, run once per clone:
 
-- Fetch task details using `.kilocode/tools/bd show <task-id>`
-- If the task has a parent epic, fetch that as well using `.kilocode/tools/bd show <parent-id>`
-- Review task description, acceptance criteria, and any linked context
-- Identify key components, files, or systems mentioned in the task
+   ```bash
+   .kilocode/tools/bd init
+   ```
 
-**Skill Trigger:** The task ID reference should automatically trigger the [`beads-local-db-ops`](../skills/beads-local-db-ops/SKILL.md) skill.
+2. Fetch task details:
+
+   > 📌 `show issue {task-id}` → [`commands.show_issue`](../commands.toml)
+   > Resolves to: `.kilocode/tools/bd show {id}`
+
+3. If the task has a parent epic, fetch that context:
+
+   > 📌 `show issue {parent-id}` → [`commands.show_issue`](../commands.toml)
+
+4. Review task description, acceptance criteria, and any linked context.
+   Identify key components, files, or systems mentioned.
 
 **Key Questions:**
 - What is the task asking for? (bug fix, feature, refactor, investigation)
 - What is the expected outcome?
-- Are there dependencies or blockers mentioned?
+- Are there dependencies or blockers?
 - What is the parent epic's strategic context?
 
 **Output:** Clear understanding of task scope and strategic alignment.
@@ -64,32 +75,25 @@ This workflow executes three sequential phases:
 
 **Objective:** Gather comprehensive context about the code involved in this task.
 
-**Invoke:** `/codebase-exploration` workflow
+### Layer 1: Semantic Understanding
 
-This workflow uses a multi-tool strategy to build layered understanding:
+> 📌 `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
+> Resolves to: `mcp--augment___context___engine--codebase___retrieval`
 
-### Layer 1: Semantic Understanding (Augment)
-Use the Augment context engine to gather high-level architectural context:
-
-```
-Use codebase-retrieval to understand:
-- How does [feature/component mentioned in task] work?
-- What are the architectural patterns around [task area]?
+Query for:
+- How does the feature/component mentioned in the task work?
+- What are the architectural patterns around the task area?
 - What are the key files and modules involved?
-```
-
-**Skill Trigger:** Queries about code architecture and patterns should trigger [`repomap-codebase-retrieval`](../skills/repomap-codebase-retrieval/SKILL.md).
 
 ### Layer 2: Structural Analysis (Kilo Native Tools)
-- Use `list_files` to understand directory structure (recursive or top-level)
-- Use `read_file` to examine key files identified in Layer 1 (batch up to 5 files)
-- Use `search_files` to find specific patterns or references (Rust regex)
 
-### Layer 3: Claims/Verification Workflows (Experimental)
+Use `list_files` to understand directory structure, `read_file` to examine key files
+(batch up to 5), and `search_files` to find specific patterns.
 
-Claims pipelines and `repomap claims ...` commands are **experimental / out-of-scope** for repomap-core and are not required for default development or CI parity.
+### Layer 3: Library Documentation (if external deps involved)
 
-If you explicitly need claims workflows, treat them as extension work and expect additional prerequisites (network/secrets).
+> 📌 `resolve library` → [`commands.resolve_library`](../commands.toml)
+> 📌 `query docs` → [`commands.query_docs`](../commands.toml)
 
 **Output:** Comprehensive understanding of code structure, patterns, and constraints.
 
@@ -99,86 +103,57 @@ If you explicitly need claims workflows, treat them as extension work and expect
 
 **Objective:** Transform the task into actionable, well-scoped work using sequential thinking.
 
-**Invoke:** `/prep-task` workflow
+**MANDATORY: All reasoning must go through sequential thinking commands.**
 
-### MANDATORY: Use Sequential Thinking
+### Step 1: Problem Definition (≥2 thoughts)
 
-**You MUST use the sequential thinking MCP tools for Phase 3. This is not optional.**
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--process_thought`
 
-#### Step 1: Problem Definition (2-3 thoughts)
-```python
-mcp--sequentialthinking--process_thought(
-    thought="Task interpretation 1: [first way to understand the task]",
-    thought_number=1,
-    total_thoughts=6,  # adjust as needed
-    next_thought_needed=True,
-    stage="Problem Definition",
-    tags=["prep", "interpretation"]
-)
+Minimum 2 interpretation branches required:
 
-mcp--sequentialthinking--process_thought(
-    thought="Task interpretation 2: [alternative understanding]",
-    thought_number=2,
-    total_thoughts=6,
-    next_thought_needed=True,
-    stage="Problem Definition",
-    tags=["prep", "interpretation"]
-)
+```
+decompose task: "Task interpretation 1: [first way to understand the task]"
+  stage=Problem Definition, tags=[prep, interpretation]
+
+decompose task: "Task interpretation 2: [alternative understanding]"
+  stage=Problem Definition, tags=[prep, interpretation]
 ```
 
-**Branch Budget: Minimum 2 interpretations required.**
+### Step 2: Analysis (≥2 thoughts)
 
-#### Step 2: Analysis (2-3 thoughts)
-```python
-mcp--sequentialthinking--process_thought(
-    thought="Approach A: [first implementation strategy]. Pros: [...]. Cons: [...]",
-    thought_number=3,
-    total_thoughts=6,
-    next_thought_needed=True,
-    stage="Analysis",
-    tags=["prep", "approach"]
-)
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
 
-mcp--sequentialthinking--process_thought(
-    thought="Approach B: [alternative strategy]. Pros: [...]. Cons: [...]",
-    thought_number=4,
-    total_thoughts=6,
-    next_thought_needed=True,
-    stage="Analysis",
-    tags=["prep", "approach"]
-)
+Minimum 2 approach branches required:
+
+```
+decompose task: "Approach A: [strategy]. Pros: [...]. Cons: [...]"
+  stage=Analysis, tags=[prep, approach]
+
+decompose task: "Approach B: [alternative]. Pros: [...]. Cons: [...]"
+  stage=Analysis, tags=[prep, approach]
 ```
 
-**Branch Budget: Minimum 2 approaches required.**
+### Step 3: Verify Exploration Completeness
 
-#### Step 3: Verify Exploration Completeness
-```python
-mcp--sequentialthinking--generate_summary()
-# Review output - ensure you have:
-# - Multiple Problem Definition thoughts (interpretations)
-# - Multiple Analysis thoughts (approaches)
-# - Clear reasoning for each branch
+> 📌 `summarize thinking` → [`commands.summarize_thinking`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--generate_summary`
+
+Verify output shows:
+- Multiple Problem Definition thoughts (interpretations)
+- Multiple Analysis thoughts (approaches)
+- Clear reasoning for each branch
+
+### Step 4: Synthesis & Conclusion
+
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+
 ```
+decompose task: "Choosing [approach] because [rationale]. Implementation plan: [steps]."
+  stage=Synthesis, tags=[prep, decision]
 
-#### Step 4: Synthesis & Conclusion
-```python
-mcp--sequentialthinking--process_thought(
-    thought="Choosing [selected approach] because [rationale]. Implementation plan: [step-by-step].",
-    thought_number=5,
-    total_thoughts=6,
-    next_thought_needed=True,
-    stage="Synthesis",
-    tags=["prep", "decision"]
-)
-
-mcp--sequentialthinking--process_thought(
-    thought="Success criteria: [measurable outcomes]. Risks: [potential issues]. Mitigation: [how to handle].",
-    thought_number=6,
-    total_thoughts=6,
-    next_thought_needed=False,
-    stage="Conclusion",
-    tags=["prep", "success-criteria"]
-)
+decompose task: "Success criteria: [outcomes]. Risks: [issues]. Mitigation: [how]."
+  stage=Conclusion, tags=[prep, success-criteria]
 ```
 
 **CRITICAL: You MUST reach Conclusion stage before proceeding.**
@@ -187,46 +162,14 @@ mcp--sequentialthinking--process_thought(
 
 While using sequential thinking above, ensure you address:
 
-This workflow applies the 8-step methodology:
-
-### Step 1: Clarify Ambiguous Language
-- Replace vague terms with specific file/function/component references
-- Use `sequentialthinking` to reason through ambiguities
-- Use `codebase-retrieval` to find how terms are used in the codebase
-
-### Step 2: Add Missing Context
-- Include relevant architecture patterns from Phase 2
-- Reference coding standards from project documentation
-- Verify third-party library APIs using Context7 if needed
-
-### Step 3: Specify Success Criteria
-- Define measurable outcomes (tests pass, no lint errors, etc.)
-- Identify edge cases and validation requirements
-- Reference quality gates from [`AGENTS.md`](../../AGENTS.md)
-
-### Step 4: Break Down Complexity
-- Decompose into sequential or parallel subtasks
-- Identify dependencies between subtasks
-- Create structured task list with clear phases
-
-### Step 5: Correct Technical Errors
-- Verify API signatures and file paths
-- Check for outdated assumptions about the codebase
-- Use Context7 for any external library usage
-
-### Step 6: Align with Project Conventions
-- Follow patterns from [`repomap.toml`](../../repomap.toml) layer definitions
-- Use virtual environment for all Python commands (`.venv/bin/python -m ...`)
-- Follow quality gate requirements (ruff, mypy, pytest)
-
-### Step 7: Remove Scope Creep
-- Eliminate implied work not explicitly requested
-- Focus on the task's stated objective
-- Don't add "nice to have" features
-
-### Step 8: Preserve Code Samples
-- Keep any user-provided code blocks unchanged
-- Reference them during implementation
+1. **Clarify ambiguous language** — Replace vague terms with specific file/function references
+2. **Add missing context** — Include architecture patterns from Phase 2
+3. **Specify success criteria** — Define measurable outcomes
+4. **Break down complexity** — Decompose into subtasks with dependencies
+5. **Correct technical errors** — Verify API signatures and file paths
+6. **Align with conventions** — Follow [`repomap.toml`](../../repomap.toml) layer rules
+7. **Remove scope creep** — Eliminate implied work not explicitly requested
+8. **Preserve code samples** — Keep user-provided code blocks unchanged
 
 **Output:** Actionable task with clear subtasks, success criteria, and implementation plan.
 
@@ -237,158 +180,119 @@ This workflow applies the 8-step methodology:
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  PHASE 1: TASK DISCOVERY                                        │
-│  ├── .kilocode/tools/bd show <task-id>                          │
-│  ├── .kilocode/tools/bd show <parent-epic-id> (if exists)        │
+│  ├── show issue {task-id}           → commands.show_issue       │
+│  ├── show issue {parent-id}         → commands.show_issue       │
 │  └── Review task description and acceptance criteria            │
 ├─────────────────────────────────────────────────────────────────┤
 │  PHASE 2: CODEBASE EXPLORATION                                  │
-│  ├── codebase-retrieval (semantic understanding)                │
+│  ├── retrieve codebase              → commands.retrieve_codebase│
 │  ├── list_files + read_file (structural analysis)               │
-│  ├── repomap claims query (architectural insights)              │
-│  └── repomap verify (constraint checking)                       │
+│  └── resolve library / query docs   → commands.resolve_library  │
 ├─────────────────────────────────────────────────────────────────┤
 │  PHASE 3: TASK PREPARATION                                      │
-│  ├── Clarify ambiguous language                                 │
-│  ├── Add missing context                                        │
-│  ├── Specify success criteria                                   │
-│  ├── Break down complexity                                      │
-│  ├── Correct technical errors                                   │
-│  ├── Align with project conventions                             │
-│  ├── Remove scope creep                                         │
-│  └── Preserve code samples                                      │
+│  ├── decompose task (≥2 interpretations) → commands.decompose_task
+│  ├── decompose task (≥2 approaches)      → commands.decompose_task
+│  ├── summarize thinking                  → commands.summarize_thinking
+│  ├── decompose task (synthesis+conclusion)→ commands.decompose_task
+│  └── export session                      → commands.export_session│
 ├─────────────────────────────────────────────────────────────────┤
-│  OUTPUT: READY TO EXECUTE                                       │
-│  ├── Clear understanding of task scope                          │
-│  ├── Comprehensive codebase context                             │
-│  ├── Actionable subtasks with success criteria                  │
-│  └── STOP — Wait for user approval to proceed                   │
+│  EXIT GATE: PUNCH CARD CHECKPOINT                               │
+│  ├── mint punches {task_id}         → commands.punch_mint       │
+│  ├── checkpoint punch-card {task_id} start-task                 │
+│  │                                  → commands.punch_checkpoint  │
+│  └── MUST PASS — blocks attempt_completion on failure           │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+---
 
 ## Critical Rules
 
 ### Virtual Environment Mandate
-**ALWAYS** use `.venv/bin/python -m ...` for Python execution. See [`virtual-environment-mandate.md`](../rules/virtual-environment-mandate.md).
+**ALWAYS** use `.venv/bin/python -m ...` for Python execution.
 
 ### Beads Sync-Branch Model
-- Local SQLite (`.beads/beads.db`) is a cache
-- Remote `beads-sync` branch is the shared truth
-- Run `.kilocode/tools/bd sync --no-push` at session start if not already synced
-- See [`beads.md`](../rules/beads.md) for full workflow
+
+> 📌 `sync remote` → [`commands.sync_remote`](../commands.toml)
+> Resolves to: `.kilocode/tools/bd sync --no-push`
+
+Run at session start if not already synced.
 
 ### Quality Gates (Non-Negotiable)
-Before committing any code changes:
-```bash
-.venv/bin/python -m ruff format --check .
-.venv/bin/python -m ruff check .
-.venv/bin/python -m mypy src
-.venv/bin/python -m pytest -q
-```
+
+> 📌 `gate quality` → [`commands.gate_quality`](../commands.toml)
+> Composite: `format_ruff` → `check_ruff` → `check_mypy` → `test_pytest`
+> All run through `bounded_gate.py` with receipt tracking.
 
 ### Layered Architecture
-Respect layer boundaries defined in [`repomap.toml`](../../repomap.toml):
-- Foundation → depends on nothing
-- Verification → depends on foundation only
-- Interface → depends on all layers
+Respect layer boundaries defined in [`repomap.toml`](../../repomap.toml).
 
-See [`architecture.md`](../rules/memory-bank/architecture.md) for details.
+---
 
-## MANDATORY: Export Session and STOP
+## MANDATORY: Export Session
 
-**After completing Phase 3, you MUST export your thinking session:**
+After completing Phase 3:
 
-```python
-# MANDATORY - Export your preparation session
-mcp--sequentialthinking--export_session(
-    file_path=".kilocode/thinking/task-{task-id}-prep-{YYYY-MM-DD}.json"
-)
-```
+> 📌 `export session` → [`commands.export_session`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--export_session`
 
-Example:
-```python
-mcp--sequentialthinking--export_session(
-    file_path=".kilocode/thinking/task-repomap-542-prep-2026-01-23.json"
-)
-```
+File path: `.kilocode/thinking/task-{task-id}-prep-{YYYY-MM-DD}.json`
+
+---
+
+## EXIT GATE: Punch Card Checkpoint
+
+**Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
+
+> 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id}`
+
+> 🚪 `checkpoint punch-card {task_id} start-task` → [`commands.punch_checkpoint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} start-task`
+> **receipt_required = true** — this is a hard gate.
+
+**If checkpoint FAILS:** Do NOT call `attempt_completion`. Review which required punches
+are missing, complete the missing steps, re-mint, and re-checkpoint.
+
+**If checkpoint PASSES:** Proceed to `attempt_completion` with the prepared task.
 
 ---
 
 ## STOP HERE
 
-**This workflow STOPS after Phase 3 preparation is complete.**
+**This workflow STOPS after preparation is complete and the punch card checkpoint passes.**
 
 ✋ **DO NOT PROCEED TO IMPLEMENTATION.**
-
-Before calling attempt_completion, you MUST:
-1. Call `generate_summary` to verify sequential thinking was used
-2. Confirm at least 6 thoughts exist across Problem Definition → Conclusion stages
-3. Verify branch budget was spent (minimum 2 approach branches)
 
 Present the prepared task with:
 - Summary of task understanding
 - Key files and components identified
 - Proposed subtasks and success criteria
-- Any clarifying questions or concerns
+- Punch card checkpoint result (PASS)
 
 **To execute the task, the user must explicitly approve or run:**
 ```
 /execute-task <task-id>
 ```
 
+---
+
 ## Related Workflows
 
+- [`/execute-task`](./execute-task.md) — Implementation phase (after approval)
 - [`/codebase-exploration`](./codebase-exploration.md) — Deep dive into code structure
 - [`/prep-task`](./prep-task.md) — Detailed task preparation methodology
-- [`/execute-task`](./execute-task.md) — Implementation phase (after approval)
-- [`/beads-sync`](./beads-sync.md) — Sync beads state with remote
 
 ## Related Skills
 
 - [`beads-local-db-ops`](../skills/beads-local-db-ops/SKILL.md) — Beads CLI operations
 - [`repomap-codebase-retrieval`](../skills/repomap-codebase-retrieval/SKILL.md) — Semantic code search
-- [`repomap-query-claims`](../skills/repomap-query-claims/SKILL.md) — Architectural insights
-- [`repomap-verify-architecture`](../skills/repomap-verify-architecture/SKILL.md) — Layer boundary checking
 - [`sequential-thinking-default`](../skills/sequential-thinking-default/SKILL.md) — Multi-step reasoning
-
-## Example Usage
-
-### User Prompt
-```
-/start-task repomap-609.3
-```
-
-### Agent Response
-```
-Phase 1: Task Discovery
-
-- Fetched task repomap-core-XXX: "Tighten deterministic artifact generation"
-
-Phase 2: Codebase Exploration
-
-- Key files: src/artifacts/**, src/scan/**, src/verify/**
-- Architectural pattern: deterministic scanning + reproducible artifacts
-
-Phase 3: Task Preparation
-Success Criteria:
-
-- Artifacts remain deterministic
-- Quality gates pass (ruff, mypy, pytest)
-
-Proposed Subtasks:
-
-1. [ ] Implement change
-2. [ ] Update tests
-3. [ ] Run quality gates
-
-Ready to proceed? (yes/no)
-```
+- [`context7-docs-ops`](../skills/context7-docs-ops/SKILL.md) — Library documentation
 
 ## Philosophy: Software Fabrication
 
-This workflow embodies the "software fabrication" philosophy:
 - **Determinism** — Same task → same preparation → same execution
 - **Evidence-based** — Decisions backed by codebase analysis
-- **Layered understanding** — Build context incrementally
-- **Epistemic humility** — Acknowledge uncertainty, seek clarification
-
-See [`brief.md`](../rules/memory-bank/brief.md) for project philosophy.
+- **Structure discipline** — commands.toml routes all the way down
+- **Self-verifying** — Punch card checkpoint gates the exit

@@ -1,15 +1,21 @@
 ---
 description: Implementation workflow that begins after /start-task preparation is complete. Enforces pre-execution verification and structured execution loop.
 auto_execution_mode: 3
+punch_card: execute-task
 ---
 
 # Task Execution Protocol
 
-This workflow begins where `/start-task` ends—when you have completed sequential thinking, reached Conclusion stage, and exported your session. **You may NOT execute without proper preparation.**
+This workflow begins where `/start-task` ends — when you have completed sequential
+thinking, reached Conclusion stage, exported your session, and the `start-task` punch
+card checkpoint has passed.
+
+**You may NOT execute without proper preparation.**
+
+**Punch Card:** `execute-task` (10 rows, 9 required)
+**Commands Reference:** [`.kilocode/commands.toml`](../commands.toml)
 
 **Core principle:** Verify reasoning → Execute subtask → Verify completion → Repeat.
-
-**Mode Management**: Each step specifies the BEST mode for that work. Switch modes between steps using `switch_mode(mode_slug, reason)`.
 
 ---
 
@@ -18,44 +24,31 @@ This workflow begins where `/start-task` ends—when you have completed sequenti
 **YOU MUST RUN THESE VERIFICATION STEPS FIRST. NO EXCEPTIONS.**
 
 ### Step 1: Load Preparation Session
-**Best Mode**: `code` (can read all files, access MCP tools)
 
-```python
-# MANDATORY - Load the prep session from /start-task
-mcp--sequentialthinking--import_session(
-    file_path=".kilocode/thinking/task-{task-id}-prep-{YYYY-MM-DD}.json"
-)
-```
+> 📌 `import session` → [`commands.import_session`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--import_session`
 
-Example:
-```python
-mcp--sequentialthinking--import_session(
-    file_path=".kilocode/thinking/task-repomap-542-prep-2026-01-23.json"
-)
-```
+File path: `.kilocode/thinking/task-{task-id}-prep-{YYYY-MM-DD}.json`
 
-**If this fails:** The prep session doesn't exist. HALT IMMEDIATELY and run `/start-task <task-id>` first.
+**If this fails:** The prep session doesn't exist. HALT and run `/start-task {task-id}` first.
 
 ### Step 2: Verify Conclusion Stage Reached
-**Best Mode**: `code` (same as Step 1, avoid mode thrashing)
 
-```python
-# MANDATORY - Verify preparation was completed properly
-summary = mcp--sequentialthinking--generate_summary()
+> 📌 `summarize thinking` → [`commands.summarize_thinking`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--generate_summary`
 
-# Check the summary output for:
-# - "currentStage": "Conclusion" appears in the output
-# - Multiple thoughts in "Problem Definition" and "Analysis" stages
-# - At least 2 interpretation branches explored
-# - At least 2 approach branches explored
-```
+Check the summary output for:
+- `currentStage: Conclusion` appears in the output
+- Multiple thoughts in Problem Definition and Analysis stages
+- At least 2 interpretation branches explored
+- At least 2 approach branches explored
 
-**If Conclusion stage not reached:** Preparation is incomplete. HALT IMMEDIATELY and complete `/prep-task` workflow with proper sequential thinking.
+**If Conclusion stage not reached:** Preparation is incomplete. HALT and complete
+`/start-task` workflow with proper sequential thinking.
 
 ### Step 3: Review Preparation Decisions
-**Best Mode**: `code` (same as Steps 1-2, avoid mode thrashing)
 
-After verifying the session is valid, review the key decisions:
+After verifying the session is valid, review:
 - What approach was selected and why?
 - What are the success criteria?
 - What are the identified risks and mitigations?
@@ -71,193 +64,109 @@ For each subtask, follow this protocol:
 │  FOR EACH SUBTASK:                                              │
 │                                                                 │
 │  0. PRE-EDIT REASONING (if non-trivial)                         │
-│     Best Mode: code                                             │
-│     ├── process_thought: What am I about to change?             │
-│     ├── process_thought: What are the risks?                    │
-│     └── Conclusion stage: Commit to edit strategy               │
+│     ├── decompose task          → commands.decompose_task       │
+│     └── Reach Conclusion stage before editing                   │
 │                                                                 │
 │  1. ACTIVATE                                                    │
-│     Best Mode: code (same as Step 0)                            │
 │     └── update_todo_list: mark IN_PROGRESS                      │
 │                                                                 │
 │  2. GATHER CONTEXT                                              │
-│     Best Mode: code (codebase-retrieval, read all files)        │
-│     ├── codebase-retrieval: verify signatures                   │
-│     ├── codebase-retrieval: find usage patterns                 │
-│     ├── mcp--context7--query-docs: verify external APIs         │
-│     └── read_file: read target file(s)                          │
+│     ├── retrieve codebase       → commands.retrieve_codebase    │
+│     ├── read_file (batch up to 5)                               │
+│     └── query docs (if external APIs) → commands.query_docs     │
 │                                                                 │
 │  3. EDIT CODE                                                   │
-│     Best Mode: code (can edit .py files)                        │
-│     └── edit_file/write_to_file: make targeted changes          │
+│     └── edit_file / apply_diff / write_to_file                  │
 │                                                                 │
 │  4. FIND IMPACTS                                                │
-│     Best Mode: code (codebase-retrieval for callers/tests)      │
-│     ├── codebase-retrieval: find all callers                    │
-│     ├── codebase-retrieval: find affected tests                 │
-│     ├── search_files: find all references                       │
-│     └── codebase-retrieval: find implementations                │
+│     ├── retrieve codebase       → commands.retrieve_codebase    │
+│     └── search_files for all references                         │
 │                                                                 │
 │  5. UPDATE DOWNSTREAM                                           │
-│     Best Mode: code (edit .py test files)                       │
 │     ├── edit_file: update call sites                            │
 │     ├── edit_file: update tests                                 │
 │     └── edit_file: update imports/types                         │
 │                                                                 │
 │  6. VALIDATE                                                    │
-│     Best Mode: code (run quality gates)                         │
-│     ├── execute_command: ruff check (lint)                      │
-│     └── execute_command: pytest -m tier0 (if tests affected)    │
+│     └── gate quality            → commands.gate_quality         │
 │                                                                 │
 │  7. UPDATE DOCUMENTATION (if needed)                            │
-│     Best Mode: architect (specialized for .md files)            │
-│     ⚠️  Switch from code → architect for this step              │
 │     └── edit_file: update .md files                             │
 │                                                                 │
 │  8. COMPLETE                                                    │
-│     Best Mode: code (or architect if Step 7 was last)           │
 │     └── update_todo_list: mark COMPLETE                         │
 │                                                                 │
-│  9. SAVE PROGRESS (after each subtask)                          │
-│     Best Mode: code (or architect if Step 7 was last)           │
-│     └── export_session: preserve reasoning state                │
+│  9. SAVE PROGRESS                                               │
+│     └── export session          → commands.export_session       │
 │                                                                 │
 │  REPEAT for next subtask...                                     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Mode Switching Strategy
-
-**Minimize mode switches** to reduce cost and latency:
-
-1. **Steps 0-6**: Stay in `code` mode (handles all code work)
-2. **Step 7**: Switch to `architect` mode ONLY if documentation updates are needed
-3. **Steps 8-9**: Stay in current mode (code or architect)
-
-**When to switch:**
-```python
-# Before Step 7 (if documentation updates needed)
-if documentation_updates_needed:
-    switch_mode(
-        mode_slug="architect",
-        reason="Updating documentation files (.md) - architect mode specialized for this"
-    )
-
-# Before next subtask (if returning to code work)
-if next_subtask_involves_code:
-    switch_mode(
-        mode_slug="code",
-        reason="Returning to code implementation work"
-    )
-```
-
-**Mode capabilities** (from `.kilocodemodes`):
-- **code**: Can edit all files, has all tool groups (read, edit, command, mcp, browser) ✅
-- **architect**: Can edit `.md`, `.txt`, `.yaml`, `.yml`, `.toml`, `.json` only
-- **claims-ops**: Can edit all files, specialized for claims pipeline
-- **debug**: Can edit all files, specialized for debugging
-- **pr-review**: Can edit `.md`, `.txt` only, specialized for PR reviews
-
-**Why `code` mode is default:**
-- Has unrestricted file access (no `fileRegex`)
-- Has all tool groups (read, edit, command, mcp, browser)
-- Specialized for Python implementation work
-- Avoids mode thrashing between steps
-
 ### Step Details
 
 #### 0. Pre-Edit Reasoning (Non-Trivial Changes Only)
-**Best Mode**: `code`
 
 **When to use:** Changes that touch >1 file, modify interfaces, or affect tests.
 
-**Required reasoning:**
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--process_thought`
 
-```python
-mcp--sequentialthinking--process_thought(
-    thought="About to modify [component]. Risk: [breaking changes to N callers]. Mitigation: [verify signatures first, update all call sites].",
-    thought_number=1,
-    total_thoughts=2,
-    next_thought_needed=True,
-    stage="Analysis",
-    tags=["execution", "risk-assessment"]
-)
+```
+decompose task: "About to modify [component]. Risk: [breaking N callers]. Mitigation: [verify first]."
+  stage=Analysis, tags=[execution, risk-assessment]
 
-mcp--sequentialthinking--process_thought(
-    thought="Edit strategy: [step-by-step plan]. Success criteria: [tests pass, no lint errors].",
-    thought_number=2,
-    total_thoughts=2,
-    next_thought_needed=False,
-    stage="Conclusion",
-    tags=["execution", "edit-plan"]
-)
+decompose task: "Edit strategy: [step-by-step]. Success criteria: [tests pass, no lint errors]."
+  stage=Conclusion, tags=[execution, edit-plan]
 ```
 
-**Skip this for:** Trivial changes (typo fixes, adding comments, simple variable renames in single file).
+**Skip this for:** Trivial changes (typo fixes, adding comments, single-file renames).
 
-#### 1-9. Execution Steps
+#### 2. Gather Context
 
-Follow the loop above, using Kilo Code's native tools:
-- `mcp--augment-context-engine--codebase-retrieval` for semantic search
-- `read_file` for reading files (batch up to 5)
-- `edit_file` or `apply_diff` for targeted edits
-- `write_to_file` for new files only
-- `search_files` for pattern matching
-- `execute_command` for running tests/linters
-- `update_todo_list` for progress tracking
-- `switch_mode` for changing modes (minimize switches)
+> 📌 `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
+> Resolves to: `mcp--augment___context___engine--codebase___retrieval`
+
+Query for exact signatures, usage patterns, and caller relationships before editing.
+
+For external library APIs:
+
+> 📌 `resolve library` → [`commands.resolve_library`](../commands.toml)
+> 📌 `query docs` → [`commands.query_docs`](../commands.toml)
+
+#### 6. Validate
+
+> 📌 `gate quality` → [`commands.gate_quality`](../commands.toml)
+> Composite: `format_ruff` → `check_ruff` → `check_mypy` → `test_pytest`
+> All run through `bounded_gate.py` with receipt tracking.
+
+Each gate produces a `gate_pass` or `gate_fail` punch. All 4 must pass.
 
 #### 9. Save Progress
 
-**After EACH subtask completion**, save your reasoning state:
+> 📌 `export session` → [`commands.export_session`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--export_session`
 
-```python
-mcp--sequentialthinking--export_session(
-    file_path=".kilocode/thinking/execution-{task-name}-2026-01-23.json"
-)
-```
+File path: `.kilocode/thinking/execution-{task-name}-{YYYY-MM-DD}.json`
 
-**Why:** If execution is interrupted, you can resume with full context of what was completed and why decisions were made.
-
----
-
-## Tool Mapping (Kilo Code)
-
-| Need | Tool | Example |
-|------|------|---------|
-| Semantic search | `mcp--augment-context-engine--codebase-retrieval` | "Exact signature of X in file Y" |
-| Read files | `read_file` | Batch up to 5 files |
-| Pattern search | `search_files` | Rust regex patterns |
-| Edit existing | `edit_file` or `apply_diff` | Targeted replacements |
-| Create new | `write_to_file` | New files only |
-| Run commands | `execute_command` | Tests, linters, builds |
-| Track progress | `update_todo_list` | Mark IN_PROGRESS/COMPLETE |
-| External docs | `mcp--context7--query-docs` | Library API verification |
-| Change mode | `switch_mode` | Switch between code/architect (minimize) |
+If execution is interrupted, resume with `import session` → `summarize thinking`.
 
 ---
 
 ## Verification Phase
 
-Before marking the overall work complete, run final validation:
+Before marking overall work complete:
 
 ### 1. Quality Gates
-**Best Mode**: `code` (can run all commands)
 
-```bash
-.venv/bin/python -m ruff format --check .
-.venv/bin/python -m ruff check .
-.venv/bin/python -m mypy src
-.venv/bin/python -m pytest -q
-```
+> 📌 `gate quality` → [`commands.gate_quality`](../commands.toml)
+> All 4 gates must pass with receipts.
 
 ### 2. Todo List Review
-**Best Mode**: `code` (same as Step 1)
 
-All subtasks marked COMPLETE.
+All subtasks marked COMPLETE via `update_todo_list`.
 
 ### 3. Success Criteria Confirmation
-**Best Mode**: `code` (same as Steps 1-2)
 
 Review the success criteria defined during planning:
 - Each criterion explicitly satisfied
@@ -266,28 +175,36 @@ Review the success criteria defined during planning:
 
 ---
 
+## EXIT GATE: Punch Card Checkpoint
+
+**Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
+
+> 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id}`
+
+> 🚪 `checkpoint punch-card {task_id} execute-task` → [`commands.punch_checkpoint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} execute-task`
+> **receipt_required = true** — this is a hard gate.
+
+**If checkpoint FAILS:** Do NOT call `attempt_completion`. Review which required punches
+are missing, complete the missing steps, re-mint, and re-checkpoint.
+
+**If checkpoint PASSES:** Proceed to `attempt_completion` with the completed work.
+
+---
+
 ## Session Continuity
 
 ### If Resuming Execution Work
-**Best Mode**: `code` (start where you left off)
 
-If you're continuing execution from a previous session:
+> 📌 `import session` → [`commands.import_session`](../commands.toml)
+> 📌 `summarize thinking` → [`commands.summarize_thinking`](../commands.toml)
 
-```python
-# MANDATORY: Load previous session
-mcp--sequentialthinking--import_session(
-    file_path=".kilocode/thinking/execution-{task-name}-2026-01-23.json"
-)
+Then continue with:
 
-# Review what was completed
-mcp--sequentialthinking--generate_summary()
-
-# Continue with next subtask
-mcp--sequentialthinking--process_thought(
-    thought="Resuming execution: [N] of [M] subtasks complete. Next: [subtask description]",
-    stage="Problem Definition",
-    tags=["execution-resume"]
-)
+```
+decompose task: "Resuming execution: [N] of [M] subtasks complete. Next: [description]"
+  stage=Problem Definition, tags=[execution-resume]
 ```
 
 ---
@@ -299,8 +216,18 @@ mcp--sequentialthinking--process_thought(
 - [`/respond-to-pr-review`](./respond-to-pr-review.md) — PR review response workflow
 - [`/fix-ci`](./fix-ci.md) — Quality gate fixes
 
+## Related Skills
+
+- [`beads-local-db-ops`](../skills/beads-local-db-ops/SKILL.md) — Beads CLI operations
+- [`repomap-codebase-retrieval`](../skills/repomap-codebase-retrieval/SKILL.md) — Semantic code search
+- [`sequential-thinking-default`](../skills/sequential-thinking-default/SKILL.md) — Multi-step reasoning
+- [`context7-docs-ops`](../skills/context7-docs-ops/SKILL.md) — Library documentation
+
 ## Philosophy
 
-This workflow enforces the "software fabrication" principle of **verified preparation before execution**. No code changes without proper reasoning. No execution without verified prep session.
+This workflow enforces **verified preparation before execution** and **self-verified
+completion before exit**. No code changes without proper reasoning. No execution without
+verified prep session. No exit without punch card checkpoint PASS.
 
-**Mode optimization**: Use `code` mode for all implementation work (Steps 0-6), switch to `architect` mode ONLY for documentation updates (Step 7), then return to `code` for next subtask. This minimizes mode thrashing and associated costs.
+**Structure discipline:** commands.toml routes all the way down — from instruction to
+invocation to verification.
