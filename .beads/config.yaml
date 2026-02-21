@@ -5,7 +5,6 @@
 
 # Issue prefix for this repository
 issue-prefix: "repomap-core"
-
 # Dolt backend configuration (v0.50+ / required for v0.51+)
 # Server mode: connects to a running dolt sql-server
 # Embedded mode requires CGO-enabled binary
@@ -14,7 +13,9 @@ dolt:
   host: 127.0.0.1
   port: 3307
   user: root
-
 # Git branch for beads sync (legacy; bd sync is a no-op with Dolt)
 # Retained for backwards compatibility with two-clone JSONL interchange
 sync-branch: "beads-sync"
+# Multi-repo settings (repos.additional, external_projects) are in
+# ~/.config/bd/config.yaml — machine-specific paths should not be in git.
+# See docs/research/multi-repo-plant-architecture-2026-02-18.md for setup.
