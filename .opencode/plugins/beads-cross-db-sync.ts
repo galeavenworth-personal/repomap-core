@@ -11,7 +11,7 @@
  *                          then propagates to all peer DBs via Dolt SQL
  *
  * Assumptions:
- *   - Local Dolt SQL server running at 127.0.0.1:3307 (no auth)
+ *   - Local Dolt SQL server (defaults: 127.0.0.1:3307, configurable via DOLT_HOST/DOLT_PORT/DOLT_USER/DOLT_PASSWORD env vars)
  *   - Beads databases follow `beads_<prefix>` naming convention
  *   - Peer prefixes are listed in the `routes` table of the current DB
  *
@@ -122,8 +122,14 @@ export const BeadsCrossDbSyncPlugin: Plugin = async ({ $, directory }) => {
     return {};
   }
 
+  // Dolt connection params from .env (Bun auto-loads .env) with safe defaults.
+  const doltHost = process.env["DOLT_HOST"] ?? "127.0.0.1";
+  const doltPort = process.env["DOLT_PORT"] ?? "3307";
+  const doltUser = process.env["DOLT_USER"] ?? "root";
+  const doltPassword = process.env["DOLT_PASSWORD"] ?? "";
+
   const doltSql = (query: string) =>
-    $`DOLT_CLI_PASSWORD="" timeout 30s dolt --host 127.0.0.1 --port 3307 --user root --no-tls sql --result-format csv -q ${query}`.quiet();
+    $`DOLT_CLI_PASSWORD=${doltPassword} timeout 30s dolt --host ${doltHost} --port ${doltPort} --user ${doltUser} --no-tls sql --result-format csv -q ${query}`.quiet();
 
   const readIssueState = async (
     currentPrefix: string,

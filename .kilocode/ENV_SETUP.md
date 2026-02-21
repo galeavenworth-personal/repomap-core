@@ -1,126 +1,73 @@
 # Environment Variables Setup
 
-This document describes environment variables used by **Kilo Code MCP servers** and optional repomap-core development workflows.
-Default offline quality gates require **no** environment variables; these are only for optional tooling.
+This document describes environment variables used by repomap-core development workflows,
+MCP servers, and OpenCode plugins.
 
-## Required Environment Variables (default local quality gates)
+Default offline quality gates require **no** environment variables.
 
-**None.** The default local quality gates for this repo are designed to run **offline** and without secrets.
+## Quick Start
 
-## Optional Environment Variables (MCP servers / workflows)
-
-### SONARQUBE_TOKEN
-**Purpose:** Authentication for SonarQube MCP server  
-**Used by:** `.kilocode/mcp.json` → `sonarqube` server  
-**How to set:**
 ```bash
-export SONARQUBE_TOKEN="your-token-here"
+cp .env.example .env
+# Edit .env with your values
 ```
 
-**Previous Issue:** Token was hardcoded in `mcp.json` (security risk)  
-**Fixed:** Now uses `${SONARQUBE_TOKEN}` environment variable reference
+The `.env` file is gitignored. The committed `.env.example` shows all available variables
+with safe defaults.
 
-### CONTEXT7_API_KEY
+## How .env is Loaded
 
-**Purpose:** Authentication for Context7 MCP docs lookup  
-**Used by:** `.kilocode/mcp.json` → `context7` server  
-**How to set:**
-```bash
-export CONTEXT7_API_KEY="your-api-key-here"
-```
+| Runtime | Mechanism | Notes |
+|---------|-----------|-------|
+| **Python** | `python-dotenv` (dev dependency) | Call `dotenv.load_dotenv()` at entry points |
+| **Bun / OpenCode plugins** | Built-in `.env` support | Bun reads `.env` automatically |
+| **Shell scripts** | `source .env` or `export $(cat .env \| xargs)` | Manual load before running |
 
-## Experimental / Out-of-scope for repomap-core
+## Variable Reference
 
-The following variables are **not required** for repomap-core quality gates, and should be treated as **experimental** (used only when working on extension packages or networked workflows).
+### Dolt Database Connection
 
-### OPENROUTER_API_KEY (experimental)
+Used by the OpenCode cross-DB sync plugin and Dolt CLI tooling.
+These should match `.beads/config.yaml` if you customize them.
 
-**Purpose:** OpenRouter API access for claims generation/advancement (extension behavior)  
-**Used by:** `repomap claims ...` commands (not part of repomap-core)  
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOLT_HOST` | `127.0.0.1` | Dolt SQL server host |
+| `DOLT_PORT` | `3307` | Dolt SQL server port |
+| `DOLT_USER` | `root` | Dolt SQL server user |
+| `DOLT_PASSWORD` | *(empty)* | Dolt SQL server password |
 
-Packaging note: the `repomap claims ...` command group is provided by an optional extension package (not guaranteed available in this repo).
+### MCP Server Authentication (Optional)
 
-**How to set (only if you explicitly need it):**
-```bash
-export OPENROUTER_API_KEY="your-api-key-here"
-```
+| Variable | Description |
+|----------|-------------|
+| `SONARQUBE_TOKEN` | SonarQube MCP server authentication |
+| `CONTEXT7_API_KEY` | Context7 MCP server (library docs lookup) |
 
-## Setting Up Environment Variables
+### Experimental (Not Required for repomap-core)
 
-### Option 1: Shell Profile (Persistent)
-Add to `~/.bashrc` or `~/.zshrc`:
-```bash
-export SONARQUBE_TOKEN="your-token-here"
-# export CONTEXT7_API_KEY="your-api-key-here"  # optional (Context7 MCP docs)
-# export OPENROUTER_API_KEY="your-api-key-here"  # experimental (claims extension)
-```
+| Variable | Description |
+|----------|-------------|
+| `OPENROUTER_API_KEY` | OpenRouter API for claims extension (not part of core) |
 
-Then reload:
-```bash
-source ~/.bashrc  # or ~/.zshrc
-```
+## Required Environment Variables (Default Local Quality Gates)
 
-### Option 2: Project .env File (Local Development)
-Create `.env` in project root (already gitignored):
-```bash
-SONARQUBE_TOKEN=your-token-here
-# CONTEXT7_API_KEY=your-api-key-here  # optional (Context7 MCP docs)
-# OPENROUTER_API_KEY=your-api-key-here  # experimental (claims extension)
-```
-
-Load before running commands:
-```bash
-source .env
-# or
-export $(cat .env | xargs)
-```
-
-### Option 3: VSCode Settings (Per-Workspace)
-Add to `.vscode/settings.json` (not committed):
-```json
-{
-  "terminal.integrated.env.linux": {
-    "SONARQUBE_TOKEN": "your-token-here",
-    "CONTEXT7_API_KEY": "your-api-key-here",
-    "OPENROUTER_API_KEY": "your-api-key-here" 
-  }
-}
-```
-
-## Verification
-
-Check if environment variables are set:
-```bash
-echo $SONARQUBE_TOKEN
-# echo $CONTEXT7_API_KEY  # optional (Context7 MCP docs)
-# echo $OPENROUTER_API_KEY  # experimental (claims extension)
-```
-
-`SONARQUBE_TOKEN` should output a non-empty value if you are using SonarQube MCP tooling.
-`CONTEXT7_API_KEY` should output a non-empty value if you are using Context7 MCP tooling.
+**None.** The default local quality gates (`ruff`, `mypy`, `pytest`) run offline without secrets.
 
 ## Security Best Practices
 
-1. ✅ **Never commit tokens/keys to git**
-   - `.env` is in `.gitignore`
-   - `mcp.json` uses `${VAR}` references, not literals
+1. ✅ **Never commit `.env` to git** — it's in `.gitignore`
+2. ✅ **Use `.env.example` as the template** — committed, shows structure without secrets
+3. ✅ **`mcp.json` uses `${VAR}` references** — not hardcoded literals
+4. ✅ **Plugins read `process.env` with safe defaults** — graceful degradation
 
-2. ✅ **Use environment variables, not hardcoded values**
-   - Allows different tokens per machine/clone
-   - Supports two-clone "employees" model
+## Verification
 
-3. ✅ **Rotate tokens periodically**
-   - SonarQube tokens can be regenerated in SonarCloud UI
-   - OpenRouter API keys can be rotated in OpenRouter dashboard
+```bash
+# Check if .env exists
+test -f .env && echo ".env present" || echo "Run: cp .env.example .env"
 
-4. ✅ **Restrict token permissions**
-- SonarQube: Use project-scoped tokens when possible
-- OpenRouter: Monitor usage and set spending limits
-
-## Two-Clone "Employees" Model
-
-Each clone (Windsurf employee, Kilo employee) can have:
-- Same tokens (shared account)
-- Different tokens (separate accounts for tracking)
-
-Environment variables make this flexible without modifying `mcp.json`.
+# Check specific variables
+echo "DOLT_HOST=${DOLT_HOST:-not set}"
+echo "SONARQUBE_TOKEN=${SONARQUBE_TOKEN:+set (hidden)}"
+```

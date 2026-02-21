@@ -5,7 +5,7 @@
 **Date:** 2026-02-21
 **Status:** Resolved
 
-## Deduplicated Issues (12 unique → 9 accepted, 3 rejected)
+## Deduplicated Issues (12 unique → 10 accepted, 2 rejected)
 
 ### `.opencode/plugins/beads-cross-db-sync.ts`
 
@@ -20,7 +20,7 @@
 | 7 | `doltSql` has no timeout — could block plugin indefinitely | Copilot #8 | Medium | **Accept** | Add 30s `timeout` wrapper to dolt CLI invocation |
 | 8 | Missing file-level JSDoc documentation | Copilot #11 | Low | **Accept** | Add comprehensive header comment matching `beads-sync.ts` convention |
 | 9 | `pendingBdStatusOps` Map race conditions with concurrent tool executions | Copilot #2 | Low | **Reject** | OpenCode hooks are sequential per-agent; callID-keyed Map prevents cross-operation collision. Theoretical only. |
-| 10 | Hardcoded Dolt credentials/connection — should use env vars | Copilot #9 | Low | **Reject** | Explicitly a local-only dev tool with known Dolt config; env var parameterization is over-engineered. Document assumptions in header comment instead. |
+| 10 | Hardcoded Dolt credentials/connection — should use env vars | Copilot #9 | Low | **Accept** | Add `.env.example` (committed) + `.env` (gitignored) with DOLT_HOST/PORT/USER/PASSWORD; use `process.env` with safe defaults in TS plugin; add `python-dotenv` to dev deps for Python-side `.env` loading |
 | 11 | Serial peer operations could be parallelized | Copilot #10 | Low | **Reject** | ~2-3 peer DBs in practice; serialization is simpler and avoids Dolt resource contention. Premature optimization. |
 | 12 | Multi-statement SQL (USE + query) should be split | Copilot #13 | Low | **Reject** | Dolt CLI natively supports multi-statement with `-q`; error output identifies failing statement. Splitting adds complexity without benefit. |
 
