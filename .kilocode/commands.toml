@@ -95,7 +95,7 @@ noun = "beads"
 skill = "beads-local-db-ops"
 tool = ".kilocode/tools/bd export -o .beads/issues.jsonl"
 receipt_required = false
-notes = "Export Dolt state to JSONL for cross-clone git interchange"
+notes = "Export Dolt state to JSONL for cross-clone git interchange. .beads/issues.jsonl is tracked in git (un-ignored)."
 
 [commands.import_beads]
 verb = "import"

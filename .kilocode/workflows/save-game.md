@@ -22,7 +22,7 @@ All commands below are routed through [`commands.toml`](../commands.toml):
 | `check_ruff` | check | ruff | Quality gate: linting |
 | `check_mypy` | check | mypy | Quality gate: type checking |
 | `test_pytest` | test | pytest | Quality gate: tests |
-| `export_beads` | export | beads | Export state for cross-clone interchange |
+| `gate_quality` | gate | quality | Composite: all quality gates (format + lint + type + test) |
 | `punch_checkpoint` | checkpoint | punch-card | Exit gate |
 
 ## Workflow Steps

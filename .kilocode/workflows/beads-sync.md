@@ -12,15 +12,15 @@ JSONL interchange (`bd export` / `bd import`) handles cross-clone state transfer
 
 All commands below are routed through [`commands.toml`](../commands.toml):
 
-| Route | Verb | Noun | Tool |
-|-------|------|------|------|
-| `diagnose_issues` | diagnose | issues | `bd_doctor_safe.sh` |
-| `list_ready` | list | ready | `bd ready` |
-| `claim_issue` | claim | issue | `bd update {id} --status in_progress` |
-| `show_issue` | show | issue | `bd show {id}` |
-| `close_issue` | close | issue | `bd close {id}` |
-| `export_beads` | export | beads | `bd export -o .beads/issues.jsonl` |
-| `import_beads` | import | beads | `bd import --from-jsonl .beads/issues.jsonl` |
+| Route | Verb | Noun | Purpose |
+|-------|------|------|---------|
+| `diagnose_issues` | diagnose | issues | Check Dolt server + Beads health |
+| `list_ready` | list | ready | Find available issues |
+| `claim_issue` | claim | issue | Mark issue as in-progress |
+| `show_issue` | show | issue | View issue details |
+| `close_issue` | close | issue | Mark issue as completed |
+| `export_beads` | export | beads | Export Dolt state to JSONL for git interchange |
+| `import_beads` | import | beads | Import JSONL into Dolt after cross-clone sync |
 
 ## Session Start
 
@@ -29,7 +29,7 @@ All commands below are routed through [`commands.toml`](../commands.toml):
 <!-- route: diagnose_issues -->
 ```bash
 nc -z 127.0.0.1 3307 && echo "Server OK" || echo "Start Dolt server first"
-.kilocode/tools/bd doctor
+.kilocode/tools/bd_doctor_safe.sh
 ```
 
 ### 2. Import JSONL (if cross-clone sync needed)
@@ -71,7 +71,13 @@ Only needed after `git pull` brings new JSONL from the other clone:
 .kilocode/tools/bd export -o .beads/issues.jsonl
 ```
 
-Then commit and push the JSONL file via git so the other clone can import it.
+Then commit and push the JSONL file via git so the other clone can import it:
+
+```bash
+git add .beads/issues.jsonl
+git commit -m "beads: export JSONL for cross-clone sync"
+git push
+```
 
 ## Operational Contract (Two-Clone Model)
 

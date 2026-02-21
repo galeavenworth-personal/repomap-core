@@ -148,6 +148,7 @@ git status --short
 .kilocode/tools/bd ready
 
 # Quality gates  <!-- route: format_ruff, check_ruff, check_mypy -->
+.venv/bin/python -m ruff format --check . --quiet
 .venv/bin/python -m ruff check . --quiet
 .venv/bin/python -m mypy src --quiet
 ```
