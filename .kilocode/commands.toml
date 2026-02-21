@@ -22,7 +22,7 @@
 version = "1.0.0"
 inventory_date = "2026-02-20"
 source_bead = "repomap-core-4f0.6"
-total_bindings = 44  # 40 atomic + 4 composite
+total_bindings = 47  # 43 atomic + 4 composite
 
 # ─── Quality Gates (receipt_required = true via bounded_gate.py) ────────────
 
@@ -344,6 +344,32 @@ noun = "timeline"
 skill = "cli"
 tool = "python3 .kilocode/tools/kilo_session_monitor.py timeline --last 20"
 receipt_required = false
+
+# ─── Punch Card Engine ──────────────────────────────────────────────────────
+
+[commands.punch_mint]
+verb = "mint"
+noun = "punches"
+skill = "cli"
+tool = "python3 .kilocode/tools/punch_engine.py mint {task_id} --bead-id {bead_id}"
+receipt_required = false
+notes = "Extract events from task ui_messages.json and gate_runs.jsonl into punch_cards.punches (optional --bead-id for gate_runs matching)"
+
+[commands.punch_evaluate]
+verb = "evaluate"
+noun = "punch-card"
+skill = "cli"
+tool = "python3 .kilocode/tools/punch_engine.py evaluate {task_id} {card_id}"
+receipt_required = false
+notes = "Check task punches against punch card requirements"
+
+[commands.punch_checkpoint]
+verb = "checkpoint"
+noun = "punch-card"
+skill = "cli"
+tool = "python3 .kilocode/tools/punch_engine.py checkpoint {task_id} {card_id}"
+receipt_required = true
+notes = "Evaluate + create checkpoint; DOLT_COMMIT on pass"
 
 # ─── PR Review ─────────────────────────────────────────────────────────────
 

@@ -324,15 +324,17 @@ customModes:
 
       ## Quality Gate Requirements
 
-      Gate runs MUST use `.venv/bin/python .kilocode/tools/bounded_gate.py`.
+      > 📌 `gate quality` → `commands.gate_quality` (composite: format_ruff → check_ruff → check_mypy → test_pytest)
+      > All gates run through `bounded_gate.py` with receipt tracking.
       Raw direct gate commands are disallowed in orchestrated flow.
       Every gate run must emit audit proof to `.kilocode/gate_runs.jsonl`.
-      Preferred landing path is `.kilocode/tools/beads_land_plane.sh`.
+
+      > 📌 `land plane {id}` → `commands.land_plane` (composite: gate_quality → close_issue → sync_push)
 
       ## Line Fault Routing
 
       On timeout, stall, or env_missing:
-      - spawn fitter subtask with a Line Fault Contract payload
+      > 📌 `dispatch fitter` → `commands.dispatch_fitter` (target_mode=fitter, contract=line_fault_contract.md)
       - fitter returns a Restoration Contract with mitigation + retry plan
       - orchestrator retries gate after restoration evidence is received
 
@@ -375,22 +377,31 @@ customModes:
       specialist subtasks (discover/explore/prepare/execute/gate/land) with
       deterministic contracts, bounded retries, and explicit line-fault routing.
     customInstructions: |
-      ## Beads Integration Protocol
+      ## Beads Integration Protocol (commands.toml routes)
 
-      Session start: .kilocode/tools/bd sync --no-push
-      Claim work:    .kilocode/tools/bd update <id> --status in_progress
-      Show task:     .kilocode/tools/bd show <id>
-      Close work:    .kilocode/tools/bd close <id>
-      Session end:   .kilocode/tools/bd sync
-      Landing:       .kilocode/tools/beads_land_plane.sh <id>
+      Session start: `sync remote`    → commands.sync_remote
+      Claim work:    `claim issue {id}` → commands.claim_issue
+      Show task:     `show issue {id}`  → commands.show_issue
+      Close work:    `close issue {id}` → commands.close_issue
+      Session end:   `sync push`       → commands.sync_push
+      Landing:       `land plane {id}`  → commands.land_plane
 
-      ## Sequential Thinking Session Management
+      ## Sequential Thinking Session Management (commands.toml routes)
 
-      - Prep exports to `.kilocode/thinking/task-<id>-prep-<YYYY-MM-DD>.json` as plain UTF-8 JSON (uncompressed, human-readable)
-      - Execution subtasks import prep session before implementation
-      - Each execution subtask exports its own session artifact as plain UTF-8 JSON (uncompressed, human-readable)
+      - Prep:    `decompose task`    → commands.decompose_task
+      - Summary: `summarize thinking` → commands.summarize_thinking
+      - Export:  `export session`     → commands.export_session
+      - Import:  `import session`     → commands.import_session
+      - Prep exports to `.kilocode/thinking/task-<id>-prep-<YYYY-MM-DD>.json` as plain UTF-8 JSON
       - `.kilocode/thinking/` artifacts are internal-only and MUST NOT be committed to git
-      - Required flow: `process_thought` → `generate_summary` → `export_session`
+
+      ## Punch Card Exit Gate
+
+      Punch card: `process-orchestrator` (5 rows, 4 required)
+      Before calling `attempt_completion`, the orchestrator MUST:
+      > 📌 `mint punches {task_id}`  → commands.punch_mint
+      > 🚪 `checkpoint punch-card {task_id} process-orchestrator` → commands.punch_checkpoint
+      If checkpoint FAILS, do NOT exit. Complete missing steps, re-mint, re-checkpoint.
 
       ## Runtime Model Reporting Template
 
