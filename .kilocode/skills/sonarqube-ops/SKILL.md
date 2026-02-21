@@ -21,6 +21,10 @@ Use this skill when you need to:
 4. Inspect rule details (if needed): `mcp--sonarqube--show_rule`
 5. Inspect raw source (if needed): `mcp--sonarqube--get_raw_source`
 
+## Prerequisites
+
+- The SonarQube MCP server is configured globally (not in `.kilocode/mcp.json`). Ensure it is available in your environment before using these tools.
+
 ## Critical invariants
 
 - Don't guess project keys; look them up via `mcp--sonarqube--search_my_sonarqube_projects` first

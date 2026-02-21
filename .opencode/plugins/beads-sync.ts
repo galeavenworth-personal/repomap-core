@@ -14,7 +14,7 @@
  * Gap: Manual `git commit` in a terminal bypasses this plugin entirely.
  *       Mitigation: `bd sync` in the landing-the-plane workflow (AGENTS.md).
  *
- * @see docs/research/beads-hooks-to-opencode-plugins-2026-02-20.md
+ * @see docs/research/beads-hooks-to-opencode-plugins-2026-02-20.md (local-only; gitignored)
  */
 
 import type { Plugin } from "@kilocode/plugin";
@@ -44,7 +44,7 @@ export const BeadsSyncPlugin: Plugin = async ({ $, directory }) => {
   if (!bdAvailable) {
     console.warn(
       `[beads-sync] bd wrapper not found at ${bd} — plugin disabled. ` +
-        `Run .kilocode/tools/beads_install.sh to set up.`
+        `See AGENTS.md for Beads setup instructions.`
     );
     return {};
   }
@@ -53,9 +53,9 @@ export const BeadsSyncPlugin: Plugin = async ({ $, directory }) => {
     // ─── Pre-commit: export Dolt → JSONL, stage it ─────────────────────
     // ─── Pre-push: validate JSONL is current ───────────────────────────
     // ─── Track git pull/merge/rebase for post-merge import ─────────────
-    "tool.execute.before": async (input, output) => {
+    "tool.execute.before": async (input) => {
       if (input.tool !== "bash") return;
-      const cmd = output.args.command as string;
+      const cmd = ((input as Record<string, unknown>).args as Record<string, unknown> | undefined)?.command as string ?? "";
 
       // Pre-commit: export + stage
       if (/git\s+commit/.test(cmd)) {

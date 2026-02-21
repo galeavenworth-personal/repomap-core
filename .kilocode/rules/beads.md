@@ -15,7 +15,7 @@ The plugin at `.opencode/plugins/beads-sync.ts` automatically handles:
 - **Pre-commit:** `bd export` + stage JSONL before agent `git commit`
 - **Post-merge:** `bd import` after agent `git pull`/`merge`/`rebase`
 - **Pre-push:** Validate JSONL is current before agent `git push`
-- **Session boundary:** `bd export` on `session.idle` and agent stop
+- **Session boundary:** `bd export` on `session.idle`
 
 This covers ~90% of git operations in the agentic workflow.
 
