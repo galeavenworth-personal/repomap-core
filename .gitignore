@@ -60,3 +60,4 @@ docs/research/
 # Browser/tooling artifacts
 screenshots/
 .beads/issues.jsonl.backup-pre-dolt-20260220
+docs/infra/mtls-lockdown.md
