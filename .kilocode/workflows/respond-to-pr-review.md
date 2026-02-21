@@ -1,19 +1,26 @@
 ---
 description: Workflow for responding to PR review feedback: fetch comments, plan fixes, implement changes, run quality gates, and acknowledge every review thread.
+auto_execution_mode: 3
+punch_card: respond-to-pr-review
 ---
 
 # Respond to PR Review Workflow
 
-Use this workflow when you are **responding to PR review feedback** (not performing the review). It uses `gh` CLI to fetch review comments, guides you through context + planning, ensures changes meet quality standards, and requires that **every comment is acknowledged**.
+Use this workflow when you are **responding to PR review feedback** (not performing the
+review). It uses `gh` CLI to fetch review comments, guides you through context + planning,
+ensures changes meet quality standards, and requires that **every comment is acknowledged**.
 
-> **Former name:** `code-review` / `code-review.md` (deprecated). This workflow’s purpose is to *respond to* reviews and address comments.
+> **Former name:** `code-review` / `code-review.md` (deprecated). This workflow's purpose
+> is to *respond to* reviews and address comments.
+
+**Punch Card:** `respond-to-pr-review` (7 rows, 6 required)
+**Commands Reference:** [`.kilocode/commands.toml`](../commands.toml)
 
 ## Core Principles
 
-1. **All quality gates must pass**: `ruff format`, `ruff check`, `mypy`, `pytest`
-2. **No workarounds**: prefer clean, idiomatic fixes over ignores
-3. **Refactoring patterns are always on the table**: see `REFACTORING_PLAYBOOK.md`
-4. **No silent fixes**: every review comment must be acknowledged (even if declined/deferred)
+1. **All quality gates must pass** — via `gate quality` composite
+2. **No workarounds** — prefer clean, idiomatic fixes over ignores
+3. **No silent fixes** — every review comment must be acknowledged (even if declined/deferred)
 
 ## Prerequisites
 
@@ -27,12 +34,12 @@ Use this workflow when you are **responding to PR review feedback** (not perform
 
 ### Step 0.1: Identify Repo + PR
 
+> 📌 `fetch pr` → [`commands.fetch_pr`](../commands.toml)
+> Resolves to: `gh pr view --json number,title,body,reviewDecision,reviews,comments`
+
 ```bash
 # Repo identity (owner/repo)
 gh repo view --json nameWithOwner
-
-# PR overview
-gh pr view <PR_NUMBER> --json number,title,state,reviewDecision,headRefName,baseRefName
 ```
 
 Record:
@@ -48,12 +55,16 @@ gh pr view <PR_NUMBER> --comments
 
 ### Step 0.3: Fetch Line-Specific Review Comments (with IDs)
 
+> 📌 `list pr-comments` → [`commands.list_pr_comments`](../commands.toml)
+> Resolves to: `gh pr view --json reviews,comments`
+
+For detailed per-comment data:
 ```bash
 gh api repos/<OWNER>/<REPO>/pulls/<PR_NUMBER>/comments \
   --jq '.[] | {id, path, line, side, user: .user.login, body, created_at, updated_at}'
 ```
 
-### Step 0.4 (MANDATORY): Build a “Comment Ledger”
+### Step 0.4 (MANDATORY): Build a "Comment Ledger"
 
 Create a ledger that contains **every** piece of reviewer feedback you intend to respond to.
 
@@ -84,7 +95,10 @@ For each **blocking** / **suggestion** review comment:
 
 ### Step 1.1: Semantic Understanding
 
-Use semantic search to answer:
+> 📌 `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
+> Resolves to: `mcp--augment___context___engine--codebase___retrieval`
+
+Query for:
 - What does the code at the comment location do?
 - What are its callers and constraints?
 - Why is it implemented this way?
@@ -92,23 +106,28 @@ Use semantic search to answer:
 ### Step 1.2: Documentation Lookup (if needed)
 
 If the comment touches an external library or best practice:
-- Resolve library ID
-- Query documentation for the specific topic
+
+> 📌 `resolve library` → [`commands.resolve_library`](../commands.toml)
+> 📌 `query docs` → [`commands.query_docs`](../commands.toml)
 
 ### Step 1.3: Blast Radius
 
 Find all references and call sites before making changes:
 
 ```bash
-# If you have ripgrep
-rg "<symbol>" -n
+# Use search_files for comprehensive reference search
 ```
+
+> 📌 `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
 
 ---
 
 ## Phase 2: Plan Responses (Ledger → Action)
 
 ### Step 2.1: Use Sequential Thinking for Non-Trivial Comments
+
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--process_thought`
 
 Use sequential thinking when:
 - multiple valid approaches exist
@@ -140,9 +159,9 @@ Cluster rows that:
 ## Phase 3: Execute Changes (Cluster-by-Cluster)
 
 For each cluster:
-1. implement changes
-2. run targeted tests
-3. update ledger rows to include commit SHA and mark `status=ready_to_ack`
+1. Implement changes
+2. Run targeted tests
+3. Update ledger rows to include commit SHA and mark `status=ready_to_ack`
 
 ---
 
@@ -150,16 +169,17 @@ For each cluster:
 
 **CRITICAL:** Do not push until these pass.
 
-```bash
-.venv/bin/python -m ruff format --check .
-.venv/bin/python -m ruff check .
-.venv/bin/python -m mypy src
-.venv/bin/python -m pytest -q
-```
+> 📌 `gate quality` → [`commands.gate_quality`](../commands.toml)
+> Composite: `format_ruff` → `check_ruff` → `check_mypy` → `test_pytest`
+> All run through `bounded_gate.py` with receipt tracking.
 
 Optional (if PR is scanned in SonarQube):
-- Query SonarQube PR issues: `mcp--sonarqube--search_sonar_issues_in_projects` with `pullRequestId=<PR_NUMBER>`
-- Query quality gate status: `mcp--sonarqube--get_project_quality_gate_status` with `pullRequest=<PR_NUMBER>`
+
+> 📌 `search issues` → [`commands.search_issues`](../commands.toml)
+> Resolves to: `mcp--sonarqube--search_sonar_issues_in_projects` with `pullRequestId=<PR_NUMBER>`
+
+> 📌 `inspect quality-gate` → [`commands.inspect_quality_gate`](../commands.toml)
+> Resolves to: `mcp--sonarqube--get_project_quality_gate_status` with `pullRequest=<PR_NUMBER>`
 
 ---
 
@@ -167,7 +187,7 @@ Optional (if PR is scanned in SonarQube):
 
 ### Step 5.1: Reply to Each Line-Specific Review Comment
 
-For each ledger row where `type=review`, post the row’s `reply_body` as a reply:
+For each ledger row where `type=review`, post the row's `reply_body` as a reply:
 
 ```bash
 # Reply to a review comment thread
@@ -182,7 +202,9 @@ Guidance for `reply_body`:
 
 ### Step 5.2: Acknowledge Conversation-Level Comments
 
-Conversation-level PR comments are not threaded. Use one or more PR comments that reference the original feedback explicitly (quote or paraphrase) and map it to your ledger dispositions.
+Conversation-level PR comments are not threaded. Use one or more PR comments that
+reference the original feedback explicitly (quote or paraphrase) and map it to your
+ledger dispositions.
 
 ```bash
 # Post a PR-level acknowledgement (can cover multiple ledger rows)
@@ -205,9 +227,49 @@ gh pr edit <PR_NUMBER> --add-reviewer <reviewer>
 
 ---
 
+## EXIT GATE: Punch Card Checkpoint
+
+**Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
+
+> 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id}`
+
+> 🚪 `checkpoint punch-card {task_id} respond-to-pr-review` → [`commands.punch_checkpoint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} respond-to-pr-review`
+> **receipt_required = true** — this is a hard gate.
+
+**If checkpoint FAILS:** Do NOT call `attempt_completion`. Review which required punches
+are missing, complete the missing steps, re-mint, and re-checkpoint.
+
+**If checkpoint PASSES:** Proceed to `attempt_completion` with the response summary.
+
+---
+
 ## Anti-Patterns
 
 - Implementing without understanding context
 - Silent fixes without acknowledging comments
 - Adding `# noqa` / `# type: ignore` instead of clean fixes
 - Scope creep: create Beads issues for discovered work
+
+---
+
+## Related Workflows
+
+- [`/start-task`](./start-task.md) — Task preparation phase
+- [`/execute-task`](./execute-task.md) — Task execution phase
+- [`/fix-ci`](./fix-ci.md) — Quality gate fixes
+
+## Related Skills
+
+- [`github-cli-code-review`](../skills/github-cli-code-review/SKILL.md) — PR comment fetching
+- [`repomap-codebase-retrieval`](../skills/repomap-codebase-retrieval/SKILL.md) — Semantic code search
+- [`sequential-thinking-default`](../skills/sequential-thinking-default/SKILL.md) — Multi-step reasoning
+- [`context7-docs-ops`](../skills/context7-docs-ops/SKILL.md) — Library documentation
+- [`sonarqube-ops`](../skills/sonarqube-ops/SKILL.md) — Code quality metrics
+
+## Philosophy
+
+This workflow enforces **every comment acknowledged** before exit, with quality gates
+routed through `commands.toml` composites. Structure discipline: from review fetch to
+ledger management to quality verification — every step has a commands.toml route.

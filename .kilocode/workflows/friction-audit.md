@@ -1,6 +1,7 @@
 ---
 description: Lightweight monolithic workflow to audit repomap ergonomics and cognitive friction from an agent-as-user perspective.
 auto_execution_mode: 2
+punch_card: friction-audit
 ---
 
 # Friction Audit Workflow
@@ -10,6 +11,9 @@ auto_execution_mode: 2
 **Trigger:** User invokes `/friction-audit <focus-area>`
 
 **Philosophy:** One agent, one pass. Capture friction points quickly with ranked impact.
+
+**Punch Card:** `friction-audit` (5 rows, 4 required)
+**Commands Reference:** [`.kilocode/commands.toml`](../commands.toml)
 
 ---
 
@@ -30,7 +34,7 @@ auto_execution_mode: 2
 ## Prerequisites
 
 - product-skeptic mode available
-- Focus area defined (e.g., “CLI entry point”, “artifact queryability”)
+- Focus area defined (e.g., "CLI entry point", "artifact queryability")
 
 ---
 
@@ -63,54 +67,37 @@ Report `runtime_model_reported` and `runtime_mode_reported` from `environment_de
 **Audit Questions:**
 1. Where does the tool require unnecessary state or ceremony?
 2. What steps feel heavy or ambiguous?
-3. What slows an agent’s reasoning loop?
+3. What slows an agent's reasoning loop?
 4. Which artifacts are hard to query or interpret?
 
 **MANDATORY: Sequential Thinking Protocol**
 
-```python
-mcp--sequentialthinking--process_thought(
-    thought="Friction branch 1: [ceremony/state burden]",
-    thought_number=1,
-    total_thoughts=5,
-    next_thought_needed=True,
-    stage="Problem Definition",
-    tags=["friction-audit"]
-)
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--process_thought`
 
-mcp--sequentialthinking--process_thought(
-    thought="Friction branch 2: [interpretation burden]",
-    thought_number=2,
-    total_thoughts=5,
-    next_thought_needed=True,
-    stage="Problem Definition",
-    tags=["friction-audit"]
-)
-
-mcp--sequentialthinking--process_thought(
-    thought="Analysis: ranked friction points with evidence",
-    thought_number=3,
-    total_thoughts=5,
-    next_thought_needed=True,
-    stage="Analysis",
-    tags=["friction-audit"]
-)
-
-mcp--sequentialthinking--generate_summary()
-
-mcp--sequentialthinking--process_thought(
-    thought="Conclusion: minimal fixes + expected impact",
-    thought_number=4,
-    total_thoughts=5,
-    next_thought_needed=True,
-    stage="Conclusion",
-    tags=["friction-audit"]
-)
-
-mcp--sequentialthinking--export_session(
-    file_path=".kilocode/thinking/friction-audit-<YYYY-MM-DD>.json"
-)
 ```
+decompose task: "Friction branch 1: [ceremony/state burden]"
+  stage=Problem Definition, tags=[friction-audit]
+
+decompose task: "Friction branch 2: [interpretation burden]"
+  stage=Problem Definition, tags=[friction-audit]
+
+decompose task: "Analysis: ranked friction points with evidence"
+  stage=Analysis, tags=[friction-audit]
+```
+
+> 📌 `summarize thinking` → [`commands.summarize_thinking`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--generate_summary`
+
+```
+decompose task: "Conclusion: minimal fixes + expected impact"
+  stage=Conclusion, tags=[friction-audit]
+```
+
+> 📌 `export session` → [`commands.export_session`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--export_session`
+
+File path: `.kilocode/thinking/friction-audit-<YYYY-MM-DD>.json`
 
 ### Step 4: Present Friction Audit Report + STOP
 
@@ -142,17 +129,44 @@ update_todo_list(
 )
 ```
 
-**Use `attempt_completion` to present the report and wait for user approval.**
+---
+
+## EXIT GATE: Punch Card Checkpoint
+
+**Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
+
+> 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id}`
+
+> 🚪 `checkpoint punch-card {task_id} friction-audit` → [`commands.punch_checkpoint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} friction-audit`
+> **receipt_required = true** — this is a hard gate.
+
+**If checkpoint FAILS:** Do NOT call `attempt_completion`. Review which required punches
+are missing, complete the missing steps, re-mint, and re-checkpoint.
+
+**If checkpoint PASSES:** Proceed to `attempt_completion` with the audit report.
 
 ---
+
+## Related Workflows
+
+- [`/start-task`](./start-task.md) — Task preparation phase
+- [`/execute-task`](./execute-task.md) — Task execution phase
 
 ## Related Modes
 
 - **audit-orchestrator** — Full adversarial pressure test (multi-phase orchestrated)
 - **process-orchestrator** — Task preparation and execution (multi-phase orchestrated)
+- **product-skeptic** — The specialist mode that executes this audit
 
----
+## Related Skills
+
+- [`sequential-thinking-default`](../skills/sequential-thinking-default/SKILL.md) — Multi-step reasoning
+- [`repomap-codebase-retrieval`](../skills/repomap-codebase-retrieval/SKILL.md) — Semantic code search
 
 ## Philosophy
 
-Friction audits are the fastest way to reduce cognitive entropy. Keep this workflow light, frequent, and brutally honest.
+Friction audits are the fastest way to reduce cognitive entropy. Every reasoning step
+routes through `commands.toml` — from sequential thinking to session export. Keep this
+workflow light, frequent, and brutally honest. Structure discipline all the way down.
