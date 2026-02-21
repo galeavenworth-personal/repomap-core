@@ -2,9 +2,9 @@
 # Routing Matrix — commands.toml
 # =============================================================================
 #
-# Bead:    repomap-core-4f0.7
-# Source:  Grounded routing matrix inventory (repomap-core-4f0.6)
-# Updated: 2026-02-20
+# Bead:    repomap-core-4r3
+# Source:  Workflow discipline retrofit (repomap-core-4r3)
+# Updated: 2026-02-21
 #
 # Structure: verb + noun → skill binding + tool invocation
 # All paths verified against .kilocode/ contents on this branch.
@@ -20,9 +20,9 @@
 
 [meta]
 version = "1.0.0"
-inventory_date = "2026-02-20"
-source_bead = "repomap-core-4f0.6"
-total_bindings = 47  # 43 atomic + 4 composite
+inventory_date = "2026-02-21"
+source_bead = "repomap-core-4r3"
+total_bindings = 49  # 45 atomic + 4 composite
 
 # ─── Quality Gates (receipt_required = true via bounded_gate.py) ────────────
 
@@ -77,6 +77,8 @@ noun = "remote"
 skill = "beads-local-db-ops"
 tool = ".kilocode/tools/bd sync --no-push"
 receipt_required = false
+deprecated = true
+notes = "No-op with Dolt backend. Use export_beads / import_beads for JSONL interchange."
 
 [commands.sync_push]
 verb = "sync"
@@ -84,6 +86,24 @@ noun = "push"
 skill = "beads-local-db-ops"
 tool = ".kilocode/tools/bd sync"
 receipt_required = false
+deprecated = true
+notes = "No-op with Dolt backend. Use export_beads / import_beads for JSONL interchange."
+
+[commands.export_beads]
+verb = "export"
+noun = "beads"
+skill = "beads-local-db-ops"
+tool = ".kilocode/tools/bd export -o .beads/issues.jsonl"
+receipt_required = false
+notes = "Export Dolt state to JSONL for cross-clone git interchange"
+
+[commands.import_beads]
+verb = "import"
+noun = "beads"
+skill = "beads-local-db-ops"
+tool = ".kilocode/tools/bd import --from-jsonl .beads/issues.jsonl"
+receipt_required = false
+notes = "Import JSONL into Dolt after cross-clone git pull"
 
 [commands.claim_issue]
 verb = "claim"
@@ -393,7 +413,7 @@ receipt_required = false
 verb = "land"
 noun = "plane"
 skill = "beads-local-db-ops"
-composite = ["gate_quality", "close_issue", "sync_push"]
+composite = ["gate_quality", "close_issue", "export_beads"]
 tool = ".kilocode/tools/beads_land_plane.sh --bead-id {id}"
 receipt_required = true
 notes = "beads_land_plane.sh requires --bead-id; performs quality gates + bead closure"
