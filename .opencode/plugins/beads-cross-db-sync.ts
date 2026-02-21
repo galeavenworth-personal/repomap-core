@@ -1,3 +1,28 @@
+/**
+ * Beads cross-DB status sync plugin for Kilo CLI.
+ *
+ * Propagates issue status changes (close, update) across Beads databases
+ * so that multi-clone setups (e.g. Windsurf + Kilo) stay in sync without
+ * requiring a full `bd sync` round-trip through the beads-sync branch.
+ *
+ * Hooks:
+ *   tool.execute.before — captures `bd close|update <id>` invocations
+ *   tool.execute.after  — reads authoritative state from current DB,
+ *                          then propagates to all peer DBs via Dolt SQL
+ *
+ * Assumptions:
+ *   - Local Dolt SQL server running at 127.0.0.1:3307 (no auth)
+ *   - Beads databases follow `beads_<prefix>` naming convention
+ *   - Peer prefixes are listed in the `routes` table of the current DB
+ *
+ * Relationship to beads-sync.ts:
+ *   beads-sync.ts handles JSONL ↔ Dolt export/import around git operations.
+ *   This plugin handles cross-DB propagation of issue state changes.
+ *
+ * Limitations:
+ *   - Hooks execute sequentially; propagation adds latency per peer DB
+ *   - Local-only: does not push to remote or trigger beads-sync branch updates
+ */
 import type { Plugin } from "@kilocode/plugin";
 
 const BD_WRAPPER = ".kilocode/tools/bd";
@@ -11,22 +36,11 @@ type IssueState = {
   updatedAt: string;
 };
 
-const parseTableRows = (stdout: string): string[][] => {
-  const lines = stdout
+const parseCsvRows = (stdout: string): string[][] => {
+  return stdout
     .split("\n")
-    .map((line) => line.trimEnd())
-    .filter((line) => line.trim().length > 0);
-
-  const tableLines = lines.filter(
-    (line) => line.startsWith("|") && line.endsWith("|")
-  );
-
-  return tableLines.map((line) =>
-    line
-      .slice(1, -1)
-      .split("|")
-      .map((cell) => cell.trim())
-  );
+    .filter((line) => line.trim().length > 0)
+    .map((line) => line.split(","));
 };
 
 const outputToString = (result: unknown): string => {
@@ -78,9 +92,11 @@ const normalizeCell = (value: string | undefined): string | null => {
   return trimmed;
 };
 
+const isValidPrefix = (s: string): boolean => /^[A-Za-z][A-Za-z0-9_-]*$/.test(s);
+
 const extractBdStatusIssueId = (command: string): string | null => {
   const match = command.match(
-    /(?:^|[\s;&|])(?:\S*\/)?bd\s+(?:close|update)\s+([A-Za-z0-9][A-Za-z0-9-]*)\b/
+    /(?:^|[\s;&|])(?:\S*\/)?bd\s+(?:close|update)\s+([A-Za-z][A-Za-z0-9-]*)\b/
   );
   return match?.[1] ?? null;
 };
@@ -107,7 +123,7 @@ export const BeadsCrossDbSyncPlugin: Plugin = async ({ $, directory }) => {
   }
 
   const doltSql = (query: string) =>
-    $`DOLT_CLI_PASSWORD="" dolt --host 127.0.0.1 --port 3307 --user root --no-tls sql -q ${query}`.quiet();
+    $`DOLT_CLI_PASSWORD="" timeout 30s dolt --host 127.0.0.1 --port 3307 --user root --no-tls sql --result-format csv -q ${query}`.quiet();
 
   const readIssueState = async (
     currentPrefix: string,
@@ -120,10 +136,11 @@ export const BeadsCrossDbSyncPlugin: Plugin = async ({ $, directory }) => {
       `WHERE id = ${sqlString(issueId)};`;
 
     const result = await doltSql(query);
-    const rows = parseTableRows(outputToString(result));
+    const rows = parseCsvRows(outputToString(result));
     if (rows.length < 2) return null;
 
     const firstDataRow = rows[1];
+    if (firstDataRow.length < 4) return null;
     const status = normalizeCell(firstDataRow[0]);
     const updatedAt = normalizeCell(firstDataRow[3]);
 
@@ -144,13 +161,13 @@ export const BeadsCrossDbSyncPlugin: Plugin = async ({ $, directory }) => {
     const query = `USE ${sqlIdentifier(dbName)}; SELECT prefix FROM routes;`;
 
     const result = await doltSql(query);
-    const rows = parseTableRows(outputToString(result));
+    const rows = parseCsvRows(outputToString(result));
     if (rows.length < 2) return [];
 
     const prefixes = rows
       .slice(1)
-      .map((row) => row[0]?.trim())
-      .filter((prefix): prefix is string => Boolean(prefix));
+      .map((row) => normalizeCell(row[0]))
+      .filter((prefix): prefix is string => prefix !== null && isValidPrefix(prefix));
 
     return [...new Set(prefixes)];
   };
@@ -174,13 +191,32 @@ export const BeadsCrossDbSyncPlugin: Plugin = async ({ $, directory }) => {
 
         await doltSql(updateQuery);
 
-        const commitQuery =
+        // Check if there are actual changes to commit
+        const statusQuery =
           `USE ${sqlIdentifier(dbName)}; ` +
-          `CALL dolt_commit('-Am', ${sqlString(
-            `cross-db-sync: ${issueId} status=${state.status}`
-          )});`;
+          `SELECT * FROM dolt_status;`;
+        const statusResult = await doltSql(statusQuery);
+        const statusRows = parseCsvRows(outputToString(statusResult));
+        if (statusRows.length < 2) {
+          // No changes in working set — skip commit
+          continue;
+        }
 
-        await doltSql(commitQuery);
+        try {
+          const commitQuery =
+            `USE ${sqlIdentifier(dbName)}; ` +
+            `CALL dolt_commit('-Am', ${sqlString(
+              `cross-db-sync: ${issueId} status=${state.status}`
+            )});`;
+          await doltSql(commitQuery);
+        } catch (commitErr) {
+          const msg = String(commitErr);
+          if (msg.includes("nothing to commit")) {
+            // Expected when issue state is already in sync
+            continue;
+          }
+          throw commitErr;
+        }
       } catch (err) {
         console.warn(
           `[beads-cross-db-sync] failed syncing ${issueId} to ${peerPrefix}:`,
@@ -216,14 +252,14 @@ export const BeadsCrossDbSyncPlugin: Plugin = async ({ $, directory }) => {
           ((input as Record<string, unknown>).output as
             | Record<string, unknown>
             | undefined)?.exitCode;
-        if (typeof exitCode === "number" && exitCode !== 0) {
+        if (typeof exitCode !== "number" || exitCode !== 0) {
           return;
         }
 
         const currentPrefix = await readIssuePrefix(() =>
           $`cat ${`${directory}/.beads/config.yaml`}`.quiet()
         );
-        if (!currentPrefix) {
+        if (!currentPrefix || !isValidPrefix(currentPrefix)) {
           console.warn(
             `[beads-cross-db-sync] unable to read issue-prefix from .beads/config.yaml`
           );
