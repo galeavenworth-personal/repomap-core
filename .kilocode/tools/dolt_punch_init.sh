@@ -164,6 +164,18 @@ INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pa
 INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
     ('validate-plant', 'validate-plant', 'gate_pass',     'workflow-gate',  TRUE,  'Workflow gate must pass'),
     ('validate-plant', 'validate-plant', 'step_complete', 'task_exit',      TRUE,  'Validation must complete');
+
+INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
+    ('prep-task', 'prep-task', 'mcp_call',         'process_thought',      TRUE,  'Sequential thinking required'),
+    ('prep-task', 'prep-task', 'mcp_call',         'codebase___retrieval', TRUE,  'Codebase exploration required'),
+    ('prep-task', 'prep-task', 'mcp_call',         'generate_summary',     TRUE,  'Thinking summary required'),
+    ('prep-task', 'prep-task', 'mcp_call',         'export_session',       TRUE,  'Session export required'),
+    ('prep-task', 'prep-task', 'cost_checkpoint',  '%',                    FALSE, 'Cost tracking (optional)');
+
+INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
+    ('codebase-exploration', 'codebase-exploration', 'mcp_call',         'codebase___retrieval', TRUE,  'Augment codebase retrieval required'),
+    ('codebase-exploration', 'codebase-exploration', 'tool_call',        'read_file',            TRUE,  'File inspection required'),
+    ('codebase-exploration', 'codebase-exploration', 'cost_checkpoint',  '%',                    FALSE, 'Cost tracking (optional)');
 SQL
 
 "${DOLT_BIN}" sql -q "CALL DOLT_ADD('.')"

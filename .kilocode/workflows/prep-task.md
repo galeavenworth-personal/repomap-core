@@ -1,11 +1,15 @@
 ---
 description: Branch-first task preparation protocol. Transform ambiguous requests into scoped, executable tasks through mandatory exploration, not linear analysis. Sequential thinking is the primary interface.
 auto_execution_mode: 3
+punch_card: prep-task
 ---
 
 # Task Preparation Protocol
 
 This workflow transforms user requests into executable tasks through **mandatory exploration**, not linear analysis. You must externalize reasoning, spend your branch budget, and reach Conclusion stage before implementation.
+
+**Punch Card:** `prep-task` (5 rows, 4 required)
+**Commands Reference:** [`.kilocode/commands.toml`](../commands.toml)
 
 **Core principle:** Generate candidates → Compare approaches → Commit to one path.
 
@@ -17,25 +21,27 @@ This workflow transforms user requests into executable tasks through **mandatory
 
 If this is a continuation of previous work:
 
-```python
-# MANDATORY: Load previous session
-import_session(file_path=".kilocode/thinking/[previous-session].json")
+> 📌 `import session` → [`commands.import_session`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--import_session`
 
-# Review what was decided
-generate_summary()
+File path: `.kilocode/thinking/[previous-session].json`
 
-# Continue reasoning from where you left off
-process_thought(
-    thought="Resuming: [context from summary]",
-    thought_number=1,
-    total_thoughts=1,
-    next_thought_needed=True,
-    stage="Problem Definition",
-    tags=["session-resume"]
-)
+After importing:
+
+> 📌 `summarize thinking` → [`commands.summarize_thinking`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--generate_summary`
+
+Then continue reasoning:
+
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--process_thought`
+
+```
+decompose task: "Resuming: [context from summary]"
+  stage=Problem Definition, tags=[session-resume]
 ```
 
-**Hard gate:** If user says "continue" or "resume" and you don't call `import_session`, you are violating protocol.
+**Hard gate:** If user says "continue" or "resume" and you don't call `import session`, you are violating protocol.
 
 ---
 
@@ -45,35 +51,27 @@ process_thought(
 
 Before proceeding with task preparation, you MUST externalize your reasoning through sequential thinking.
 
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--process_thought`
+
 **Required actions:**
 1. Create Problem Definition branch: State what you understand the task to be
 2. If ambiguous, create 2+ interpretation branches
 3. Spend your branch budget (minimum 2 branches for non-trivial tasks)
 4. Reach Conclusion stage before proceeding to Phase 1
 
-**Hard gate:** You may NOT proceed to Phase 1 without at least one `process_thought` call in your history.
+**Hard gate:** You may NOT proceed to Phase 1 without at least one `decompose task` call in your history.
 
 **Example:**
-```python
-process_thought(
-    thought="Task interpretation: User wants to refactor X module for better testability",
-    thought_number=1,
-    total_thoughts=2,
-    next_thought_needed=True,
-    stage="Problem Definition",
-    tags=["task-prep", "refactoring"]
-)
-
-process_thought(
-    thought="Alternative interpretation: User wants to add tests to existing X module without refactoring",
-    thought_number=2,
-    total_thoughts=2,
-    next_thought_needed=False,
-    stage="Problem Definition",
-    tags=["task-prep", "testing"],
-    assumptions_challenged=["Refactoring is required"]
-)
 ```
+decompose task: "Task interpretation: User wants to refactor X module for better testability"
+  stage=Problem Definition, tags=[task-prep, refactoring]
+
+decompose task: "Alternative interpretation: User wants to add tests to existing X module without refactoring"
+  stage=Problem Definition, tags=[task-prep, testing]
+  assumptions_challenged=[Refactoring is required]
+```
+
 ### Phase 1: Problem Definition (Branch per Interpretation)
 
 **Objective:** Generate 2-3 interpretations of the user's request. Spend your branch budget.
@@ -82,25 +80,15 @@ process_thought(
 
 1. **Create interpretation branches** (minimum 2):
 
-```python
-process_thought(
-    thought="Interpretation A: User wants [specific action on specific component]",
-    thought_number=1,
-    total_thoughts=5,  # Estimate total
-    next_thought_needed=True,
-    stage="Problem Definition",
-    tags=["interpretation", "task-prep"]
-)
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
 
-process_thought(
-    thought="Interpretation B: User wants [alternative action or scope]",
-    thought_number=2,
-    total_thoughts=5,
-    next_thought_needed=True,
-    stage="Problem Definition",
-    tags=["interpretation", "task-prep"],
-    assumptions_challenged=["Assumption from interpretation A"]
-)
+```
+decompose task: "Interpretation A: User wants [specific action on specific component]"
+  stage=Problem Definition, tags=[interpretation, task-prep]
+
+decompose task: "Interpretation B: User wants [alternative action or scope]"
+  stage=Problem Definition, tags=[interpretation, task-prep]
+  assumptions_challenged=[Assumption from interpretation A]
 ```
 
 2. **If still ambiguous after branching, ask user:**
@@ -122,22 +110,28 @@ process_thought(
 **Objective:** For each viable interpretation, gather the context needed to evaluate feasibility.
 
 **Tools (run in parallel per interpretation):**
-- `codebase-retrieval` — Find relevant code, patterns, similar implementations
-- `read_file` — Read specific files identified by retrieval
-- `resolve-library-id` + `query-docs` — Verify external library APIs
-- `search_files` — Find all references to components you'll modify
+
+> 📌 `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
+> Resolves to: `mcp--augment___context___engine--codebase___retrieval`
+
+Find relevant code, patterns, similar implementations.
+
+Use `read_file` to read specific files identified by retrieval (batch up to 5).
+
+> 📌 `resolve library` → [`commands.resolve_library`](../commands.toml)
+> 📌 `query docs` → [`commands.query_docs`](../commands.toml)
+
+Verify external library APIs.
+
+Use `search_files` to find all references to components you'll modify.
 
 **Document findings in thoughts:**
 
-```python
-process_thought(
-    thought="Research for Interpretation A: Found 3 existing implementations in [files]. Pattern uses [approach]. Will require changes to [N] call sites.",
-    thought_number=3,
-    total_thoughts=5,
-    next_thought_needed=True,
-    stage="Research",
-    tags=["interpretation-a", "context"]
-)
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+
+```
+decompose task: "Research for Interpretation A: Found 3 existing implementations in [files]. Pattern uses [approach]. Will require changes to [N] call sites."
+  stage=Research, tags=[interpretation-a, context]
 ```
 
 **Critical:** Always verify external library APIs with Context7. Training data is stale.
@@ -150,33 +144,17 @@ process_thought(
 
 **Required: Generate candidates** (simplest, safest, highest-leverage):
 
-```python
-process_thought(
-    thought="Approach 1 (Simplest): [description]. Pros: [list]. Cons: [list]. Estimated effort: [X hours].",
-    thought_number=4,
-    total_thoughts=7,
-    next_thought_needed=True,
-    stage="Analysis",
-    tags=["approach-candidate", "simplest"]
-)
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
 
-process_thought(
-    thought="Approach 2 (Safest): [description]. Pros: [list]. Cons: [list]. Estimated effort: [X hours].",
-    thought_number=5,
-    total_thoughts=7,
-    next_thought_needed=True,
-    stage="Analysis",
-    tags=["approach-candidate", "safest"]
-)
+```
+decompose task: "Approach 1 (Simplest): [description]. Pros: [list]. Cons: [list]. Estimated effort: [X hours]."
+  stage=Analysis, tags=[approach-candidate, simplest]
 
-process_thought(
-    thought="Approach 3 (Highest-leverage): [description]. Pros: [list]. Cons: [list]. Estimated effort: [X hours].",
-    thought_number=6,
-    total_thoughts=7,
-    next_thought_needed=True,
-    stage="Analysis",
-    tags=["approach-candidate", "leverage"]
-)
+decompose task: "Approach 2 (Safest): [description]. Pros: [list]. Cons: [list]. Estimated effort: [X hours]."
+  stage=Analysis, tags=[approach-candidate, safest]
+
+decompose task: "Approach 3 (Highest-leverage): [description]. Pros: [list]. Cons: [list]. Estimated effort: [X hours]."
+  stage=Analysis, tags=[approach-candidate, leverage]
 ```
 
 **Each approach must include:**
@@ -198,9 +176,8 @@ process_thought(
 
 1. **Generate summary to verify exploration:**
 
-```python
-generate_summary()
-```
+> 📌 `summarize thinking` → [`commands.summarize_thinking`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--generate_summary`
 
 **Check the summary output:**
 - Do you have ≥2 branches in Problem Definition?
@@ -210,15 +187,11 @@ generate_summary()
 
 2. **Document comparison:**
 
-```python
-process_thought(
-    thought="Comparison: Approach 1 is simplest but doesn't handle [edge case]. Approach 2 is safest but 3x effort. Approach 3 provides best long-term value and handles [edge case] correctly. Recommend Approach 3.",
-    thought_number=7,
-    total_thoughts=8,
-    next_thought_needed=True,
-    stage="Synthesis",
-    tags=["comparison", "decision-rationale"]
-)
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+
+```
+decompose task: "Comparison: Approach 1 is simplest but doesn't handle [edge case]. Approach 2 is safest but 3x effort. Approach 3 provides best long-term value and handles [edge case] correctly. Recommend Approach 3."
+  stage=Synthesis, tags=[comparison, decision-rationale]
 ```
 
 **If summary shows insufficient exploration:** Go back and add more branches. Don't proceed with weak reasoning.
@@ -233,30 +206,30 @@ process_thought(
 
 1. **State decision:**
 
-```python
-process_thought(
-    thought="Decision: Implementing Approach 3 (highest-leverage). Rationale: [specific reasons]. This approach handles [edge cases], aligns with [project conventions], and provides [future benefits].",
-    thought_number=8,
-    total_thoughts=8,
-    next_thought_needed=False,
-    stage="Conclusion",
-    tags=["decision", "approach-3"],
-    axioms_used=["Deterministic artifacts", "Evidence-based claims"]
-)
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+
+```
+decompose task: "Decision: Implementing Approach 3 (highest-leverage). Rationale: [specific reasons]. This approach handles [edge cases], aligns with [project conventions], and provides [future benefits]."
+  stage=Conclusion, tags=[decision, approach-3]
+  axioms_used=[Deterministic artifacts, Evidence-based claims]
 ```
 
 2. **Define success criteria in the thought:**
    - Measurable outcomes ("All tests pass", "No new lint errors")
    - Specific behaviors ("Function returns Pydantic model, not dict")
-    - Verification commands (".venv/bin/python -m pytest -q", ".venv/bin/python -m ruff check .")
+   - Verification commands
+
+   > 📌 `gate quality` → [`commands.gate_quality`](../commands.toml)
+   > Composite: `format_ruff` → `check_ruff` → `check_mypy` → `test_pytest`
 
 3. **Save session for future reference:**
 
-```python
-export_session(file_path=".kilocode/thinking/refactor-2026-01-21-module-x.json")
-```
+> 📌 `export session` → [`commands.export_session`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--export_session`
 
-**MANDATORY:** You must call `export_session` before proceeding to execution. This preserves your reasoning for future sessions.
+File path: `.kilocode/thinking/refactor-{YYYY-MM-DD}-{brief-description}.json`
+
+**MANDATORY:** You must call `export session` before proceeding to execution. This preserves your reasoning for future sessions.
 
 ---
 
@@ -281,28 +254,32 @@ export_session(file_path=".kilocode/thinking/refactor-2026-01-21-module-x.json")
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  PHASE 1: UNDERSTAND (parallel tool calls)                     │
-│  ├── codebase-retrieval × N (architecture, patterns, related)  │
+│  ├── retrieve codebase             → commands.retrieve_codebase │
 │  ├── read_file (key files, batch up to 5)                      │
-│  └── resolve-library-id + query-docs (for dependencies)        │
+│  └── resolve library / query docs  → commands.resolve_library   │
 ├─────────────────────────────────────────────────────────────────┤
 │  PHASE 2: PLAN                                                  │
-│  ├── process_thought (decompose, define success criteria)      │
-│  ├── generate_summary (review reasoning before proceeding)     │
+│  ├── decompose task (≥2 interpretations)                        │
+│  │                                 → commands.decompose_task    │
+│  ├── summarize thinking            → commands.summarize_thinking│
 │  └── update_todo_list (structure the work with clear subtasks) │
 ├─────────────────────────────────────────────────────────────────┤
 │  PHASE 3: EXECUTE (repeat per task)                            │
 │  ├── update_todo_list (mark [-] in progress)                   │
-│  ├── codebase-retrieval (verify signatures before each edit)   │
+│  ├── retrieve codebase             → commands.retrieve_codebase │
 │  ├── apply_diff or edit_file (make targeted changes)           │
-│  ├── codebase-retrieval (find ALL downstream impacts)          │
+│  ├── retrieve codebase (find ALL downstream impacts)           │
 │  ├── apply_diff or edit_file (update call sites and tests)     │
 │  └── update_todo_list (mark [x] complete)                      │
 ├─────────────────────────────────────────────────────────────────┤
 │  PHASE 4: VERIFY                                                │
-│  ├── execute_command: .venv/bin/python -m ruff format --check  │
-│  ├── execute_command: .venv/bin/python -m ruff check           │
-│  ├── execute_command: .venv/bin/python -m mypy src             │
-│  └── execute_command: .venv/bin/python -m pytest -q            │
+│  └── gate quality                  → commands.gate_quality      │
+├─────────────────────────────────────────────────────────────────┤
+│  EXIT GATE: PUNCH CARD CHECKPOINT                               │
+│  ├── mint punches {task_id}        → commands.punch_mint        │
+│  ├── checkpoint punch-card {task_id} prep-task                  │
+│  │                                 → commands.punch_checkpoint  │
+│  └── MUST PASS — blocks attempt_completion on failure           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -318,7 +295,7 @@ During **Phase 5**, verify alignment with these project patterns:
 - **JSONL for artifacts** — Use JSONL format for serialization
 
 ### Architecture Patterns
-- **Layered architecture** — Respect layer boundaries defined in `repomap.toml`
+- **Layered architecture** — Respect layer boundaries defined in [`repomap.toml`](../../repomap.toml)
 - **Deterministic artifacts** — Same input → same output, always
 - **Evidence-based claims** — Every claim backed by verifiable evidence
 - **Virtual environment mandate** — ALWAYS use `.venv/bin/python -m ...`
@@ -326,12 +303,30 @@ During **Phase 5**, verify alignment with these project patterns:
 ### Testing Strategy
 - **Pytest markers** — Use `@pytest.mark.live` for tests requiring external services
 - **Update existing tests** — Don't create new test files unless explicitly requested
-- **Quality gates** — ruff format, ruff check, mypy, pytest must all pass
+- **Quality gates** — All must pass via `gate quality`
 
 ### State Management
 - **Artifacts in `.repomap/`** — Generated artifacts stored here
 - **Canonical claims** — `repomap_claims.jsonl` tracked in git
 - **Experimental claims** — `docs/experiments/claims-archive/` for analysis
+
+---
+
+## EXIT GATE: Punch Card Checkpoint
+
+**Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
+
+> 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id} --bead-id {bead_id}`
+
+> 🚪 `checkpoint punch-card {task_id} prep-task` → [`commands.punch_checkpoint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} prep-task`
+> **receipt_required = true** — this is a hard gate.
+
+**If checkpoint FAILS:** Do NOT call `attempt_completion`. Review which required punches
+are missing, complete the missing steps, re-mint, and re-checkpoint.
+
+**If checkpoint PASSES:** Proceed to `attempt_completion` with the prepared task.
 
 ---
 
@@ -343,61 +338,53 @@ During **Phase 5**, verify alignment with these project patterns:
 ### After Applying the Protocol
 
 **Phase 1 — Problem Definition:**
-```python
-process_thought(
-    thought="Interpretation 1: Memory leak in artifact storage causing disk space issues",
-    thought_number=1,
-    total_thoughts=5,
-    next_thought_needed=True,
-    stage="Problem Definition",
-    tags=["interpretation", "memory"]
-)
 
-process_thought(
-    thought="Interpretation 2: Claims not being garbage collected, causing RAM issues",
-    thought_number=2,
-    total_thoughts=5,
-    next_thought_needed=True,
-    stage="Problem Definition",
-    tags=["interpretation", "memory"],
-    assumptions_challenged=["Issue is disk-related"]
-)
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+
+```
+decompose task: "Interpretation 1: Memory leak in artifact storage causing disk space issues"
+  stage=Problem Definition, tags=[interpretation, memory]
+
+decompose task: "Interpretation 2: Claims not being garbage collected, causing RAM issues"
+  stage=Problem Definition, tags=[interpretation, memory]
+  assumptions_challenged=[Issue is disk-related]
 ```
 
 **Phase 2 — Research:**
-Used `codebase-retrieval` to find artifact-related code in `artifact_store.py`, `io.py`, and `write.py`.
+
+> 📌 `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
+
+Used to find artifact-related code in `artifact_store.py`, `io.py`, and `write.py`.
 
 **Phase 3 — Analysis:**
 Generated 3 approaches: fix leak, add cleanup, implement LRU cache
 
 **Phase 4 — Synthesis:**
-```python
-generate_summary()  # Verified 2 interpretations, 3 approaches explored
 
-process_thought(
-    thought="Comparison: Approach 1 (fix leak) is simplest and addresses root cause. Approach 2 (cleanup) is workaround. Approach 3 (LRU) is over-engineering. Recommend Approach 1.",
-    thought_number=5,
-    total_thoughts=6,
-    next_thought_needed=True,
-    stage="Synthesis",
-    tags=["comparison"]
-)
+> 📌 `summarize thinking` → [`commands.summarize_thinking`](../commands.toml)
+
+Verified 2 interpretations, 3 approaches explored.
+
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+
+```
+decompose task: "Comparison: Approach 1 (fix leak) is simplest and addresses root cause. Approach 2 (cleanup) is workaround. Approach 3 (LRU) is over-engineering. Recommend Approach 1."
+  stage=Synthesis, tags=[comparison]
 ```
 
 **Phase 5 — Conclusion:**
-```python
-process_thought(
-    thought="Decision: Fix artifact storage leak in artifact_store.py. Add proper file handle cleanup. Success criteria: No open file handles after write, pytest passes, no disk space growth.",
-    thought_number=6,
-    total_thoughts=6,
-    next_thought_needed=False,
-    stage="Conclusion",
-    tags=["decision"],
-    axioms_used=["Fail hard, not silently"]
-)
 
-export_session(file_path=".kilocode/thinking/fix-artifact-leak-2026-01-21.json")
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+
 ```
+decompose task: "Decision: Fix artifact storage leak in artifact_store.py. Add proper file handle cleanup. Success criteria: No open file handles after write, pytest passes, no disk space growth."
+  stage=Conclusion, tags=[decision]
+  axioms_used=[Fail hard, not silently]
+```
+
+> 📌 `export session` → [`commands.export_session`](../commands.toml)
+
+File path: `.kilocode/thinking/fix-artifact-leak-{YYYY-MM-DD}.json`
 
 ---
 
@@ -416,7 +403,7 @@ Before beginning implementation, verify all phases are complete:
 ### Planning
 - [ ] At least 2 approach candidates generated
 - [ ] Success criteria defined with measurable outcomes
-- [ ] generate_summary called to verify exploration
+- [ ] `summarize thinking` called to verify exploration
 
 ### Validation
 - [ ] Conclusion stage reached with clear decision
@@ -433,14 +420,14 @@ Before beginning implementation, verify all phases are complete:
 
 ## Quick Reference: Tool by Phase
 
-| Phase | Primary Tools |
-|-------|---------------|
-| 0. Sequential Thinking | `process_thought`, `generate_summary`, `export_session` |
-| 1. Problem Definition | `process_thought` (branching), `codebase-retrieval` |
-| 2. Research | `codebase-retrieval`, `read_file`, `resolve-library-id` + `query-docs` |
-| 3. Analysis | `process_thought` (approach candidates) |
-| 4. Synthesis | `generate_summary`, `process_thought` (comparison) |
-| 5. Conclusion | `process_thought` (decision), `export_session` |
+| Phase | Primary Commands |
+|-------|-----------------|
+| 0. Sequential Thinking | `decompose task` → `commands.decompose_task`, `summarize thinking` → `commands.summarize_thinking`, `export session` → `commands.export_session` |
+| 1. Problem Definition | `decompose task` (branching), `retrieve codebase` → `commands.retrieve_codebase` |
+| 2. Research | `retrieve codebase`, `read_file`, `resolve library` → `commands.resolve_library`, `query docs` → `commands.query_docs` |
+| 3. Analysis | `decompose task` (approach candidates) |
+| 4. Synthesis | `summarize thinking`, `decompose task` (comparison) |
+| 5. Conclusion | `decompose task` (decision), `export session` |
 
 ---
 
@@ -467,15 +454,13 @@ Context7 provides up-to-date documentation for third-party libraries. **This is 
 
 ### Context7 Workflow
 
-```
-1. resolve-library-id("library-name")
-   → Returns Context7-compatible library ID
+> 📌 `resolve library` → [`commands.resolve_library`](../commands.toml)
+> Resolves to: `mcp--context7--resolve___library___id`
 
-2. query-docs(libraryID, query="specific-feature")
-   → Returns current API reference and code examples
+> 📌 `query docs` → [`commands.query_docs`](../commands.toml)
+> Resolves to: `mcp--context7--query___docs`
 
-3. If context insufficient, refine query or paginate
-```
+If context insufficient, refine query or paginate.
 
 ### Integration with Execution Pattern
 
@@ -485,9 +470,10 @@ Context7 calls should happen in **Phase 2 (Research)**:
 ┌─────────────────────────────────────────────────────────────────┐
 │  LIBRARY-AWARE RESEARCH                                         │
 │  ├── Identify external imports in target code                   │
-│  ├── resolve-library-id for each dependency                     │
-│  ├── query-docs for relevant APIs                               │
-│  ├── Document findings in process_thought                       │
+│  ├── resolve library               → commands.resolve_library   │
+│  ├── query docs                    → commands.query_docs        │
+│  ├── decompose task (document findings)                         │
+│  │                                 → commands.decompose_task    │
 │  └── THEN proceed to Analysis phase                             │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -499,3 +485,25 @@ Context7 calls should happen in **Phase 2 (Research)**:
 - ❌ **Debugging for hours** when the issue is outdated API usage
 - ❌ **Copy-pasting old code patterns** without checking if they're still valid
 - ✅ **Verify first, code second** — 30 seconds of Context7 saves hours of debugging
+
+---
+
+## Related Workflows
+
+- [`/start-task`](./start-task.md) — Meta-workflow that calls this as Phase 3
+- [`/execute-task`](./execute-task.md) — Implementation phase (after approval)
+- [`/codebase-exploration`](./codebase-exploration.md) — Deep dive into code structure
+
+## Related Skills
+
+- [`beads-local-db-ops`](../skills/beads-local-db-ops/SKILL.md) — Beads CLI operations
+- [`repomap-codebase-retrieval`](../skills/repomap-codebase-retrieval/SKILL.md) — Semantic code search
+- [`sequential-thinking-default`](../skills/sequential-thinking-default/SKILL.md) — Multi-step reasoning
+- [`context7-docs-ops`](../skills/context7-docs-ops/SKILL.md) — Library documentation
+
+## Philosophy: Software Fabrication
+
+- **Determinism** — Same task → same preparation → same execution
+- **Evidence-based** — Decisions backed by codebase analysis
+- **Structure discipline** — commands.toml routes all the way down
+- **Self-verifying** — Punch card checkpoint gates the exit
