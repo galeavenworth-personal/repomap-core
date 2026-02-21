@@ -37,6 +37,8 @@ import subprocess
 import shutil
 import sys
 import uuid
+import csv
+import io
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,17 +49,16 @@ DOLT_BIN = shutil.which("dolt")
 DOLT_DATA_DIR = Path.home() / ".dolt-data/beads"
 
 
-def _sql_quote(value: str) -> str:
-    """Quote a SQL string literal using single-quote escaping."""
+def _sql_escape_literal(value: str) -> str:
+    """Escape single quotes in a SQL string literal; does not add surrounding quotes."""
     return value.replace("'", "''")
 
 
 def _parse_csv_rows(csv_text: str) -> list[list[str]]:
-    """Parse simple CSV output into rows."""
-    rows = [line.strip() for line in csv_text.strip().splitlines() if line.strip()]
-    if not rows:
+    """Parse CSV output into rows using Python's csv module."""
+    if not csv_text or not csv_text.strip():
         return []
-    return [row.split(",") for row in rows]
+    return list(csv.reader(io.StringIO(csv_text)))
 
 
 def dolt_sql(query: str) -> str | None:
@@ -540,14 +541,14 @@ def get_task_cost(task_id: str) -> TaskCost:
 def persist_child_relationships(parent_task_id: str, matches: list[ChildMatch]) -> int:
     """Persist resolved parent->child relationships into punch_cards.child_relationships."""
     rows_written = 0
-    parent_q = _sql_quote(parent_task_id)
+    parent_q = _sql_escape_literal(parent_task_id)
 
     for match in matches:
         child_id = match.child_task_id
         if not child_id or child_id == "(unresolved)":
             continue
 
-        child_q = _sql_quote(child_id)
+        child_q = _sql_escape_literal(child_id)
         query = (
             "INSERT IGNORE INTO punch_cards.child_relationships "
             "(parent_task_id, child_task_id, spawned_at) "
@@ -568,9 +569,12 @@ def persist_child_relationships(parent_task_id: str, matches: list[ChildMatch]) 
     return rows_written
 
 
-def verify_child_punch_card(child_task_id: str) -> tuple[bool, str | None]:
+def verify_child_punch_card(
+    parent_task_id: str, child_task_id: str
+) -> tuple[bool, str | None]:
     """Verify child has a passing checkpoint and persist delegation proof state."""
-    child_q = _sql_quote(child_task_id)
+    child_q = _sql_escape_literal(child_task_id)
+    parent_q = _sql_escape_literal(parent_task_id)
     check_query = (
         "SELECT dolt_commit_hash "
         "FROM punch_cards.checkpoints "
@@ -592,17 +596,19 @@ def verify_child_punch_card(child_task_id: str) -> tuple[bool, str | None]:
         update_query = (
             "UPDATE punch_cards.child_relationships "
             "SET child_card_valid = TRUE, child_checkpoint_hash = NULL "
-            f"WHERE child_task_id = '{child_q}'"
+            f"WHERE parent_task_id = '{parent_q}' AND child_task_id = '{child_q}'"
         )
     else:
-        hash_q = _sql_quote(checkpoint_hash)
+        hash_q = _sql_escape_literal(checkpoint_hash)
         update_query = (
             "UPDATE punch_cards.child_relationships "
             f"SET child_card_valid = TRUE, child_checkpoint_hash = '{hash_q}' "
-            f"WHERE child_task_id = '{child_q}'"
+            f"WHERE parent_task_id = '{parent_q}' AND child_task_id = '{child_q}'"
         )
 
-    _ = dolt_sql(update_query)
+    result = dolt_sql(update_query)
+    if result is None:
+        return (False, checkpoint_hash)
     return (True, checkpoint_hash)
 
 
@@ -662,9 +668,9 @@ def cmd_verify_delegation(task_id: str | None = None) -> None:
         print("ERROR: No tasks found")
         return
 
-    parent_q = _sql_quote(task_id)
+    parent_q = _sql_escape_literal(task_id)
     query = (
-        "SELECT child_task_id, child_card_valid, child_checkpoint_hash "
+        "SELECT child_task_id "
         "FROM punch_cards.child_relationships "
         f"WHERE parent_task_id = '{parent_q}' "
         "ORDER BY spawned_at"
@@ -687,7 +693,7 @@ def cmd_verify_delegation(task_id: str | None = None) -> None:
         if not row:
             continue
         child_task_id = row[0].strip()
-        valid, checkpoint_hash = verify_child_punch_card(child_task_id)
+        valid, checkpoint_hash = verify_child_punch_card(task_id, child_task_id)
         status = "valid" if valid else "missing"
         hash_str = checkpoint_hash if checkpoint_hash else "-"
         print(f"  {child_task_id}: {status} checkpoint_hash={hash_str}")

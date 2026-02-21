@@ -12,11 +12,6 @@ fi
 
 DOLT_BIN="$(command -v dolt)"
 
-if ! nc -z 127.0.0.1 3307 >/dev/null 2>&1; then
-  echo "ERROR: Dolt sql-server is not reachable at 127.0.0.1:3307" >&2
-  exit 3
-fi
-
 if [[ ! -d "${DOLT_DATA_DIR}" ]]; then
   echo "ERROR: Dolt data dir not found: ${DOLT_DATA_DIR}" >&2
   exit 4
@@ -172,9 +167,19 @@ INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pa
 SQL
 
 "${DOLT_BIN}" sql -q "CALL DOLT_ADD('.')"
-if ! "${DOLT_BIN}" sql -q "CALL DOLT_COMMIT('-m', 'Initialize punch card schema')" >/dev/null 2>&1; then
-  echo "INFO: No new schema changes to commit"
+set +e
+commit_output="$("${DOLT_BIN}" sql -q "CALL DOLT_COMMIT('-m', 'Initialize punch card schema')" 2>&1)"
+commit_status=$?
+set -e
+
+if [ "${commit_status}" -ne 0 ]; then
+  if echo "${commit_output}" | grep -qi "nothing to commit"; then
+    echo "INFO: No new schema changes to commit"
+  else
+    echo "ERROR: Dolt commit failed while initializing punch card schema:" >&2
+    echo "${commit_output}" >&2
+    exit "${commit_status}"
+  fi
 fi
 
 "${DOLT_BIN}" sql -q "SHOW TABLES FROM punch_cards"
-
