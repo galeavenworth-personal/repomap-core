@@ -11,6 +11,20 @@
 - Before risky refactoring or major changes
 - When you want to preserve current narrative/goal/task through-line
 
+## Commands Referenced
+
+All commands below are routed through [`commands.toml`](../commands.toml):
+
+| Route | Verb | Noun | Purpose |
+|-------|------|------|---------|
+| `list_ready` | list | ready | Check active issues for environment state |
+| `format_ruff` | format | ruff | Quality gate: formatting |
+| `check_ruff` | check | ruff | Quality gate: linting |
+| `check_mypy` | check | mypy | Quality gate: type checking |
+| `test_pytest` | test | pytest | Quality gate: tests |
+| `gate_quality` | gate | quality | Composite: all quality gates (format + lint + type + test) |
+| `punch_checkpoint` | checkpoint | punch-card | Exit gate |
+
 ## Workflow Steps
 
 ### 1. Prompt for Checkpoint Name
@@ -69,8 +83,8 @@ Create a comprehensive summary including:
 #### Environment State
 - Current branch
 - Uncommitted changes (if any)
-- Active issues (from `.kilocode/tools/bd ready`)
-- Quality gate status
+- Active issues (from `.kilocode/tools/bd ready`) <!-- route: list_ready -->
+- Quality gate status <!-- route: gate_quality -->
 
 ### 3. Save Checkpoint
 
@@ -171,6 +185,20 @@ compatibility.
 - Quality gates: All passing ✅
 - Active issues: Check with `.kilocode/tools/bd ready`
 ```
+
+## Punch Card Exit Gate
+
+**This workflow is not complete until the following gate passes:**
+
+<!-- route: punch_checkpoint -->
+```bash
+python3 .kilocode/tools/punch_engine.py checkpoint {task_id} {card_id}
+```
+
+The punch card verifies:
+- A checkpoint file was created in `.kilocode/checkpoints/` (Step 3)
+- Memory Bank reference was updated (Step 4)
+- Environment state was captured (quality gate status + active issues)
 
 ## Notes
 

@@ -11,6 +11,20 @@
 - Onboarding another agent/session
 - Resuming after interruption
 
+## Commands Referenced
+
+All commands below are routed through [`commands.toml`](../commands.toml):
+
+| Route | Verb | Noun | Purpose |
+|-------|------|------|---------|
+| `list_ready` | list | ready | Find available issues |
+| `show_issue` | show | issue | View issue details |
+| `format_ruff` | format | ruff | Quality gate: formatting |
+| `check_ruff` | check | ruff | Quality gate: linting |
+| `check_mypy` | check | mypy | Quality gate: type checking |
+| `import_beads` | import | beads | Import JSONL after cross-clone sync |
+| `punch_checkpoint` | checkpoint | punch-card | Exit gate |
+
 ## Workflow Steps
 
 ### 1. List Available Checkpoints
@@ -130,10 +144,11 @@ git branch --show-current
 # Uncommitted changes
 git status --short
 
-# Active issues
+# Active issues  <!-- route: list_ready -->
 .kilocode/tools/bd ready
 
-# Quality gates
+# Quality gates  <!-- route: format_ruff, check_ruff, check_mypy -->
+.venv/bin/python -m ruff format --check . --quiet
 .venv/bin/python -m ruff check . --quiet
 .venv/bin/python -m mypy src --quiet
 ```
@@ -174,13 +189,19 @@ Ready to continue? I'll start with: <next-step-1>
 
 ### 9. Optional: Sync with Beads
 
-If checkpoint mentions active issues:
+If checkpoint mentions active issues and a cross-clone git pull brought new JSONL:
+
+<!-- route: import_beads, show_issue -->
 ```bash
-.kilocode/tools/bd sync --no-push
+.kilocode/tools/bd import --from-jsonl .beads/issues.jsonl
 .kilocode/tools/bd show <issue-id>
 ```
 
 Confirm issue status matches checkpoint expectations.
+
+> **Note:** With Dolt backend, local writes persist immediately. The `import_beads`
+> step is only needed after `git pull` brings JSONL changes from the other clone.
+> See `commands.toml: sync_remote` (deprecated) for history.
 
 ## Advanced Features
 
@@ -283,6 +304,20 @@ User: milestone-determinism-gates-green
 Agent: [loads checkpoint, understands project state]
 Agent: "I see you completed the determinism gate migration. Next step: run the bounded gate sweep"
 ```
+
+## Punch Card Exit Gate
+
+**This workflow is not complete until the following gate passes:**
+
+<!-- route: punch_checkpoint -->
+```bash
+python3 .kilocode/tools/punch_engine.py checkpoint {task_id} {card_id}
+```
+
+The punch card verifies:
+- A checkpoint was successfully loaded and confirmed (Step 8)
+- Environment alignment was verified (Step 7)
+- Memory Bank was updated with checkpoint reference (Step 6)
 
 ## Notes
 
