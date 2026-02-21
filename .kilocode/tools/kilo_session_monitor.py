@@ -33,6 +33,8 @@ This format is not a public API and may change between versions.
 
 import json
 import datetime
+import subprocess
+import shutil
 import sys
 import uuid
 from collections import Counter
@@ -41,6 +43,50 @@ from pathlib import Path
 
 KILO_STORAGE = Path.home() / ".config/Code/User/globalStorage/kilocode.kilo-code"
 TASKS_DIR = KILO_STORAGE / "tasks"
+DOLT_BIN = shutil.which("dolt")
+DOLT_DATA_DIR = Path.home() / ".dolt-data/beads"
+
+
+def _sql_quote(value: str) -> str:
+    """Quote a SQL string literal using single-quote escaping."""
+    return value.replace("'", "''")
+
+
+def _parse_csv_rows(csv_text: str) -> list[list[str]]:
+    """Parse simple CSV output into rows."""
+    rows = [line.strip() for line in csv_text.strip().splitlines() if line.strip()]
+    if not rows:
+        return []
+    return [row.split(",") for row in rows]
+
+
+def dolt_sql(query: str) -> str | None:
+    """Run a Dolt SQL query and return CSV stdout, or None on failure."""
+    if not DOLT_BIN:
+        print("WARNING: Dolt not available (binary not found in PATH)", file=sys.stderr)
+        return None
+    if not DOLT_DATA_DIR.exists():
+        print(f"WARNING: Dolt data directory missing: {DOLT_DATA_DIR}", file=sys.stderr)
+        return None
+
+    try:
+        result = subprocess.run(
+            [DOLT_BIN, "sql", "-q", query, "--result-format", "csv"],
+            cwd=DOLT_DATA_DIR,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        print(f"WARNING: Dolt invocation failed: {exc}", file=sys.stderr)
+        return None
+
+    if result.returncode != 0:
+        err = (result.stderr or "").strip()
+        print(f"WARNING: Dolt query failed: {err}", file=sys.stderr)
+        return None
+
+    return result.stdout
 
 
 def get_current_task_id() -> str | None:
@@ -491,6 +537,75 @@ def get_task_cost(task_id: str) -> TaskCost:
     )
 
 
+def persist_child_relationships(parent_task_id: str, matches: list[ChildMatch]) -> int:
+    """Persist resolved parent->child relationships into punch_cards.child_relationships."""
+    rows_written = 0
+    parent_q = _sql_quote(parent_task_id)
+
+    for match in matches:
+        child_id = match.child_task_id
+        if not child_id or child_id == "(unresolved)":
+            continue
+
+        child_q = _sql_quote(child_id)
+        query = (
+            "INSERT IGNORE INTO punch_cards.child_relationships "
+            "(parent_task_id, child_task_id, spawned_at) "
+            f"VALUES ('{parent_q}', '{child_q}', "
+            f"FROM_UNIXTIME({match.spawn.new_task_ts}/1000))"
+        )
+        out = dolt_sql(query)
+        if out is None:
+            return 0
+
+        rows = _parse_csv_rows(out)
+        if len(rows) > 1 and rows[1]:
+            try:
+                rows_written += int(rows[1][0])
+            except ValueError:
+                pass
+
+    return rows_written
+
+
+def verify_child_punch_card(child_task_id: str) -> tuple[bool, str | None]:
+    """Verify child has a passing checkpoint and persist delegation proof state."""
+    child_q = _sql_quote(child_task_id)
+    check_query = (
+        "SELECT dolt_commit_hash "
+        "FROM punch_cards.checkpoints "
+        f"WHERE task_id = '{child_q}' AND status = 'pass' "
+        "ORDER BY validated_at DESC LIMIT 1"
+    )
+    out = dolt_sql(check_query)
+    if out is None:
+        return (False, None)
+
+    rows = _parse_csv_rows(out)
+    if len(rows) <= 1:
+        return (False, None)
+
+    checkpoint_hash = rows[1][0].strip() if rows[1] else ""
+    checkpoint_hash = checkpoint_hash if checkpoint_hash else None
+
+    if checkpoint_hash is None:
+        update_query = (
+            "UPDATE punch_cards.child_relationships "
+            "SET child_card_valid = TRUE, child_checkpoint_hash = NULL "
+            f"WHERE child_task_id = '{child_q}'"
+        )
+    else:
+        hash_q = _sql_quote(checkpoint_hash)
+        update_query = (
+            "UPDATE punch_cards.child_relationships "
+            f"SET child_card_valid = TRUE, child_checkpoint_hash = '{hash_q}' "
+            f"WHERE child_task_id = '{child_q}'"
+        )
+
+    _ = dolt_sql(update_query)
+    return (True, checkpoint_hash)
+
+
 def cmd_children(task_id: str | None = None) -> None:
     """Show subtask tree with cost rollup for a parent task."""
     task_id = task_id or get_current_task_id()
@@ -505,6 +620,7 @@ def cmd_children(task_id: str | None = None) -> None:
         return
 
     matches = correlate_children(spawns)
+    persisted = persist_child_relationships(task_id, matches)
     parent_cost = get_task_cost(task_id)
 
     # Calculate rollup
@@ -513,6 +629,7 @@ def cmd_children(task_id: str | None = None) -> None:
 
     print(f"Task: {task_id} ({len(spawns)} subtasks)")
     print(f"Total Cost (parent + children): ${rollup:.4f}")
+    print(f"Persisted child relationships: {persisted}")
     print()
     print(
         f"  Parent: ${parent_cost.total_cost:.4f}"
@@ -536,6 +653,49 @@ def cmd_children(task_id: str | None = None) -> None:
             f" {cost_str}  {tok_str}"
         )
         print(f"       {m.spawn.label}")
+
+
+def cmd_verify_delegation(task_id: str | None = None) -> None:
+    """Verify parent->child delegation proofs from child checkpoints."""
+    task_id = task_id or get_current_task_id()
+    if not task_id:
+        print("ERROR: No tasks found")
+        return
+
+    parent_q = _sql_quote(task_id)
+    query = (
+        "SELECT child_task_id, child_card_valid, child_checkpoint_hash "
+        "FROM punch_cards.child_relationships "
+        f"WHERE parent_task_id = '{parent_q}' "
+        "ORDER BY spawned_at"
+    )
+    out = dolt_sql(query)
+    if out is None:
+        print("Dolt not available")
+        return
+
+    rows = _parse_csv_rows(out)
+    if len(rows) <= 1:
+        print(f"Task: {task_id}")
+        print("No child relationships found.")
+        return
+
+    print(f"Delegation proof report for parent: {task_id}")
+    print()
+    verified = 0
+    for row in rows[1:]:
+        if not row:
+            continue
+        child_task_id = row[0].strip()
+        valid, checkpoint_hash = verify_child_punch_card(child_task_id)
+        status = "valid" if valid else "missing"
+        hash_str = checkpoint_hash if checkpoint_hash else "-"
+        print(f"  {child_task_id}: {status} checkpoint_hash={hash_str}")
+        if valid:
+            verified += 1
+
+    print()
+    print(f"Verified child punch cards: {verified}")
 
 
 def _classify_message(say: str, ask: str, text: str) -> str:
@@ -612,9 +772,15 @@ def main() -> None:
     elif cmd == "children":
         task_id = args[1] if len(args) > 1 else None
         cmd_children(task_id)
+    elif cmd == "verify-delegation":
+        task_id = args[1] if len(args) > 1 else None
+        cmd_verify_delegation(task_id)
     else:
         print(f"Unknown command: {cmd}")
-        print("Commands: whoami, timeline, cost, tools, tail, receipts, children")
+        print(
+            "Commands: whoami, timeline, cost, tools, tail, receipts, children,"
+            " verify-delegation"
+        )
 
 
 if __name__ == "__main__":
