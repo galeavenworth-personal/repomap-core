@@ -200,7 +200,7 @@ Each tool adds a **layer of understanding**:
 **Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
 
 > 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
-> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id}`
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id} --bead-id {bead_id}`
 
 > 🚪 `checkpoint punch-card {task_id} codebase-exploration` → [`commands.punch_checkpoint`](../commands.toml)
 > Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} codebase-exploration`
