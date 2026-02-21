@@ -25,8 +25,9 @@ htmlcov/
 .beads/*.db
 .beads/*.db-*
 
-# Beads sync-branch JSONL (kept in git history on `beads-sync`, not on main)
-.beads/issues.jsonl
+# Beads JSONL interchange (tracked in git for cross-clone state transfer)
+# With Dolt backend, issues.jsonl is the portable format for two-clone model.
+# interactions.jsonl stays ignored (not used in cross-clone interchange).
 .beads/interactions.jsonl
 
 # OS / editor metadata
