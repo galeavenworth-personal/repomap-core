@@ -351,9 +351,9 @@ receipt_required = false
 verb = "mint"
 noun = "punches"
 skill = "cli"
-tool = "python3 .kilocode/tools/punch_engine.py mint {task_id}"
+tool = "python3 .kilocode/tools/punch_engine.py mint {task_id} --bead-id {bead_id}"
 receipt_required = false
-notes = "Extract events from task ui_messages.json and gate_runs.jsonl into punch_cards.punches"
+notes = "Extract events from task ui_messages.json and gate_runs.jsonl into punch_cards.punches (optional --bead-id for gate_runs matching)"
 
 [commands.punch_evaluate]
 verb = "evaluate"

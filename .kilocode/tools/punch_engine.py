@@ -17,6 +17,7 @@ TASKS_DIR = KILO_STORAGE / "tasks"
 DOLT_BIN = shutil.which("dolt")
 DOLT_DATA_DIR = Path.home() / ".dolt-data/beads"
 GATE_RUNS_JSONL = Path(".kilocode/gate_runs.jsonl")
+BATCH_SIZE = 1000
 
 
 def _sql_escape_literal(value: str) -> str:
@@ -63,9 +64,21 @@ def dolt_sql(query: str) -> str | None:
 def load_ui_messages(task_id: str) -> list[dict]:
     """Load ui_messages.json for a given task."""
     path = TASKS_DIR / task_id / "ui_messages.json"
+    try:
+        path.resolve().relative_to(TASKS_DIR.resolve())
+    except ValueError:
+        print(f"WARNING: task_id traversal blocked: {task_id}", file=sys.stderr)
+        return []
     if not path.exists():
         return []
-    return json.loads(path.read_text())
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        print(
+            f"WARNING: corrupt ui_messages.json for task {task_id}: {exc}",
+            file=sys.stderr,
+        )
+        return []
 
 
 def _observed_at_from_ts(ts_ms: int | float) -> tuple[str, str]:
@@ -154,7 +167,8 @@ def _extract_ui_punches(
 
         if ask == "command":
             text = str(msg.get("text", ""))
-            _emit_punch(punches, task_id, "command_exec", text[:200], ts_ms)
+            cmd_text = text[:197] + "..." if len(text) > 200 else text
+            _emit_punch(punches, task_id, "command_exec", cmd_text, ts_ms)
             continue
 
         if ask == "use_mcp_server":
@@ -173,6 +187,7 @@ def _extract_ui_punches(
 
         if say == "subtask_result":
             _emit_punch(punches, task_id, "child_complete", "child_return", ts_ms)
+            continue
 
     return punches
 
@@ -187,7 +202,13 @@ def _extract_gate_punches(
     if not GATE_RUNS_JSONL.exists():
         return punches
 
-    for raw_line in GATE_RUNS_JSONL.read_text().splitlines():
+    try:
+        lines = GATE_RUNS_JSONL.read_text().splitlines()
+    except OSError as exc:
+        print(f"WARNING: cannot read {GATE_RUNS_JSONL}: {exc}", file=sys.stderr)
+        return punches
+
+    for raw_line in lines:
         line = raw_line.strip()
         if not line:
             continue
@@ -208,7 +229,7 @@ def _extract_gate_punches(
         ts_ms = _to_int_timestamp(run_ts)
         if ts_ms is None and isinstance(run_ts, str):
             try:
-                dt = datetime.datetime.fromisoformat(run_ts)
+                dt = datetime.datetime.fromisoformat(run_ts.replace("Z", "+00:00"))
                 ts_ms = int(dt.timestamp() * 1000)
             except ValueError:
                 pass
@@ -260,14 +281,16 @@ def _insert_punches(
             ")"
         )
 
-    insert_query = (
-        "INSERT IGNORE INTO punch_cards.punches "
-        "(task_id, punch_type, punch_key, observed_at, source_hash) VALUES "
-        + ", ".join(value_parts)
-    )
-    out = dolt_sql(insert_query)
-    if out is None:
-        return 0
+    for i in range(0, len(value_parts), BATCH_SIZE):
+        batch = value_parts[i : i + BATCH_SIZE]
+        insert_query = (
+            "INSERT IGNORE INTO punch_cards.punches "
+            "(task_id, punch_type, punch_key, observed_at, source_hash) VALUES "
+            + ", ".join(batch)
+        )
+        out = dolt_sql(insert_query)
+        if out is None:
+            return 0
 
     after_out = dolt_sql(
         f"SELECT COUNT(*) FROM punch_cards.punches WHERE task_id = '{task_q}'"
@@ -356,6 +379,10 @@ def _count_matching_punches(
 def cmd_evaluate(task_id: str, card_id: str) -> tuple[str, list[dict[str, str]]]:
     """Evaluate whether required punches exist for task/card requirements."""
     requirements = _fetch_card_requirements(card_id)
+    if not requirements:
+        print(f"FAIL: no requirements found for card_id '{card_id}'", file=sys.stderr)
+        return "fail", []
+
     missing: list[dict[str, str]] = []
 
     for req in requirements:
@@ -375,7 +402,7 @@ def cmd_evaluate(task_id: str, card_id: str) -> tuple[str, list[dict[str, str]]]
                 }
             )
 
-    status = "PASS" if not missing else "FAIL"
+    status = "pass" if not missing else "fail"
     print(f"Status: {status}")
     if missing:
         print("Missing required punches:")
@@ -398,7 +425,7 @@ def _insert_checkpoint(
     """Insert checkpoint row and return checkpoint_id from LAST_INSERT_ID."""
     task_q = _sql_escape_literal(task_id)
     card_q = _sql_escape_literal(card_id)
-    status_q = _sql_escape_literal(status.lower())
+    status_q = _sql_escape_literal(status)
     validated_q = _sql_escape_literal(validated_at)
 
     if missing:
@@ -417,7 +444,15 @@ def _insert_checkpoint(
     if out is None:
         return None
 
-    id_out = dolt_sql("SELECT LAST_INSERT_ID()")
+    # Re-query by unique constraint — LAST_INSERT_ID() is session-scoped
+    # and each dolt_sql() call spawns a new process.
+    id_query = (
+        "SELECT checkpoint_id FROM punch_cards.checkpoints "
+        f"WHERE task_id = '{task_q}' AND card_id = '{card_q}' "
+        f"AND validated_at = '{validated_q}' "
+        "ORDER BY checkpoint_id DESC LIMIT 1"
+    )
+    id_out = dolt_sql(id_query)
     if id_out is None:
         return None
     rows = _parse_csv_rows(id_out)
@@ -471,20 +506,24 @@ def cmd_checkpoint(task_id: str, card_id: str) -> tuple[int | None, str | None, 
     if checkpoint_id is None:
         print("checkpoint_id: n/a")
         print("dolt_commit_hash: n/a")
-        return None, None, status.lower()
+        return None, None, status
 
     dolt_commit_hash: str | None = None
-    if status.lower() == "pass":
+    if status == "pass":
         dolt_commit_hash = _commit_if_pass(task_id, card_id)
         if dolt_commit_hash:
-            _update_checkpoint_commit_hash(checkpoint_id, dolt_commit_hash)
+            if not _update_checkpoint_commit_hash(checkpoint_id, dolt_commit_hash):
+                print(
+                    f"WARNING: failed to update checkpoint {checkpoint_id} with commit hash",
+                    file=sys.stderr,
+                )
 
     print(f"checkpoint_id: {checkpoint_id}")
     print(f"dolt_commit_hash: {dolt_commit_hash or 'n/a'}")
-    return checkpoint_id, dolt_commit_hash, status.lower()
+    return checkpoint_id, dolt_commit_hash, status
 
 
-def main() -> None:
+def main() -> int:
     """CLI entry point for mint/evaluate/checkpoint commands."""
     parser = argparse.ArgumentParser(
         prog="punch_engine",
@@ -515,11 +554,15 @@ def main() -> None:
 
     if args.command == "mint":
         cmd_mint(args.task_id, bead_id=args.bead_id)
+        return 0
     elif args.command == "evaluate":
-        cmd_evaluate(args.task_id, args.card_id)
+        status, _missing = cmd_evaluate(args.task_id, args.card_id)
+        return 0 if status == "pass" else 1
     elif args.command == "checkpoint":
-        cmd_checkpoint(args.task_id, args.card_id)
+        _cp_id, _hash, status = cmd_checkpoint(args.task_id, args.card_id)
+        return 0 if status == "pass" else 1
+    return 2
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
