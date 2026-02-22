@@ -1,30 +1,29 @@
 ---
 description: Run CI checks locally and fix any issues before pushing
+auto_execution_mode: 3
+punch_card: fix-ci
 ---
 
 # Fix CI Workflow
 
-Use this workflow to run all CI checks locally and fix issues before pushing to GitHub. This ensures your commits will pass CI on the first try.
+Use this workflow to run all CI checks locally and fix issues before pushing to GitHub.
+This ensures your commits will pass CI on the first try.
+
+**Punch Card:** `fix-ci` (5 rows, 4 required)
+**Commands Reference:** [`.kilocode/commands.toml`](../commands.toml)
 
 ## Prerequisites
 
-Ensure you're in the virtual environment:
-```bash
-source .venv/bin/activate
-```
+Ensure you're using the virtual environment. All commands in this workflow use
+explicit `.venv/bin/python -m ...` invocations (no global installs).
 
-Note: even if you activate the venv, prefer explicit venv-safe invocations in this repo:
-
-```bash
-.venv/bin/python -m <tool> ...
-```
+---
 
 ## Step 1: Run Ruff Format Check
 
-Check code formatting:
-```bash
-.venv/bin/python -m ruff format --check .
-```
+> 📌 `format ruff` → [`commands.format_ruff`](../commands.toml)
+> Resolves to: `.venv/bin/python -m ruff format --check .`
+> Gate wrapper: `bounded_gate.py` · `receipt_required = true`
 
 **If it fails:**
 ```bash
@@ -37,10 +36,9 @@ This will auto-fix all formatting issues. Review the changes with `git diff` bef
 
 ## Step 2: Run Ruff Lint
 
-Check for linting issues:
-```bash
-.venv/bin/python -m ruff check .
-```
+> 📌 `check ruff` → [`commands.check_ruff`](../commands.toml)
+> Resolves to: `.venv/bin/python -m ruff check .`
+> Gate wrapper: `bounded_gate.py` · `receipt_required = true`
 
 **If it fails:**
 
@@ -51,10 +49,11 @@ Try auto-fixing:
 
 For issues that can't be auto-fixed, the agent should:
 1. Read the error output carefully
-2. Use `grep_search` or `codebase-retrieval` to find the problematic code
-3. Use `view` to read the file
-4. Use `str-replace-editor` to fix the issue
-5. Re-run `ruff check .` to verify
+2. Use codebase retrieval to find the problematic code:
+   > 📌 `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
+3. Use `read_file` to examine the file
+4. Use `edit_file` / `apply_diff` to fix the issue
+5. Re-run `check ruff` to verify
 
 Common issues:
 - Unused imports: Remove them
@@ -66,21 +65,20 @@ Common issues:
 
 ## Step 3: Run Mypy Type Checking
 
-Check type annotations:
-```bash
-.venv/bin/python -m mypy src
-```
+> 📌 `check mypy` → [`commands.check_mypy`](../commands.toml)
+> Resolves to: `.venv/bin/python -m mypy src`
+> Gate wrapper: `bounded_gate.py` · `receipt_required = true`
 
 **If it fails:**
 
 The agent should:
 1. Read the mypy error output (shows file:line and error type)
-2. Use `view` to read the problematic file
+2. Use `read_file` to examine the problematic file
 3. Fix type issues:
    - Add missing type annotations
    - Fix incorrect type hints
    - Add `# type: ignore` comments only as last resort with explanation
-4. Re-run `.venv/bin/python -m mypy src` to verify
+4. Re-run `check mypy` to verify
 
 Common issues:
 - Missing return type annotations
@@ -92,10 +90,9 @@ Common issues:
 
 ## Step 4: Run Full Test Suite
 
-Run all tests:
-```bash
-.venv/bin/python -m pytest -q
-```
+> 📌 `test pytest` → [`commands.test_pytest`](../commands.toml)
+> Resolves to: `.venv/bin/python -m pytest -q`
+> Gate wrapper: `bounded_gate.py` · `receipt_required = true`
 
 **If it fails:**
 
@@ -105,25 +102,22 @@ The agent should:
     ```bash
     .venv/bin/python -m pytest tests/test_file.py::TestClass::test_method -v
     ```
-3. Read the test file to understand what's being tested
-4. Read the implementation code being tested
+3. Use `read_file` to examine the test file and understand what's being tested
+4. Use codebase retrieval to understand the implementation:
+   > 📌 `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
 5. Fix the issue in the implementation or test
 6. Re-run the specific test to verify
 7. Run full suite again to ensure no regressions
 
 ---
 
-## Step 5: Run All Checks Together
+## Step 5: Run All Checks (Composite Gate)
 
-Once individual checks pass, run everything together to simulate CI:
+Once individual checks pass, run the full quality gate composite:
 
-// turbo
-```bash
-.venv/bin/python -m ruff format --check . \
-  && .venv/bin/python -m ruff check . \
-  && .venv/bin/python -m mypy src \
-  && .venv/bin/python -m pytest -q
-```
+> 📌 `gate quality` → [`commands.gate_quality`](../commands.toml)
+> Composite: `format_ruff` → `check_ruff` → `check_mypy` → `test_pytest`
+> All run through `bounded_gate.py` with receipt tracking.
 
 **If this passes:** ✅ Your code is ready to push!
 
@@ -135,7 +129,6 @@ Once individual checks pass, run everything together to simulate CI:
 
 For a fast feedback loop during development:
 
-// turbo
 ```bash
 .venv/bin/python -m ruff format . \
   && .venv/bin/python -m ruff check --fix . \
@@ -157,12 +150,11 @@ Review any changes made by auto-formatters before committing.
 
 When running this workflow, the agent should:
 
-1. **Run checks sequentially** - Don't skip ahead if earlier checks fail
-2. **Use parallel tool calls** when gathering context about errors
-3. **Make minimal, targeted fixes** - Don't refactor unrelated code
-4. **Verify each fix** - Re-run the specific check after fixing
-5. **Provide clear status updates** - Tell the user what's being fixed and why
-6. **Stop if uncertain** - Ask the user for clarification on ambiguous errors
+1. **Run checks sequentially** — Don't skip ahead if earlier checks fail
+2. **Make minimal, targeted fixes** — Don't refactor unrelated code
+3. **Verify each fix** — Re-run the specific check after fixing
+4. **Provide clear status updates** — Tell the user what's being fixed and why
+5. **Stop if uncertain** — Ask the user for clarification on ambiguous errors
 
 ### Example Execution Flow
 
@@ -170,29 +162,29 @@ When running this workflow, the agent should:
 User: @fix-ci
 
 Agent:
-1. Runs: ruff format --check .
+1. format ruff → commands.format_ruff
    → Fails on 3 files
    → Runs: ruff format .
    → ✅ Fixed
 
-2. Runs: ruff check .
+2. check ruff → commands.check_ruff
    → Fails: unused import in test_deps.py:15
    → Views file, removes import
-   → Re-runs: ruff check .
+   → Re-runs check
    → ✅ Fixed
 
-3. Runs: mypy src
+3. check mypy → commands.check_mypy
    → Fails: Missing return type in algos.py:80
    → Views file, adds return type
-   → Re-runs: mypy src
+   → Re-runs check
    → ✅ Fixed
 
-4. Runs: pytest -q
-   → All 81 tests pass
+4. test pytest → commands.test_pytest
+   → All tests pass
    → ✅ Fixed
 
-5. Runs: Full CI simulation
-   → ✅ All checks pass
+5. gate quality → commands.gate_quality
+   → ✅ All 4 gates pass with receipts
 
 Summary: Fixed 2 formatting files, 1 unused import, 1 type annotation.
 Ready to push!
@@ -200,27 +192,45 @@ Ready to push!
 
 ---
 
+## EXIT GATE: Punch Card Checkpoint
+
+**Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
+
+> 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id} --bead-id {bead_id}`
+
+> 🚪 `checkpoint punch-card {task_id} fix-ci` → [`commands.punch_checkpoint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} fix-ci`
+> **receipt_required = true** — this is a hard gate.
+
+**If checkpoint FAILS:** Do NOT call `attempt_completion`. Review which required punches
+are missing, complete the missing steps, re-mint, and re-checkpoint.
+
+**If checkpoint PASSES:** Proceed to `attempt_completion` with the fix summary.
+
+---
+
 ## Troubleshooting
 
 ### "Command not found: ruff"
 ```bash
-pip install -e .[dev]
+.venv/bin/pip install -e .[dev]
 ```
 
 ### "No module named 'cli'" (or other import errors)
 ```bash
-pip install -e .
+.venv/bin/pip install -e .
 ```
 
 ### Tests fail with import errors
 ```bash
-pip install -e .[test]
+.venv/bin/pip install -e .[test]
 ```
 
 ### Mypy cache issues
 ```bash
-mypy --clear-cache
-mypy src
+.venv/bin/python -m mypy --clear-cache
+.venv/bin/python -m mypy src
 ```
 
 ---
@@ -233,3 +243,22 @@ If tests pass locally but fail in CI:
 - Check Python version compatibility
 - Check for version-specific syntax or features
 - Review CI logs for environment-specific errors
+
+---
+
+## Related Workflows
+
+- [`/start-task`](./start-task.md) — Task preparation phase
+- [`/execute-task`](./execute-task.md) — Task execution phase
+- [`/refactor`](./refactor.md) — Refactoring workflow
+
+## Related Skills
+
+- [`repomap-codebase-retrieval`](../skills/repomap-codebase-retrieval/SKILL.md) — Semantic code search
+- [`sonarqube-ops`](../skills/sonarqube-ops/SKILL.md) — Code quality metrics
+
+## Philosophy
+
+This workflow enforces **all four quality gates in sequence**, each tracked through
+`bounded_gate.py` with receipts. Every gate invocation maps to a `commands.toml` route.
+No raw CLI without a routing annotation. Structure discipline all the way down.

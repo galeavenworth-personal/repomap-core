@@ -62,3 +62,5 @@ docs/research/
 screenshots/
 .beads/issues.jsonl.backup-pre-dolt-20260220
 docs/infra/mtls-lockdown.md
+docs/comms/oc-daemon/CHANNEL.md
+docs/comms/
