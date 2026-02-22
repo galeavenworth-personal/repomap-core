@@ -8,6 +8,12 @@
 - **audit-orchestrator** → Adversarial pressure testing
 - **Original workflows** (`/start-task`, `/execute-task`, etc.) → Straightforward single-agent tasks
 
+## Composite Commands (Frequently Used)
+
+- **`address pr-feedback`** → Full PR address-and-respond cycle: fetch threads → implement fixes → gate quality → push + respond
+- **`gate quality`** → Sequential ruff format/check + mypy + pytest
+- **`land plane`** → Quality gates + bead closure + export
+
 ## Thinking Plans
 
 Composable delegation recipes under `.kilocode/contracts/thinking/plans/`:
