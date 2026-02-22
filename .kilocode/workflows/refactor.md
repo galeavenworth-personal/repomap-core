@@ -1,20 +1,26 @@
 ---
 description: AI-enhanced refactoring workflow with tool integration and design pattern mapping
+auto_execution_mode: 3
+punch_card: refactor
 ---
 
 # Refactoring Workflow
 
-Use this workflow when refactoring code, whether triggered by SonarQube issues, code review feedback, or proactive improvement. This workflow integrates codebase exploration tools, design pattern mappings, and verification checkpoints.
+Use this workflow when refactoring code, whether triggered by SonarQube issues, code
+review feedback, or proactive improvement. This workflow integrates codebase exploration
+tools, design pattern mappings, and verification checkpoints.
+
+**Punch Card:** `refactor` (6 rows, 5 required)
+**Commands Reference:** [`.kilocode/commands.toml`](../commands.toml)
 
 ## Phase 0: Detect Issues
 
 Refactoring work can originate from multiple sources. Each has different context and urgency.
 
 ### Source A: SonarQube Issues
-```
-// turbo
-mcp7_search_sonar_issues_in_projects with appropriate filters
-```
+
+> 📌 `search issues` → [`commands.search_issues`](../commands.toml)
+> Resolves to: `mcp--sonarqube--search_sonar_issues_in_projects`
 
 Filter by severity for prioritization:
 - `BLOCKER`, `CRITICAL` → address immediately
@@ -24,13 +30,17 @@ Filter by severity for prioritization:
 **Context available**: Rule ID, exact line, severity, clean code attribute
 
 ### Source B: Beads Issues
+
+> 📌 `list ready` → [`commands.list_ready`](../commands.toml)
+> Resolves to: `.kilocode/tools/bd ready`
+
 Refactoring needs discovered during exploration tasks:
-```
+```bash
 .kilocode/tools/bd ready --json | jq '.[] | select(.labels | contains(["refactor"]))'
 ```
 
 When creating refactor issues from exploration:
-```
+```bash
 .kilocode/tools/bd create --title "Refactor: [description]" --json
 .kilocode/tools/bd dep add <new-id> <parent-id> --type discovered-from
 ```
@@ -38,20 +48,24 @@ When creating refactor issues from exploration:
 **Context available**: Parent task context, discovery notes, scope constraints
 
 ### Source C: PR/Code Review Feedback
+
 Reviewer comments identifying:
 - Code smells or complexity concerns
 - Maintainability suggestions
 - Pattern violations
 
+> 📌 `fetch pr` → [`commands.fetch_pr`](../commands.toml)
+> 📌 `list pr-comments` → [`commands.list_pr_comments`](../commands.toml)
+
 **Context available**: Reviewer reasoning, specific code locations, sometimes suggested approach
 
 ### Source D: Linter/Type Checker Warnings
-```
-# Python examples
-ruff check . --select=C901  # complexity
-mypy . --warn-return-any    # type issues
-pylint . --disable=all --enable=R  # refactoring suggestions
-```
+
+> 📌 `check ruff` → [`commands.check_ruff`](../commands.toml)
+> Resolves to: `.venv/bin/python -m ruff check .`
+
+> 📌 `check mypy` → [`commands.check_mypy`](../commands.toml)
+> Resolves to: `.venv/bin/python -m mypy src`
 
 Common refactor-relevant codes:
 - `C901` (ruff/flake8): Function too complex
@@ -61,15 +75,8 @@ Common refactor-relevant codes:
 
 **Context available**: Metric thresholds, exact locations, sometimes fix suggestions
 
-### Source E: IDE/Windsurf Suggestions
-Windsurf surfaces refactoring opportunities via:
-- **Lightbulb actions**: Quick fixes and refactorings on current selection
-- **Problems panel**: Aggregated warnings from language servers
-- **Code actions**: Context-aware suggestions (extract method, rename, etc.)
+### Source E: Exploration-Driven Discovery
 
-**Context available**: IDE understands AST, can preview changes, integrates with language server
-
-### Source F: Exploration-Driven Discovery
 During `/codebase-exploration` or feature investigation:
 - Encountered complexity that slowed understanding
 - Found code that should be refactored before adding features
@@ -87,7 +94,6 @@ During `/codebase-exploration` or feature investigation:
 | PR Feedback | High | Medium (human judgment) | Varies |
 | Beads (blocking) | High | High (linked context) | Scoped |
 | Linter warnings | Medium | Medium (thresholds) | Targeted |
-| IDE suggestions | Medium | High (AST-aware) | Local |
 | Exploration discovery | Low-Medium | Varies | Often broad |
 | SonarQube MINOR | Low | High | Targeted |
 
@@ -98,23 +104,28 @@ During `/codebase-exploration` or feature investigation:
 **Goal**: Understand what the code does and why, before changing it.
 
 ### Step 1.1: Semantic Overview
-```
-Augment: "What does [function/class] do and what depends on it?"
-```
+
+> 📌 `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
+> Resolves to: `mcp--augment___context___engine--codebase___retrieval`
+
+Query: "What does [function/class] do and what depends on it?"
 → Get purpose, callers, related components
 
-### Step 1.2: Execution Flow (for complex code)
-Request from user:
-> "I need a codemap showing [the execution path through this code]"
+### Step 1.2: Quantitative Analysis
 
-→ Get visual trace with exact line numbers
+Use `search_files` to find ALL references to the target function/class.
 
-### Step 1.3: Quantitative Analysis
-```
-Native grep: Find all references to the target function/class
-Fast Context: "[function name] error handling edge cases"
-```
+> 📌 `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
+
+Query: "[function name] error handling edge cases"
 → Know the blast radius before making changes
+
+### Step 1.3: SonarQube Metrics (if applicable)
+
+> 📌 `inspect measures` → [`commands.inspect_measures`](../commands.toml)
+> Resolves to: `mcp--sonarqube--get_component_measures`
+
+Get complexity, coverage, and violations for the target component.
 
 ---
 
@@ -182,16 +193,22 @@ Use this mapping to connect SonarQube rules to design patterns.
 ## Phase 3: Plan the Refactor
 
 ### Step 3.1: Use Sequential Thinking for Complex Decisions
-```
-process_thought when:
-- Multiple valid patterns could apply (use "Analysis" stage, branch for each pattern)
-- Refactor affects multiple components (use "Synthesis" stage)
-- Risk assessment is non-trivial (track in assumptions_challenged)
 
-Use generate_summary to review reasoning before executing refactor.
-```
+> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--process_thought`
+
+Use when:
+- Multiple valid patterns could apply (use `stage=Analysis`, branch for each pattern)
+- Refactor affects multiple components (use `stage=Synthesis`)
+- Risk assessment is non-trivial (track in `assumptions_challenged`)
+
+> 📌 `summarize thinking` → [`commands.summarize_thinking`](../commands.toml)
+> Resolves to: `mcp--sequentialthinking--generate_summary`
+
+Review reasoning before executing refactor.
 
 ### Step 3.2: Draft Explicit Plan
+
 Before any edits, output:
 ```
 REFACTOR PLAN:
@@ -207,6 +224,7 @@ REFACTOR PLAN:
 ```
 
 ### Step 3.3: Scope Check
+
 Ask yourself:
 - Can this be done in ~30 minutes?
 - Is the change behavior-preserving?
@@ -219,13 +237,12 @@ If NO to any: break into smaller refactors or gather more context.
 ## Phase 4: Execute Changes
 
 ### Step 4.1: Pre-Edit Verification
-```
-// turbo
-Native grep: Find ALL call sites of the target
-```
+
+Use `search_files` to find ALL call sites of the target.
 → Ensure you know every place that needs updating
 
 ### Step 4.2: Apply Incrementally
+
 - One coherent cluster of changes at a time
 - After each cluster, ensure:
   - Imports are updated
@@ -233,6 +250,7 @@ Native grep: Find ALL call sites of the target
   - No broken references
 
 ### Step 4.3: Maintain Tool-Friendliness
+
 - Keep functions/classes small and focused
 - Use clear, consistent naming
 - Prefer explicit over implicit
@@ -242,21 +260,39 @@ Native grep: Find ALL call sites of the target
 ## Phase 5: Verify
 
 ### Step 5.1: Structural Verification
-```
-// turbo
-Native grep: Search for any broken references to renamed/moved items
-```
+
+Use `search_files` to find any broken references to renamed/moved items.
 
 ### Step 5.2: SonarQube Re-check (if applicable)
-```
-mcp7_get_component_measures for the modified files
-```
-→ Confirm complexity/smell metrics improved
 
-### Step 5.3: Test Execution
-```
-Run relevant tests for the modified code
-```
+> 📌 `inspect measures` → [`commands.inspect_measures`](../commands.toml)
+> Resolves to: `mcp--sonarqube--get_component_measures`
+
+Confirm complexity/smell metrics improved.
+
+### Step 5.3: Quality Gates
+
+> 📌 `gate quality` → [`commands.gate_quality`](../commands.toml)
+> Composite: `format_ruff` → `check_ruff` → `check_mypy` → `test_pytest`
+> All run through `bounded_gate.py` with receipt tracking.
+
+---
+
+## EXIT GATE: Punch Card Checkpoint
+
+**Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
+
+> 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id} --bead-id {bead_id}`
+
+> 🚪 `checkpoint punch-card {task_id} refactor` → [`commands.punch_checkpoint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} refactor`
+> **receipt_required = true** — this is a hard gate.
+
+**If checkpoint FAILS:** Do NOT call `attempt_completion`. Review which required punches
+are missing, complete the missing steps, re-mint, and re-checkpoint.
+
+**If checkpoint PASSES:** Proceed to `attempt_completion` with the refactor summary.
 
 ---
 
@@ -265,8 +301,8 @@ Run relevant tests for the modified code
 ❌ **Starting edits before understanding context**
    → Always run Phase 1 first
 
-❌ **Skipping grep for call sites**
-   → Augment may miss some references; grep finds ALL
+❌ **Skipping search for call sites**
+   → `retrieve codebase` may miss some references; `search_files` finds ALL
 
 ❌ **Over-engineering the fix**
    → Apply the simplest pattern that solves the smell
@@ -284,15 +320,14 @@ Run relevant tests for the modified code
 
 ## Quick Reference: Tool Selection
 
-| Need | Tool |
-|------|------|
-| Find issues automatically | `mcp7_search_sonar_issues_in_projects` |
-| Understand code purpose | `mcp0_codebase-retrieval` (Augment) |
-| Trace execution flow | Request Codemap from user |
-| Find ALL references | `search_files` (Native) |
-| Find implementation details | `search_files` (Native) |
-| Complex decision-making | `process_thought` + `generate_summary` |
-| Verify issue resolved | `mcp7_get_component_measures` |
+| Need | Command Route |
+|------|---------------|
+| Find SonarQube issues | `search issues` → [`commands.search_issues`](../commands.toml) |
+| Understand code purpose | `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml) |
+| Find ALL references | `search_files` (Kilo native tool) |
+| Complex decision-making | `decompose task` → [`commands.decompose_task`](../commands.toml) |
+| Verify issue resolved | `inspect measures` → [`commands.inspect_measures`](../commands.toml) |
+| Run quality gates | `gate quality` → [`commands.gate_quality`](../commands.toml) |
 
 ---
 
@@ -301,13 +336,11 @@ Run relevant tests for the modified code
 **Issue**: S3776 on `process_data()` with complexity 21 (allowed 15)
 
 ### Phase 1: Understand
-```
-Augment: "What does process_data do and what calls it?"
-→ "Processes incoming events, validates, transforms, persists. Called by EventHandler and BatchProcessor."
 
-Codemap request: "Show the execution path through process_data"
-→ Reveals 3 major branches: validation, transformation, persistence
-```
+> 📌 `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
+
+Query: "What does process_data do and what calls it?"
+→ "Processes incoming events, validates, transforms, persists. Called by EventHandler and BatchProcessor."
 
 ### Phase 2: Map
 - Smell: Cognitive complexity from nested conditionals + multiple responsibilities
@@ -333,8 +366,28 @@ REFACTOR PLAN:
 - Verify tests pass after each step
 
 ### Phase 5: Verify
-```
-grep: "process_data" in project → Confirm callers still work
-SonarQube: Complexity now 8 ✓
-Tests: All passing ✓
-```
+- `search_files`: "process_data" → Confirm callers still work
+- `inspect measures` → Complexity now 8 ✓
+- `gate quality` → All 4 gates pass ✓
+
+---
+
+## Related Workflows
+
+- [`/start-task`](./start-task.md) — Task preparation phase
+- [`/execute-task`](./execute-task.md) — Task execution phase
+- [`/fix-ci`](./fix-ci.md) — Quality gate fixes
+- [`/respond-to-pr-review`](./respond-to-pr-review.md) — PR review response
+
+## Related Skills
+
+- [`repomap-codebase-retrieval`](../skills/repomap-codebase-retrieval/SKILL.md) — Semantic code search
+- [`sequential-thinking-default`](../skills/sequential-thinking-default/SKILL.md) — Multi-step reasoning
+- [`sonarqube-ops`](../skills/sonarqube-ops/SKILL.md) — Code quality metrics
+- [`context7-docs-ops`](../skills/context7-docs-ops/SKILL.md) — Library documentation
+
+## Philosophy
+
+Refactoring is behavior-preserving transformation, not feature work. Every tool invocation
+maps to a `commands.toml` route. Every quality check uses `bounded_gate.py` with receipts.
+Structure discipline: from smell detection to pattern mapping to verified completion.
