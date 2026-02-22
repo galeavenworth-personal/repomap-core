@@ -11,7 +11,7 @@ Use Beads with Dolt server backend where:
 
 - Shared Dolt database (via server mode on port 3307) is persistent storage
 - All writes persist immediately — no sync step needed
-- Multiple repos (prefixed by `issue_prefix` in config) share a single Dolt database
+- Multiple repos (prefixed by `issue-prefix` in config) share a single Dolt database
 - JSONL files (`.beads/issues.jsonl`) are interchange format for cross-clone git sync
 - `bd export` / `bd import` replace the deprecated `bd sync` commands
 
@@ -19,8 +19,8 @@ Use Beads with Dolt server backend where:
 
 Each repository connects to the shared Dolt server with its own prefix:
 
-- **repomap-core**: `issue_prefix = repomap-core` (this repo)
-- **oc-daemon**: `issue_prefix = daemon`
+- **repomap-core**: `issue-prefix: repomap-core` (this repo)
+- **oc-daemon**: `issue-prefix: daemon`
 - Other repos: their own prefix, same Dolt server on port 3307
 - The Dolt database at `~/.dolt-data/beads` holds all repos' issues
 - `--prefix` flag on `bd create` routes issues to the correct partition
@@ -186,13 +186,14 @@ The following commands exist for backward compatibility but are **no-ops** with 
 
 ## CGO Build Note (v0.55.4)
 
-The pinned build script at `.kilocode/tools/beads_install.sh` builds from
-source with `CGO_ENABLED=1`, which is required for the Dolt backend. The
-version pin is in `.kilocode/tools/beads_version`.
+The pinned build script at `.kilocode/tools/beads_install.sh` (local-only,
+gitignored) builds from source with `CGO_ENABLED=1`, which is required for
+the Dolt backend. Run it once per machine to install. The version pin is in
+`.kilocode/tools/beads_version`.
 
 ## Troubleshooting
 
-- **CGO error on init**: Binary lacks CGO — rebuild with `beads_install.sh`
+- **CGO error on init**: Binary lacks CGO — rebuild with `.kilocode/tools/beads_install.sh` (local-only, gitignored)
 - **Server not listening**: Start Dolt server: `cd ~/.dolt-data/beads && dolt sql-server --port 3307 --host 127.0.0.1`
 - **Database not found**: Run `bd init --server --from-jsonl` to initialize
 - **Sync deprecated warnings**: Expected; `bd sync` is a no-op with Dolt. Use `bd export`/`bd import` for interchange.

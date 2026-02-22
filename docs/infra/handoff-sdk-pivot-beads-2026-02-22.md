@@ -33,7 +33,7 @@ All have `discovered-from:repomap-core-w1a` dependency linking back to the decis
 
 - `.kilocode/tools/beads_version` — 0.52.0 → 0.55.4
 - `.beads/routes.jsonl` — new (daemon routing)
-- `/home/galeavenworth/Projects-Employee-1/oc-daemon/.beads/routes.jsonl` — new (repomap-core routing)
+- `../oc-daemon/.beads/routes.jsonl` — new (repomap-core routing, in sibling repo)
 - `.kilocode/skills/beads-local-db-ops/SKILL.md` — updated for v0.55.4 + routing docs
 - `.kilocode/rules/beads.md` — updated for v0.55.4 + routing + hook policy
 
@@ -42,7 +42,7 @@ All have `discovered-from:repomap-core-w1a` dependency linking back to the decis
 ## Original Report (Session 1)
 
 ### 1. Decision Document Read
-Source: [`docs/research/sdk-prompt-api-pivot-decision-2026-02-22.md`](../research/sdk-prompt-api-pivot-decision-2026-02-22.md)
+Source: `docs/research/sdk-prompt-api-pivot-decision-2026-02-22.md` (local-only, gitignored — not tracked in repo)
 
 Identified 5 work streams (A–E) from the SDK Prompt API Pivot decision.
 
