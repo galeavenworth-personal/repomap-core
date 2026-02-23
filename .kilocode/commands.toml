@@ -468,3 +468,29 @@ target_mode = "audit-orchestrator"
 contract = ".kilocode/contracts/composability/handoff_packet.md"
 receipt_required = false
 notes = "Tier 2 tactical orchestrator — adversarial pressure testing"
+
+# ─── Factory Dispatch (kilo serve HTTP API) ──────────────────────────────────
+
+[commands.factory_dispatch]
+verb = "dispatch"
+noun = "factory"
+skill = "cli"
+tool = ".kilocode/tools/factory_dispatch.sh"
+notes = "First-class factory kickoff — creates session, sends prompt, monitors to completion"
+receipt_required = false
+
+[commands.factory_dispatch_attestation]
+verb = "dispatch"
+noun = "attestation"
+skill = "cli"
+tool = ".kilocode/tools/factory_dispatch.sh -m plant-manager .kilocode/prompts/attestation-health-check.json"
+notes = "Run mode attestation health check across all 14 custom modes"
+receipt_required = false
+
+[commands.factory_dispatch_fire_and_forget]
+verb = "dispatch"
+noun = "factory-async"
+skill = "cli"
+tool = ".kilocode/tools/factory_dispatch.sh --no-monitor"
+notes = "Fire-and-forget factory dispatch — prints session ID and exits"
+receipt_required = false

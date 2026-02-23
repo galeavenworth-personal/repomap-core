@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "stack": ".kilocode/tools/start-stack.sh"
+    "stack": ".kilocode/tools/start-stack.sh",
+    "temporal:worker": "tsx src/temporal/worker.ts",
+    "temporal:dispatch": "tsx src/temporal/dispatch.ts"
   },
   "keywords": [
     "opencode",
@@ -25,6 +27,10 @@
   "license": "MIT",
   "dependencies": {
     "@opencode-ai/sdk": "^1.2.10",
+    "@temporalio/activity": "^1.11.0",
+    "@temporalio/client": "^1.11.0",
+    "@temporalio/worker": "^1.11.0",
+    "@temporalio/workflow": "^1.11.0",
     "mysql2": "^3.12.0"
   },
   "devDependencies": {

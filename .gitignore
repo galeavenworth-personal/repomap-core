@@ -69,3 +69,5 @@ docs/infra/mtls-lockdown.md
 docs/comms/oc-daemon/CHANNEL.md
 docs/comms/
 .oc-daemon-staging/
+.kilocode/prompts/attestation-health-check.json
+.kilocode/prompts/monorepo-migration-hlr.md
