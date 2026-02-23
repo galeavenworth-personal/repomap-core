@@ -58,6 +58,10 @@ Thumbs.db
 /plans/
 docs/research/
 
+# Research docs (local iteration artifacts)
+docs/research/
+docs/pr-review/
+
 # Browser/tooling artifacts
 screenshots/
 .beads/issues.jsonl.backup-pre-dolt-20260220
