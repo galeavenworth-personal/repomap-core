@@ -13,6 +13,9 @@ build/
 dist/
 *.egg-info/
 
+# Node.js
+node_modules/
+
 # Test / typecheck / linter caches
 .mypy_cache/
 .pytest_cache/
@@ -57,9 +60,6 @@ Thumbs.db
 # plans and research (internal iteration docs, repo noise reduction)
 /plans/
 docs/research/
-
-# Research docs (local iteration artifacts)
-docs/research/
 docs/pr-review/
 
 # Browser/tooling artifacts
@@ -68,3 +68,6 @@ screenshots/
 docs/infra/mtls-lockdown.md
 docs/comms/oc-daemon/CHANNEL.md
 docs/comms/
+.oc-daemon-staging/
+.kilocode/prompts/attestation-health-check.json
+.kilocode/prompts/monorepo-migration-hlr.md

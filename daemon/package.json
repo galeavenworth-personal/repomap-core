@@ -1,0 +1,49 @@
+{
+  "name": "oc-daemon",
+  "version": "0.1.0",
+  "description": "OpenCode replication daemon - taps kilo serve SSE event stream, classifies session events, mints punches, writes to Dolt",
+  "type": "module",
+  "main": "build/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node build/index.js",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "stack": "../.kilocode/tools/start-stack.sh",
+    "temporal:worker": "tsx src/temporal/worker.ts",
+    "temporal:dispatch": "tsx src/temporal/dispatch.ts",
+    "temporal:dep-watch": "tsx src/temporal/dep-watch.cli.ts"
+  },
+  "keywords": [
+    "opencode",
+    "kilo",
+    "daemon",
+    "dolt",
+    "punch-card",
+    "replication"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@opencode-ai/sdk": "^1.2.10",
+    "@temporalio/activity": "^1.11.0",
+    "@temporalio/client": "^1.11.0",
+    "@temporalio/worker": "^1.11.0",
+    "@temporalio/workflow": "^1.11.0",
+    "mysql2": "^3.12.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.3",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.56.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
