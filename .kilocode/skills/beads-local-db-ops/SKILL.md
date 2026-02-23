@@ -11,7 +11,7 @@ Use Beads with Dolt server backend where:
 
 - Shared Dolt database (via server mode on port 3307) is persistent storage
 - All writes persist immediately — no sync step needed
-- Multiple repos (prefixed by `issue_prefix` in config) share a single Dolt database
+- Multiple repos (prefixed by `issue-prefix` in config) share a single Dolt database
 - JSONL files (`.beads/issues.jsonl`) are interchange format for cross-clone git sync
 - `bd export` / `bd import` replace the deprecated `bd sync` commands
 
@@ -19,10 +19,39 @@ Use Beads with Dolt server backend where:
 
 Each repository connects to the shared Dolt server with its own prefix:
 
-- **repomap-core**: `issue_prefix = repomap-core` (this repo)
+- **repomap-core**: `issue-prefix: repomap-core` (this repo)
+- **oc-daemon**: `issue-prefix: daemon`
 - Other repos: their own prefix, same Dolt server on port 3307
 - The Dolt database at `~/.dolt-data/beads` holds all repos' issues
 - `--prefix` flag on `bd create` routes issues to the correct partition
+
+### Cross-Repo Routing (routes.jsonl)
+
+To create beads in a different repo's prefix from the current repo, each repo
+needs a `.beads/routes.jsonl` file mapping prefixes to relative paths:
+
+**repomap-core** `.beads/routes.jsonl`:
+```jsonl
+{"prefix":"daemon-","path":"../oc-daemon"}
+```
+
+**oc-daemon** `.beads/routes.jsonl`:
+```jsonl
+{"prefix":"repomap-core-","path":"../repomap-core"}
+```
+
+**Format:** Each line is a JSON object with:
+- `prefix`: the ID prefix with trailing hyphen (e.g., `"daemon-"`)
+- `path`: relative path from the project root (parent of `.beads/`) to the target repo's project root
+
+**Usage:**
+```bash
+# From repomap-core, create a bead in daemon's rig
+.kilocode/tools/bd create "Fix classifier" -t task -p 1 --prefix daemon
+
+# List beads in another rig
+.kilocode/tools/bd list --rig daemon
+```
 
 ## Two-Clone "Employees" Model
 
@@ -40,6 +69,7 @@ Use this skill for:
 - During work: `bd create`, `bd update`, `bd show`, `bd close` (all persist immediately)
 - Session end: `bd export` if JSONL interchange is needed for cross-clone sync
 - Cross-clone sync: `bd export` → git commit JSONL → other clone `bd import`
+- Cross-repo bead creation: use `--prefix` flag with routes.jsonl configured
 
 ## Dolt Server Prerequisites
 
@@ -85,6 +115,9 @@ nc -z 127.0.0.1 3307 && echo "Server OK" || echo "Start Dolt server first"
 
 # Create new issues
 .kilocode/tools/bd create "Title" -d "Description" -p 0 -l "label1,label2"
+
+# Create in another repo's prefix (requires routes.jsonl)
+.kilocode/tools/bd create "Title" -t task -p 1 --prefix daemon
 ```
 
 ### Session End
@@ -97,6 +130,23 @@ nc -z 127.0.0.1 3307 && echo "Server OK" || echo "Start Dolt server first"
 .kilocode/tools/bd export -o .beads/issues.jsonl
 ```
 
+## Git Hooks Policy
+
+**Do NOT use `bd hooks install`.** Git hook shims resolve `bd` via PATH, which
+may find the wrong version (e.g., a release binary without CGO support). This
+causes hard crashes that block all git commits.
+
+Instead, use the opencode plugin at `.opencode/plugins/beads-sync.ts` which:
+- Uses the pinned `bd` wrapper at `.kilocode/tools/bd`
+- Handles pre-commit export, post-merge import, pre-push validation
+- Covers ~90% of agent-initiated git operations
+- Degrades gracefully if `bd` is unavailable
+
+If `bd doctor` warns about missing hooks, this is expected and safe to ignore.
+
+**v0.55.4 note:** Beads upstream removed the `examples/git-hooks/` directory,
+confirming the shift away from git hooks toward editor plugin integration.
+
 ## Deprecated Commands
 
 The following commands exist for backward compatibility but are **no-ops** with Dolt backend:
@@ -108,7 +158,7 @@ The following commands exist for backward compatibility but are **no-ops** with 
 - For JSONL interchange: `bd export` (to JSONL) and `bd import` (from JSONL)
 - For Dolt remote ops: `bd dolt push` and `bd dolt pull`
 
-## Advanced Features (available in v0.52.0+)
+## Advanced Features (available in v0.55.4+)
 
 - `bd gate` — Async coordination gates for fanout/collect patterns
 - `bd query` — Query issues using simple query language
@@ -118,6 +168,10 @@ The following commands exist for backward compatibility but are **no-ops** with 
 - `bd mol` — Molecule commands (work templates)
 - `bd formula` — Workflow formulas
 - `bd slot` — Agent bead slots
+- `bd compact` — Dolt compaction for closed issues (new in v0.55.4)
+- `bd list --no-parent` — Filter to top-level issues only (new in v0.55.4)
+- `bd list --rig <name>` — Query another rig's beads from current repo
+- `bd move` / `bd refile` — Move issues between rigs
 - Custom types: molecule, gate, convoy, merge-request, slot, agent, role, rig, message
 
 ## Operational Contract
@@ -128,19 +182,23 @@ The following commands exist for backward compatibility but are **no-ops** with 
 - Never work on same issue in both clones concurrently
 - CGO-enabled bd binary is required (build from source if release binary lacks CGO)
 - Issue prefix (`repomap-core`) automatically partitions issues per repo in the shared database
+- Cross-repo routing requires `routes.jsonl` in both repos
 
-## CGO Build Note (v0.52.0)
+## CGO Build Note (v0.55.4)
 
-The v0.52.0 GitHub release binary ships with `CGO_ENABLED=0` (known upstream
-bug: [#1849](https://github.com/steveyegge/beads/issues/1849)). The Dolt
-backend requires CGO. Use `.kilocode/tools/beads_install.sh` which builds
-from source with `CGO_ENABLED=1`.
+The pinned build script at `.kilocode/tools/beads_install.sh` (local-only,
+gitignored) builds from source with `CGO_ENABLED=1`, which is required for
+the Dolt backend. Run it once per machine to install. The version pin is in
+`.kilocode/tools/beads_version`.
 
 ## Troubleshooting
 
-- **CGO error on init**: Binary lacks CGO — rebuild with `beads_install.sh`
+- **CGO error on init**: Binary lacks CGO — rebuild with `.kilocode/tools/beads_install.sh` (local-only, gitignored)
 - **Server not listening**: Start Dolt server: `cd ~/.dolt-data/beads && dolt sql-server --port 3307 --host 127.0.0.1`
 - **Database not found**: Run `bd init --server --from-jsonl` to initialize
 - **Sync deprecated warnings**: Expected; `bd sync` is a no-op with Dolt. Use `bd export`/`bd import` for interchange.
 - **Federation errors**: Federation requires the beads database name on the server; use `bd doctor` for diagnostics
 - **Count mismatch (Dolt vs JSONL)**: Normal during migration. Run `bd export -o .beads/issues.jsonl` to re-sync JSONL.
+- **Missing hooks warning**: Expected — we use the opencode plugin instead of git hooks. Safe to ignore.
+- **Cross-repo create fails**: Check that `.beads/routes.jsonl` exists in the source repo with the correct prefix and relative path.
+- **Nil pointer on cross-repo deps**: Ensure both repos have routes.jsonl configured bidirectionally, and the target repo's `.beads/config.yaml` has the correct `issue-prefix`.

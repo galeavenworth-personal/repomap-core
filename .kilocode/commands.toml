@@ -22,7 +22,7 @@
 version = "1.0.0"
 inventory_date = "2026-02-21"
 source_bead = "repomap-core-4r3"
-total_bindings = 49  # 45 atomic + 4 composite
+total_bindings = 50  # 45 atomic + 5 composite
 
 # ─── Quality Gates (receipt_required = true via bounded_gate.py) ────────────
 
@@ -406,6 +406,24 @@ noun = "pr-comments"
 skill = "github-cli-code-review"
 tool = "gh pr view --json reviews,comments"
 receipt_required = false
+
+# ─── Composite: Address PR Feedback ────────────────────────────────────────
+
+[commands.address_pr_feedback]
+verb = "address"
+noun = "pr-feedback"
+skill = "github-cli-code-review"
+composite = ["fetch_pr", "list_pr_comments", "gate_quality"]
+receipt_required = true
+notes = """
+Full PR address-and-respond cycle:
+1. fetch_pr — pull PR metadata + review decision
+2. list_pr_comments — extract unresolved review threads
+3. [agent implements fixes based on thread contents]
+4. gate_quality — run quality gates before pushing
+5. [agent pushes + responds to threads]
+Steps 3 and 5 are agent-driven (not tool-bound).
+"""
 
 # ─── Composite: Land Plane (full session landing) ──────────────────────────
 
