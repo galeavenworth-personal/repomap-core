@@ -57,9 +57,6 @@ Thumbs.db
 # plans and research (internal iteration docs, repo noise reduction)
 /plans/
 docs/research/
-
-# Research docs (local iteration artifacts)
-docs/research/
 docs/pr-review/
 
 # Browser/tooling artifacts
