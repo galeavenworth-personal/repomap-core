@@ -23,8 +23,9 @@
  */
 
 import { Client, Connection } from "@temporalio/client";
-import { TASK_QUEUE } from "./worker.js";
 import type { AgentTaskInput, AgentTaskResult, AgentTaskStatus } from "./workflows.js";
+
+const TASK_QUEUE = "agent-tasks";
 
 async function main() {
   const args = process.argv.slice(2);
