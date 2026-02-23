@@ -34,6 +34,50 @@ export interface Daemon {
   stop(): Promise<void>;
 }
 
+type OcClient = ReturnType<typeof createOpencodeClient>;
+
+/** Record child session relationships when a session completes. */
+async function recordSessionChildren(
+  client: OcClient,
+  writer: DoltWriter,
+  taskId: string
+): Promise<void> {
+  try {
+    const { data: children } = await client.session.children({
+      path: { id: taskId },
+    });
+    if (!children) return;
+    for (const child of children) {
+      await writer.writeChildRelation(taskId, child.id);
+    }
+  } catch (e) {
+    console.error("[oc-daemon] Failed to record children:", e);
+  }
+}
+
+/** Process a single SSE event through the classify → write pipeline. */
+async function processEvent(
+  client: OcClient,
+  writer: DoltWriter,
+  event: unknown
+): Promise<void> {
+  const punch = classifyEvent(event as RawEvent);
+  if (!punch) return;
+
+  await writer.writePunch(punch);
+  if (punch.punchKey === "session_completed") {
+    await recordSessionChildren(client, writer, punch.taskId);
+  }
+}
+
+/** Return true if the error is an expected AbortError during shutdown. */
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
 export function createDaemon(config: DaemonConfig): Daemon {
   const client = createOpencodeClient({
     baseUrl: `http://${config.kiloHost}:${config.kiloPort}`,
@@ -51,7 +95,6 @@ export function createDaemon(config: DaemonConfig): Daemon {
 
   return {
     async start() {
-      // 1. Connect to Dolt
       console.log(
         `[oc-daemon] Connecting to kilo serve at ${config.kiloHost}:${config.kiloPort}`
       );
@@ -60,13 +103,11 @@ export function createDaemon(config: DaemonConfig): Daemon {
         `[oc-daemon] Connected to Dolt at ${config.doltHost}:${config.doltPort}`
       );
 
-      // Perform batch catch-up for missed events
       await runCatchUp(client, writer);
 
       let backoffMs = 1000;
       const maxBackoffMs = 30000;
 
-      // 2. Subscribe to SSE event stream with reconnection loop
       while (!abortController.signal.aborted) {
         try {
           console.log("[oc-daemon] Subscribing to SSE event stream...");
@@ -74,42 +115,14 @@ export function createDaemon(config: DaemonConfig): Daemon {
             signal: abortController.signal,
           });
 
-          // Reset backoff on successful connection
           backoffMs = 1000;
 
-          // 3. Process events through classify → write pipeline
           for await (const event of stream) {
-            const punch = classifyEvent(event as RawEvent);
-            if (punch) {
-              await writer.writePunch(punch);
-
-              if (punch.punchKey === "session_completed") {
-                try {
-                  const { data: children } = await client.session.children({
-                    path: { id: punch.taskId },
-                  });
-                  if (children) {
-                    for (const child of children) {
-                      await writer.writeChildRelation(punch.taskId, child.id);
-                    }
-                  }
-                } catch (e) {
-                  console.error("[oc-daemon] Failed to record children:", e);
-                }
-              }
-            }
+            await processEvent(client, writer, event);
           }
           console.log("[oc-daemon] SSE stream ended. Reconnecting...");
         } catch (error: unknown) {
-          // AbortError is expected during clean shutdown
-          const isAbort =
-            (error instanceof DOMException && error.name === "AbortError") ||
-            (error instanceof Error && error.name === "AbortError");
-
-          if (isAbort || abortController.signal.aborted) {
-            break;
-          }
-
+          if (isAbortError(error) || abortController.signal.aborted) break;
           console.error("[oc-daemon] SSE stream error:", error);
         }
 

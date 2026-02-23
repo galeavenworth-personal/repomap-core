@@ -169,6 +169,61 @@ export async function pollUntilDone(
   }
 }
 
+interface PartAccumulator {
+  totalParts: number;
+  toolCalls: number;
+  completedTools: number;
+  runningTools: number;
+  lastToolName: string | null;
+  lastPartType: string | null;
+}
+
+/** Extract flat parts from raw message groups. */
+function flattenMessageParts(messages: unknown): Array<Record<string, unknown>> {
+  if (!messages) return [];
+
+  const parts: Array<Record<string, unknown>> = [];
+  for (const group of messages as unknown[]) {
+    const items = Array.isArray(group) ? group : [group];
+    for (const msg of items) {
+      if (!msg || typeof msg !== "object") continue;
+      const msgParts = (msg as Record<string, unknown>).parts as
+        | Array<Record<string, unknown>>
+        | undefined;
+      if (msgParts) parts.push(...msgParts);
+    }
+  }
+  return parts;
+}
+
+/** Accumulate tool statistics from a single part. */
+function accumulatePart(acc: PartAccumulator, part: Record<string, unknown>): void {
+  acc.totalParts++;
+  acc.lastPartType = (part.type as string) ?? null;
+
+  if (part.type !== "tool") return;
+
+  acc.toolCalls++;
+  const status = (part.state as Record<string, unknown> | undefined)?.status as string | undefined;
+  if (status === "completed" || status === "error") {
+    acc.completedTools++;
+  } else if (status === "running" || status === "pending") {
+    acc.runningTools++;
+  }
+  acc.lastToolName = (part.tool as string) ?? acc.lastToolName;
+}
+
+/** Determine if the session is in a terminal state. */
+function isSessionDone(acc: PartAccumulator): boolean {
+  const hasContent = acc.totalParts > 1;
+  const noActiveTools = acc.runningTools === 0;
+  const isTerminal =
+    acc.lastPartType === "step-finish" ||
+    acc.lastPartType === "patch" ||
+    (acc.lastPartType === "text" && acc.toolCalls > 0);
+  return hasContent && noActiveTools && isTerminal;
+}
+
 /**
  * Get a progress snapshot from session messages.
  */
@@ -176,63 +231,29 @@ async function getProgressSnapshot(
   client: ReturnType<typeof createOpencodeClient>,
   sessionId: string
 ): Promise<ProgressSnapshot> {
-  // Get message parts for detailed progress
   const { data: messages } = await client.session.messages({
     path: { id: sessionId },
   });
 
-  let totalParts = 0;
-  let toolCalls = 0;
-  let completedTools = 0;
-  let runningTools = 0;
-  let lastToolName: string | null = null;
-  let lastPartType: string | null = null;
+  const acc: PartAccumulator = {
+    totalParts: 0,
+    toolCalls: 0,
+    completedTools: 0,
+    runningTools: 0,
+    lastToolName: null,
+    lastPartType: null,
+  };
 
-  if (messages) {
-    for (const group of messages as unknown[]) {
-      const items = Array.isArray(group) ? group : [group];
-      for (const msg of items) {
-        if (!msg || typeof msg !== "object") continue;
-        const parts = (msg as Record<string, unknown>).parts as
-          | Array<Record<string, unknown>>
-          | undefined;
-        if (!parts) continue;
-
-        for (const part of parts) {
-          totalParts++;
-          lastPartType = (part.type as string) ?? null;
-          if (part.type === "tool") {
-            toolCalls++;
-            const state = part.state as Record<string, unknown> | undefined;
-            const status = state?.status as string | undefined;
-            if (status === "completed" || status === "error") {
-              completedTools++;
-            } else if (status === "running" || status === "pending") {
-              runningTools++;
-            }
-            lastToolName = (part.tool as string) ?? lastToolName;
-          }
-        }
-      }
-    }
+  for (const part of flattenMessageParts(messages)) {
+    accumulatePart(acc, part);
   }
 
-  // Session is done when: there are parts, no tools are running/pending,
-  // and the last part is a terminal type (step-finish, patch, or text after tools)
-  const hasContent = totalParts > 1; // More than just the user prompt
-  const noActiveTools = runningTools === 0;
-  const isTerminal =
-    lastPartType === "step-finish" ||
-    lastPartType === "patch" ||
-    (lastPartType === "text" && toolCalls > 0);
-  const done = hasContent && noActiveTools && isTerminal;
-
   return {
-    totalParts,
-    toolCalls,
-    completedTools,
-    runningTools,
-    lastToolName,
-    done,
+    totalParts: acc.totalParts,
+    toolCalls: acc.toolCalls,
+    completedTools: acc.completedTools,
+    runningTools: acc.runningTools,
+    lastToolName: acc.lastToolName,
+    done: isSessionDone(acc),
   };
 }

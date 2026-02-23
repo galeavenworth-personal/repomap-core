@@ -39,7 +39,7 @@ function sortKeysDeep(obj: unknown): unknown {
   if (Array.isArray(obj)) return obj.map(sortKeysDeep);
   if (obj !== null && typeof obj === "object") {
     return Object.keys(obj as Record<string, unknown>)
-      .sort()
+      .sort((a, b) => a.localeCompare(b))
       .reduce<Record<string, unknown>>((acc, key) => {
         acc[key] = sortKeysDeep((obj as Record<string, unknown>)[key]);
         return acc;
@@ -90,6 +90,92 @@ function extractMetrics(part: Record<string, unknown>) {
   };
 }
 
+/** Classify a "message.part.updated" event by its part type. */
+function classifyPartUpdated(event: RawEvent, now: Date): Punch | null {
+  const part = event.properties.part as Record<string, unknown> | undefined;
+  if (!part || typeof part.type !== "string") return null;
+
+  const base = {
+    taskId: extractTaskId(event),
+    observedAt: now,
+    sourceHash: computeSourceHash(event),
+  };
+
+  if (part.type === "tool") {
+    return classifyToolPart(part, base);
+  }
+
+  const staticMap: Record<string, { punchType: string; punchKey: string; withMetrics: boolean }> = {
+    "step-start": { punchType: "step_complete", punchKey: "step_start_observed", withMetrics: false },
+    "step-finish": { punchType: "step_complete", punchKey: "step_finished", withMetrics: true },
+    "text": { punchType: "message", punchKey: "text_response", withMetrics: true },
+  };
+
+  const mapping = staticMap[part.type];
+  if (!mapping) return null;
+
+  return {
+    ...base,
+    punchType: mapping.punchType,
+    punchKey: mapping.punchKey,
+    ...(mapping.withMetrics ? extractMetrics(part) : {}),
+  };
+}
+
+/** Classify a tool-type part: only mint punches on terminal states. */
+function classifyToolPart(
+  part: Record<string, unknown>,
+  base: { taskId: string; observedAt: Date; sourceHash: string }
+): Punch | null {
+  const state = part.state as Record<string, unknown> | undefined;
+  const status = state?.status as string | undefined;
+  if (status !== "completed" && status !== "error") return null;
+
+  const toolName = typeof part.tool === "string" ? part.tool : "unknown_tool";
+  return {
+    ...base,
+    punchType: "tool_call",
+    punchKey: toolName,
+    ...extractMetrics(part),
+  };
+}
+
+/** Classify a "session.updated" event: only completed sessions produce punches. */
+function classifySessionUpdated(event: RawEvent, now: Date): Punch | null {
+  const info = event.properties.info as Record<string, unknown> | undefined;
+  const status = info?.status as string | undefined;
+  if (status !== "completed") return null;
+
+  return {
+    taskId: extractTaskId(event),
+    punchType: "step_complete",
+    punchKey: "session_completed",
+    observedAt: now,
+    sourceHash: computeSourceHash(event),
+  };
+}
+
+const SESSION_LIFECYCLE_EVENTS = new Set([
+  "session.created",
+  "session.deleted",
+  "session.idle",
+  "session.error",
+]);
+
+/** Classify a session lifecycle event (created/deleted/idle/error). */
+function classifySessionLifecycle(event: RawEvent, now: Date): Punch | null {
+  if (!SESSION_LIFECYCLE_EVENTS.has(event.type)) return null;
+
+  const keySuffix = event.type.split(".")[1];
+  return {
+    taskId: extractTaskId(event),
+    punchType: "session_lifecycle",
+    punchKey: `session_${keySuffix}`,
+    observedAt: now,
+    sourceHash: computeSourceHash(event),
+  };
+}
+
 /**
  * Classify a raw SSE event into a Punch, or return null if the event
  * is not punch-worthy.
@@ -97,101 +183,11 @@ function extractMetrics(part: Record<string, unknown>) {
 export function classifyEvent(event: RawEvent): Punch | null {
   const now = new Date();
 
-  // ── message.part.updated: discriminate by part type ──
   if (event.type === "message.part.updated") {
-    const part = event.properties.part as Record<string, unknown> | undefined;
-    if (!part || typeof part.type !== "string") return null;
-
-    if (part.type === "tool") {
-      // Only mint punches on terminal states (completed or error)
-      const state = part.state as Record<string, unknown> | undefined;
-      const status = state && typeof state.status === "string" ? state.status : undefined;
-      if (status !== "completed" && status !== "error") return null;
-
-      const toolName = typeof part.tool === "string" ? part.tool : "unknown_tool";
-      return {
-        taskId: extractTaskId(event),
-        punchType: "tool_call",
-        punchKey: toolName,
-        observedAt: now,
-        sourceHash: computeSourceHash(event),
-        ...extractMetrics(part),
-      };
-    }
-
-    if (part.type === "step-start") {
-      return {
-        taskId: extractTaskId(event),
-        punchType: "step_complete",
-        punchKey: "step_start_observed",
-        observedAt: now,
-        sourceHash: computeSourceHash(event),
-      };
-    }
-
-    if (part.type === "step-finish") {
-      return {
-        taskId: extractTaskId(event),
-        punchType: "step_complete",
-        punchKey: "step_finished",
-        observedAt: now,
-        sourceHash: computeSourceHash(event),
-        ...extractMetrics(part),
-      };
-    }
-
-    if (part.type === "text") {
-      return {
-        taskId: extractTaskId(event),
-        punchType: "message",
-        punchKey: "text_response",
-        observedAt: now,
-        sourceHash: computeSourceHash(event),
-        ...extractMetrics(part),
-      };
-    }
-
-    // Other part types (reasoning, etc.) — not punch-worthy yet
-    return null;
+    return classifyPartUpdated(event, now);
   }
-
-  // ── session.updated: check for completion ──
   if (event.type === "session.updated") {
-    // The session status is nested under properties.info in the SDK's Session object
-    const info = event.properties.info as Record<string, unknown> | undefined;
-    const status = info && typeof info.status === "string" ? info.status : undefined;
-
-    if (status === "completed") {
-      return {
-        taskId: extractTaskId(event),
-        punchType: "step_complete",
-        punchKey: "session_completed", // Corrected key to match test expectation
-        observedAt: now,
-        sourceHash: computeSourceHash(event),
-      };
-    }
-
-    // Non-completion session updates — not punch-worthy
-    return null;
+    return classifySessionUpdated(event, now);
   }
-
-  // ── session.created / deleted / idle / error ──
-  if (
-    event.type === "session.created" ||
-    event.type === "session.deleted" ||
-    event.type === "session.idle" ||
-    event.type === "session.error"
-  ) {
-    const keySuffix = event.type.split(".")[1]; // created, deleted, idle, error
-    return {
-      taskId: extractTaskId(event),
-      punchType: "session_lifecycle",
-      punchKey: `session_${keySuffix}`,
-      observedAt: now,
-      sourceHash: computeSourceHash(event),
-    };
-  }
-
-  // All other event types — not punch-worthy
-  return null;
+  return classifySessionLifecycle(event, now);
 }
