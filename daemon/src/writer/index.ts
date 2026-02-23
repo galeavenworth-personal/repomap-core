@@ -19,6 +19,7 @@ export interface DoltConfig {
   port: number;
   database: string;
   user?: string;
+  password?: string;
 }
 
 export interface DoltWriter {
@@ -48,6 +49,7 @@ export function createDoltWriter(config: DoltConfig): DoltWriter {
         port: config.port,
         database: config.database,
         user: config.user ?? "root",
+        password: config.password,
       });
 
       // Ensure child_rels table exists

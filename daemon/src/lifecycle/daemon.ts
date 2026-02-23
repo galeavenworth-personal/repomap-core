@@ -26,6 +26,7 @@ export interface DaemonConfig {
   doltHost: string;
   doltDatabase: string;
   doltUser?: string;
+  doltPassword?: string;
 }
 
 export interface Daemon {
@@ -43,6 +44,7 @@ export function createDaemon(config: DaemonConfig): Daemon {
     port: config.doltPort,
     database: config.doltDatabase,
     user: config.doltUser,
+    password: config.doltPassword,
   });
 
   const abortController = new AbortController();

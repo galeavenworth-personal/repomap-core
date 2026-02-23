@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "stack": ".kilocode/tools/start-stack.sh",
+    "stack": "../.kilocode/tools/start-stack.sh",
     "temporal:worker": "tsx src/temporal/worker.ts",
     "temporal:dispatch": "tsx src/temporal/dispatch.ts",
     "temporal:dep-watch": "tsx src/temporal/dep-watch.cli.ts"

@@ -96,13 +96,16 @@ export async function sendPrompt(
   agent?: string
 ): Promise<void> {
   const client = makeClient(config);
-  await client.session.prompt({
+  const response = await client.session.prompt({
     path: { id: sessionId },
     body: {
       parts: [{ type: "text", text: prompt }],
       agent,
     },
   });
+  if (response.error) {
+    throw new Error(`Prompt dispatch failed for session ${sessionId}: ${JSON.stringify(response.error)}`);
+  }
   log.info(`Prompt dispatched to session ${sessionId} (${prompt.length} chars)`);
 }
 
@@ -215,10 +218,13 @@ async function getProgressSnapshot(
   }
 
   // Session is done when: there are parts, no tools are running/pending,
-  // and the last part is a terminal type (step-finish or text after tools)
+  // and the last part is a terminal type (step-finish, patch, or text after tools)
   const hasContent = totalParts > 1; // More than just the user prompt
   const noActiveTools = runningTools === 0;
-  const isTerminal = lastPartType === "step-finish" || lastPartType === "patch";
+  const isTerminal =
+    lastPartType === "step-finish" ||
+    lastPartType === "patch" ||
+    (lastPartType === "text" && toolCalls > 0);
   const done = hasContent && noActiveTools && isTerminal;
 
   return {

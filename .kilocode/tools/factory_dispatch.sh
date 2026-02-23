@@ -122,7 +122,7 @@ log "$(timestamp) Checking kilo serve at ${BASE_URL}..."
 HEALTH=$(curl -sf "${BASE_URL}/global/health" 2>/dev/null || true)
 if [[ -z "$HEALTH" ]]; then
     echo "ERROR: kilo serve not reachable at ${BASE_URL}" >&2
-    echo "Start the stack first: cd oc-daemon && npm run stack" >&2
+    echo "Start the stack first: cd daemon && npm run stack" >&2
     exit 2
 fi
 
@@ -136,36 +136,37 @@ trap 'rm -f "$PROMPT_FILE"' EXIT
 
 if [[ "$PROMPT_ARG" == *.json ]] && [[ -f "$PROMPT_ARG" ]]; then
     # JSON file — read it, inject agent if not present
-    HAS_AGENT=$(python3 -c "
+    HAS_AGENT=$(python3 - "$PROMPT_ARG" <<'PYEOF'
 import json, sys
-data = json.load(open('$PROMPT_ARG'))
+data = json.load(open(sys.argv[1]))
 print('yes' if 'agent' in data else 'no')
-" 2>/dev/null || echo "no")
+PYEOF
+    ) 2>/dev/null || echo "no"
 
     if [[ "$HAS_AGENT" == "yes" ]]; then
         cp "$PROMPT_ARG" "$PROMPT_FILE"
     else
-        python3 -c "
-import json
-with open('$PROMPT_ARG') as f:
+        python3 - "$PROMPT_ARG" "$MODE" "$PROMPT_FILE" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
     data = json.load(f)
-data['agent'] = '$MODE'
-with open('$PROMPT_FILE', 'w') as f:
+data['agent'] = sys.argv[2]
+with open(sys.argv[3], 'w') as f:
     json.dump(data, f)
-"
+PYEOF
     fi
     log "$(timestamp) Loaded prompt from: $PROMPT_ARG"
 else
     # Plain text string — wrap it
-    python3 -c "
-import json
+    python3 - "$MODE" "$PROMPT_ARG" "$PROMPT_FILE" <<'PYEOF'
+import json, sys
 payload = {
-    'agent': '$MODE',
-    'parts': [{'type': 'text', 'text': '''$(echo "$PROMPT_ARG" | sed "s/'/'\\\\''/g")'''}]
+    'agent': sys.argv[1],
+    'parts': [{'type': 'text', 'text': sys.argv[2]}]
 }
-with open('$PROMPT_FILE', 'w') as f:
+with open(sys.argv[3], 'w') as f:
     json.dump(payload, f)
-"
+PYEOF
     log "$(timestamp) Built prompt from string (${#PROMPT_ARG} chars)"
 fi
 
@@ -175,9 +176,15 @@ if [[ -z "$TITLE" ]]; then
     TITLE="factory: ${MODE} @ $(date '+%Y-%m-%d %H:%M')"
 fi
 
+SESSION_BODY=$(python3 - "$TITLE" <<'PYEOF'
+import json, sys
+print(json.dumps({"title": sys.argv[1]}))
+PYEOF
+)
+
 SESSION_ID=$(curl -sf -X POST "${BASE_URL}/session" \
     -H 'Content-Type: application/json' \
-    -d "{\"title\": \"${TITLE}\"}" \
+    -d "$SESSION_BODY" \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
 
 if [[ -z "$SESSION_ID" ]]; then
@@ -195,7 +202,7 @@ HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
     -H 'Content-Type: application/json' \
     -d @"$PROMPT_FILE" 2>/dev/null || echo "000")
 
-if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "202" && "$HTTP_CODE" != "204" && "$HTTP_CODE" != "000" ]]; then
+if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "202" && "$HTTP_CODE" != "204" ]]; then
     echo "ERROR: Prompt dispatch failed (HTTP ${HTTP_CODE})" >&2
     exit 4
 fi
@@ -206,7 +213,10 @@ log "$(timestamp) Prompt dispatched to mode: ${MODE}"
 
 if [[ "$NO_MONITOR" == true ]]; then
     if [[ "$JSON_OUTPUT" == true ]]; then
-        echo "{\"session_id\": \"${SESSION_ID}\", \"mode\": \"${MODE}\", \"title\": \"${TITLE}\"}"
+        python3 - "$SESSION_ID" "$MODE" "$TITLE" <<'PYEOF'
+import json, sys
+print(json.dumps({"session_id": sys.argv[1], "mode": sys.argv[2], "title": sys.argv[3]}))
+PYEOF
     else
         echo "$SESSION_ID"
     fi
@@ -300,18 +310,18 @@ fi
 # ─── Phase 8: Output ─────────────────────────────────────────────────────────
 
 if [[ "$JSON_OUTPUT" == true ]]; then
-    python3 -c "
-import json
+    python3 - "$SESSION_ID" "$MODE" "$TITLE" "$LAST_CHILDREN" "$ELAPSED" "$RESULT" <<'PYEOF'
+import json, sys
 result = {
-    'session_id': '${SESSION_ID}',
-    'mode': '${MODE}',
-    'title': '${TITLE}',
-    'children': ${LAST_CHILDREN},
-    'elapsed_seconds': ${ELAPSED},
-    'result': '''$(echo "$RESULT" | sed "s/'/'\\\\''/g")'''
+    'session_id': sys.argv[1],
+    'mode': sys.argv[2],
+    'title': sys.argv[3],
+    'children': int(sys.argv[4]),
+    'elapsed_seconds': int(sys.argv[5]),
+    'result': sys.argv[6]
 }
 print(json.dumps(result, indent=2))
-"
+PYEOF
 else
     echo "$RESULT"
 fi
