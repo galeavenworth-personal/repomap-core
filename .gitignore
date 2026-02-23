@@ -13,6 +13,9 @@ build/
 dist/
 *.egg-info/
 
+# Node.js
+node_modules/
+
 # Test / typecheck / linter caches
 .mypy_cache/
 .pytest_cache/
@@ -65,3 +68,4 @@ screenshots/
 docs/infra/mtls-lockdown.md
 docs/comms/oc-daemon/CHANNEL.md
 docs/comms/
+.oc-daemon-staging/

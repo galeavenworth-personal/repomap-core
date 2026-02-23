@@ -2,8 +2,8 @@
 
 > **Scope:** Fabrication plant — workflow system, orchestration, observability, durable memory, and punch card verification.
 > **Not in scope:** Application code (`src/`), product features, artifact generation.
-> **Last updated:** 2026-02-19
-> **Revision:** v3.2 — Kilo CLI server integration (daemon simplification)
+> **Last updated:** 2026-02-23
+> **Revision:** v3.3 — Monorepo consolidation (daemon absorbed into `daemon/`)
 
 ## How to Read This
 
@@ -15,7 +15,7 @@ Phases are sequential. Within each phase, tasks can be done in any order unless 
 
 ---
 
-## The Evolution: What Changed (v2.1 → v3.0 → v3.1 → v3.2)
+## The Evolution: What Changed (v2.1 → v3.0 → v3.1 → v3.2 → v3.3)
 
 ### The Verification Paradox
 
@@ -64,6 +64,8 @@ Dolt DDL for punch card tables:
 **Design rationale:** [`docs/research/multi-repo-plant-architecture-2026-02-18.md`](../docs/research/multi-repo-plant-architecture-2026-02-18.md)
 **Beads multi-repo research:** [`docs/research/beads-dolt-and-multi-repo.md`](../docs/research/beads-dolt-and-multi-repo.md)
 
+> **Note (v3.3):** v3.1's multi-repo split was reversed in v3.3. The daemon now lives at `daemon/` within repomap-core. The research docs above remain valid for understanding the design evolution.
+
 ### v3.1 → v3.2 Changes
 
 | v3.1 | v3.2 |
@@ -76,6 +78,19 @@ Dolt DDL for punch card tables:
 | No daemon dependency specification | Daemon deps: `@opencode-ai/sdk` + `mysql2` (two packages) |
 
 **Research:** [`docs/research/kilo-cli-server-daemon-integration-2026-02-19.md`](../docs/research/kilo-cli-server-daemon-integration-2026-02-19.md)
+
+### v3.2 → v3.3 Changes
+
+| v3.2 | v3.3 |
+|------|------|
+| Daemon in separate repo (`repomap-plant-daemon` / `oc-daemon`) | Daemon absorbed into `repomap-core/daemon/` subdirectory |
+| Multi-repo Beads with cross-repo routing (`../oc-daemon`) | Single-repo Beads with local routing (`./daemon`) |
+| `daemon-001` bead tracked in separate repo | `daemon-001` bead tracked locally in repomap-core |
+| Cross-repo `bd config set repos.additional` required | No cross-repo config needed — daemon is local |
+| Phase 5 references "single daemon per `kilo serve`" in separate repo | Phase 5 references `daemon/` subdirectory within monorepo |
+| Two repos to clone and maintain | Single repo; daemon is a TypeScript subdirectory |
+
+**Rationale:** Multi-repo overhead (cross-repo beads routing, separate CI, dual clone requirement) exceeded the benefit of repository isolation for a tightly-coupled sidecar daemon. The daemon's only consumers are plant infrastructure tools in repomap-core.
 
 ---
 
@@ -115,7 +130,7 @@ Build the command dialect as the plant's instruction language. Establish Dolt as
 | 3 | `core-4f0.8` | repomap-core | Compressed workflow proof | `4f0.7` | ✓ Closed | [compressed-workflow-proof](../docs/research/compressed-workflow-proof-2026-02-20.md) |
 | 4 | `core-4f0.9` | repomap-core | Parent-child correlation + delegation proof | — | ◐ Expanded | **v3:** Now includes delegation proof via `child_relationships` table + punch-based verification |
 | 5 | `core-4f0.14a` | repomap-core | Dolt schema initialization | — | ○ New | **v3.1:** Split from `4f0.14`. DDL from [`punch-card-schema.sql`](punch-card-schema.sql), Dolt init |
-| 6 | `daemon-001` | repomap-plant-daemon | Replication daemon MVP | `core-4f0.14a` | ○ New | **v3.2:** `@opencode-ai/sdk` + SSE event stream → classify → mint punches → Dolt. Sidecar to `kilo serve`. |
+| 6 | `daemon-001` | repomap-core (`daemon/`) | Replication daemon MVP | `core-4f0.14a` | ○ New | **v3.3:** Absorbed into monorepo. `@opencode-ai/sdk` + SSE event stream → classify → mint punches → Dolt. Sidecar to `kilo serve`. |
 
 **Exit criteria:**
 - `commands.toml` exists and maps all current quality gate + beads operations to actual skills/tools
@@ -130,7 +145,7 @@ Build the command dialect as the plant's instruction language. Establish Dolt as
           ┌─── 4f0.6 (inventory) ✓ → 4f0.7 (TOML) ✓ → 4f0.8 (proof) ✓ ──┐
 Phase 2 ──┤                                                                ├→ Phase 2 complete
           ├─── 4f0.9 (parent-child + delegation proof) ───────────────────┘
-          └─── 4f0.14a (Dolt schema) → daemon-001 (daemon, own repo) ────┘
+          └─── 4f0.14a (Dolt schema) → daemon-001 (daemon/, monorepo) ───┘
 ```
 
 ---
@@ -184,7 +199,7 @@ Automatic post-workflow audit. Plant Manager inspects its own work.
 **Execution substrate:** Kilo CLI parallel agents + git worktrees (already exists).
 **Orchestration:** Temporal wrapping N concurrent `kilo run --attach http://localhost:4096` invocations.
 **Observability:** Per-worktree Dolt branches, cross-line aggregation.
-**Daemon:** Single `repomap-plant-daemon` instance per `kilo serve` server observes all parallel sessions via SSE event stream. Per-worktree daemons remain an option for isolation but are not required.
+**Daemon:** Single `daemon/` instance per `kilo serve` server observes all parallel sessions via SSE event stream. Per-worktree daemons remain an option for isolation but are not required.
 **Prerequisites:** Phases 2-3 complete (one provable line running end-to-end).
 **Scoping begins** after Phase 3 exit criteria are met.
 
@@ -242,7 +257,7 @@ Phase 0 (research) ✓
 | Bead | Repo | Title | Phase | Priority | Notes |
 |------|------|-------|-------|----------|-------|
 | `core-4f0.14a` | repomap-core | Dolt schema initialization | 2 | P1 | **v3.1:** Split from `4f0.14` — schema only |
-| `daemon-001` | repomap-plant-daemon | Replication daemon MVP | 2 | P1 | **v3.1:** Split from `4f0.14` — daemon in own repo |
+| `daemon-001` | repomap-core (`daemon/`) | Replication daemon MVP | 2 | P1 | **v3.3:** Absorbed into monorepo at `daemon/` |
 | `repomap-core-4f0.15` | repomap-core | Punch engine implementation | 3 | P2 | Unchanged |
 
 ### Closed Epics
@@ -266,14 +281,14 @@ Phase 0 (research) ✓
 | `aud.1` | `core-4f0.12` | repomap-core | Post-workflow session audit | 4 |
 | `hlth.1` | `core-4f0.13` | repomap-core | Plant health composite | 4 |
 | — | `core-4f0.14a` | repomap-core | Dolt schema initialization | 2 |
-| — | `daemon-001` | repomap-plant-daemon | Replication daemon MVP | 2 |
+| — | `daemon-001` | repomap-core (`daemon/`) | Replication daemon MVP | 2 |
 | — | `core-4f0.15` | repomap-core | Punch engine implementation | 3 |
 
 ---
 
 ## Quick Reference: All Active Plant Beads
 
-Plant beads span two repos. Beads in `repomap-core` use prefix `core`; beads in `repomap-plant-daemon` use prefix `daemon`.
+All plant beads are now in a single monorepo. Beads use prefix `core` for Python/plant-config work and `daemon` for the TypeScript daemon at `daemon/`.
 
 ### Phase 2: Command Infrastructure + Durable Memory
 | Bead | Repo | Title | Priority | Status |
@@ -283,7 +298,7 @@ Plant beads span two repos. Beads in `repomap-core` use prefix `core`; beads in 
 | `core-4f0.8` | repomap-core | Compressed workflow proof | P2 | ✓ Closed |
 | `core-4f0.9` | repomap-core | Parent-child correlation + delegation proof | P1 | ◐ Expanded |
 | `core-4f0.14a` | repomap-core | Dolt schema initialization | P1 | ○ New (split) |
-| `daemon-001` | repomap-plant-daemon | Replication daemon MVP | P1 | ○ New (split) |
+| `daemon-001` | repomap-core (`daemon/`) | Replication daemon MVP | P1 | ○ New (monorepo) |
 
 ### Phase 3: Punch-Gated Deployment
 | Bead | Repo | Title | Priority | Status |
@@ -393,28 +408,24 @@ When starting work on plant infrastructure:
 
 **The plant-manager mode orchestrates changes to the plant itself.** Use it for mode/skill/contract/workflow modifications. Delegate `src/` work to `process-orchestrator`.
 
-### Multi-Repo Setup (v3.1)
+### Monorepo Layout (v3.3)
 
-Plant infrastructure now spans two repositories. See [`docs/research/multi-repo-plant-architecture-2026-02-18.md`](../docs/research/multi-repo-plant-architecture-2026-02-18.md) for full details.
+Plant infrastructure is consolidated in a single monorepo. The daemon lives at `daemon/` as a TypeScript subdirectory with its own `package.json`.
 
-| Repo | Language | Prefix | What Lives Here |
-|------|----------|--------|-----------------|
-| `repomap-core` | Python | `core` | Product code, plant config, Dolt schema, Python agent tools |
-| `repomap-plant-daemon` | TypeScript | `daemon` | Replication daemon, session→Dolt ingest, Kilo CLI integration |
+| Directory | Language | Prefix | What Lives Here |
+|-----------|----------|--------|-----------------|
+| `src/` | Python | `core` | Product code (repomap generation) |
+| `.kilocode/` | Mixed | `core` | Plant config, Dolt schema, Python agent tools |
+| `daemon/` | TypeScript | `daemon` | Replication daemon, session→Dolt ingest, Kilo CLI integration |
 
-**Beads cross-repo setup:**
+**Daemon development:**
 ```bash
-# From repomap-core (aggregation root)
-bd config set repos.additional "~/Projects-Employee-1/repomap-plant-daemon"
-bd ready    # Shows beads from both repos
+cd daemon && npm install    # Install daemon dependencies
+cd daemon && npm test        # Run daemon tests
+cd daemon && npm run build   # Build daemon
 ```
 
-**Cross-repo dependency example:**
-```bash
-bd dep add daemon-001 core-4f0.14a --type blocks
-```
-
-For daemon repo work, clone `repomap-plant-daemon` alongside `repomap-core` and follow the daemon repo's own `AGENTS.md`.
+**Beads routing:** `daemon-*` beads route to `./daemon` via `.beads/routes.jsonl`.
 
 **End state invariant:**
 > A task cannot complete unless its punch card is valid.
