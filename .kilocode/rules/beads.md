@@ -1,6 +1,6 @@
 # Beads Task Tracking
 
-Use 'bd' for task tracking throughout the project.
+Use 'bd' (v0.55.4) for task tracking throughout the project.
 
 **Commands:** See beads entries in [`.kilocode/commands.toml`](../commands.toml) (`sync_remote`, `sync_push`, `claim_issue`, `close_issue`, `show_issue`, `list_ready`).
 
@@ -29,10 +29,34 @@ or CI/CD. For these cases:
 
 ### ⚠️ Do NOT use `bd hooks install`
 
-Git hook shims resolve `bd` via PATH, which may find the wrong version (e.g., v0.49.3
-without CGO support). This causes hard crashes that block all git commits.
+Git hook shims resolve `bd` via PATH, which may find the wrong version (e.g., a release
+binary without CGO support). This causes hard crashes that block all git commits.
 The OpenCode plugin model eliminates this kill chain entirely by using the pinned
 `bd` wrapper at `.kilocode/tools/bd`.
+
+**v0.55.4 note:** Beads upstream removed `examples/git-hooks/`, confirming the shift
+from git hooks to editor plugin integration. If `bd doctor` warns about missing hooks,
+this is expected and safe to ignore.
+
+**If `bd doctor --fix` installs hooks:** Remove them immediately:
+```bash
+rm .git/hooks/pre-commit .git/hooks/post-merge .git/hooks/pre-push .git/hooks/post-checkout .git/hooks/prepare-commit-msg
+```
+
+## Cross-Repo Routing
+
+Cross-repo bead creation uses `routes.jsonl` — the beads happy path for multi-rig routing.
+
+Each repo's `.beads/routes.jsonl` maps foreign prefixes to relative paths:
+
+```jsonl
+{"prefix":"daemon-","path":"../oc-daemon"}
+```
+
+**Create in another rig:** `bd create "Title" --prefix daemon`
+**List another rig:** `bd list --rig daemon`
+
+For setup details, see the [beads skill doc](../skills/beads-local-db-ops/SKILL.md).
 
 ## Merge Driver
 
