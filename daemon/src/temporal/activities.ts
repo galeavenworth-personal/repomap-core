@@ -9,8 +9,10 @@
  * activity functions with heartbeat support.
  */
 
+import { createHash } from "node:crypto";
 import { heartbeat, log } from "@temporalio/activity";
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
+import mysql from "mysql2/promise";
 
 export interface KiloConfig {
   kiloHost: string;
@@ -60,6 +62,86 @@ function makeClient(config: KiloConfig) {
   return createOpencodeClient({
     baseUrl: `http://${config.kiloHost}:${config.kiloPort}`,
   });
+}
+
+// ── Punch Card ──
+
+export interface PunchCardConfig {
+  doltHost: string;
+  doltPort: number;
+  doltDatabase: string;
+  doltUser: string;
+}
+
+export const DEFAULT_PUNCH_CONFIG: PunchCardConfig = {
+  doltHost: process.env.DOLT_HOST ?? "127.0.0.1",
+  doltPort: parseInt(process.env.DOLT_PORT ?? "3307", 10),
+  doltDatabase: process.env.DOLT_DATABASE ?? "plant",
+  doltUser: process.env.DOLT_USER ?? "root",
+};
+
+export interface WorkflowPunch {
+  taskId: string;
+  punchType: string;
+  punchKey: string;
+  cost?: number;
+  tokensInput?: number;
+  tokensOutput?: number;
+  meta?: Record<string, unknown>;
+}
+
+/**
+ * Write a workflow-level punch to Dolt.
+ * These are distinct from SSE-derived punches — they record workflow
+ * phase transitions, budget kills, and enforcement decisions.
+ */
+export async function punchCard(
+  punch: WorkflowPunch,
+  punchConfig?: PunchCardConfig
+): Promise<void> {
+  const cfg = punchConfig ?? DEFAULT_PUNCH_CONFIG;
+  const now = new Date();
+  const sourceHash = createHash("sha256")
+    .update(JSON.stringify({
+      taskId: punch.taskId,
+      punchType: punch.punchType,
+      punchKey: punch.punchKey,
+      ts: now.toISOString(),
+      meta: punch.meta,
+    }))
+    .digest("hex");
+
+  let conn: mysql.Connection | null = null;
+  try {
+    conn = await mysql.createConnection({
+      host: cfg.doltHost,
+      port: cfg.doltPort,
+      database: cfg.doltDatabase,
+      user: cfg.doltUser,
+    });
+    await conn.execute(
+      `INSERT INTO punches (task_id, punch_type, punch_key, observed_at, source_hash, cost, tokens_input, tokens_output)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?
+       FROM DUAL
+       WHERE NOT EXISTS (SELECT 1 FROM punches WHERE source_hash = ?)`,
+      [
+        punch.taskId,
+        punch.punchType,
+        punch.punchKey,
+        now,
+        sourceHash,
+        punch.cost ?? null,
+        punch.tokensInput ?? null,
+        punch.tokensOutput ?? null,
+        sourceHash,
+      ]
+    );
+    log.info(`PUNCH: ${punch.punchType}/${punch.punchKey} for ${punch.taskId}`);
+  } catch (err) {
+    log.warn(`Failed to write punch ${punch.punchType}/${punch.punchKey}: ${err}`);
+  } finally {
+    if (conn) await conn.end();
+  }
 }
 
 /**

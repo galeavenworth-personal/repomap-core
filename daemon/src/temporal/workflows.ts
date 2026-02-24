@@ -37,8 +37,8 @@ const {
   },
 });
 
-// Cleanup activities that must run even during cancellation
-const { abortSession } = proxyActivities<typeof activities>({
+// Cleanup + punch activities that must run even during cancellation
+const { abortSession, punchCard } = proxyActivities<typeof activities>({
   startToCloseTimeout: "30 seconds",
   retry: { maximumAttempts: 2, initialInterval: "1s" },
 });
@@ -129,10 +129,25 @@ export async function agentTaskWorkflow(
     elapsedMs: Date.now() - startTime,
   }));
 
+  const wfId = `wf-${Date.now()}`;
+  const punch = (punchKey: string, extra?: Record<string, unknown>) =>
+    punchCard({
+      taskId: state.sessionId ?? wfId,
+      punchType: "workflow",
+      punchKey,
+      ...extra,
+    });
+
   try {
+    // ── PUNCH: workflow_start ──
+    await punch("workflow_start", {
+      meta: { agent: input.agent, promptLen: input.prompt.length, maxTokens: input.maxTokens ?? 100_000, maxCostUsd: input.maxCostUsd ?? 1.0 },
+    });
+
     // Step 1: Health check
     state.phase = "health_check";
     await quickActivities.healthCheck(config);
+    await punch("health_check_passed");
 
     if (aborted) return makeResult("aborted", state, startTime);
 
@@ -141,11 +156,27 @@ export async function agentTaskWorkflow(
     const { sessionId } = await quickActivities.createSession(config, input.title);
     state.sessionId = sessionId;
 
+    // ── PUNCH: session_created ──
+    await punchCard({
+      taskId: sessionId,
+      punchType: "workflow",
+      punchKey: "session_created",
+      meta: { agent: input.agent, workflowId: wfId },
+    });
+
     if (aborted) return makeResult("aborted", state, startTime);
 
     // Step 3: Send prompt
     state.phase = "sending_prompt";
     await sendPrompt(config, sessionId, input.prompt, input.agent);
+
+    // ── PUNCH: prompt_dispatched ──
+    await punchCard({
+      taskId: sessionId,
+      punchType: "workflow",
+      punchKey: "prompt_dispatched",
+      meta: { promptLen: input.prompt.length, agent: input.agent },
+    });
 
     if (aborted) return makeResult("aborted", state, startTime);
 
@@ -170,18 +201,45 @@ export async function agentTaskWorkflow(
     state.toolCalls = result.toolCalls;
 
     if (result.budgetExceeded) {
+      // ── PUNCH: budget_kill ──
       state.phase = "budget_exceeded";
       state.error = result.budgetReason;
+      await punchCard({
+        taskId: sessionId,
+        punchType: "governor",
+        punchKey: "budget_kill",
+        cost: result.totalCost,
+        tokensInput: result.tokensInput,
+        tokensOutput: result.tokensOutput,
+        meta: { reason: result.budgetReason },
+      });
       return makeResult("budget_exceeded", state, startTime, result);
     }
 
+    // ── PUNCH: session_completed ──
     state.phase = "completed";
+    await punchCard({
+      taskId: sessionId,
+      punchType: "workflow",
+      punchKey: "session_completed",
+      cost: result.totalCost,
+      tokensInput: result.tokensInput,
+      tokensOutput: result.tokensOutput,
+      meta: { tools: result.toolCalls, parts: result.totalParts, durationMs: result.durationMs },
+    });
     return makeResult("completed", state, startTime, result);
   } catch (err: unknown) {
     // On cancellation, abort the kilo serve session so it stops burning tokens
     if (isCancellation(err) && state.sessionId) {
       await CancellationScope.nonCancellable(async () => {
         await abortSession(config, state.sessionId!);
+        // ── PUNCH: session_aborted ──
+        await punchCard({
+          taskId: state.sessionId!,
+          punchType: "governor",
+          punchKey: "session_aborted",
+          meta: { reason: "workflow_cancelled" },
+        });
       });
       state.phase = "aborted";
       return makeResult("aborted", state, startTime);
@@ -189,6 +247,15 @@ export async function agentTaskWorkflow(
     const errorMsg = err instanceof Error ? err.message : String(err);
     state.phase = "failed";
     state.error = errorMsg;
+    // ── PUNCH: workflow_failed ──
+    await CancellationScope.nonCancellable(async () => {
+      await punchCard({
+        taskId: state.sessionId ?? wfId,
+        punchType: "workflow",
+        punchKey: "workflow_failed",
+        meta: { error: errorMsg },
+      });
+    });
     return makeResult("failed", state, startTime);
   }
 }
