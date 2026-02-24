@@ -1,0 +1,25 @@
+/**
+ * Governor — Session loop detection, kill switch, diagnosis, and fitter dispatch.
+ *
+ * The governor is the enforcement mechanism that detects runaway sessions
+ * and dispatches line fitters to recover. It operates on the punch card
+ * stream produced by the daemon's classify → write pipeline.
+ *
+ * Architecture:
+ *   Punch Stream → LoopDetector → SessionKiller → DiagnosisEngine → FitterDispatch
+ */
+
+export { LoopDetector, type LoopDetectorOptions } from "./loop-detector.js";
+export {
+  type LoopClassification,
+  type LoopDetection,
+  type SessionMetrics,
+  type GovernorThresholds,
+  DEFAULT_THRESHOLDS,
+  type KillConfirmation,
+  type DiagnosisCategory,
+  type DiagnosisReport,
+  type ToolPattern,
+  type FitterDispatchInput,
+  type FitterResult,
+} from "./types.js";
