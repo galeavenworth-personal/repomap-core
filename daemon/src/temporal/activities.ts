@@ -119,6 +119,12 @@ export async function punchCard(
       database: cfg.doltDatabase,
       user: cfg.doltUser,
     });
+
+    // Ensure cost/token columns exist (idempotent)
+    for (const col of ["cost DECIMAL(10,6) NULL", "tokens_input INT NULL", "tokens_output INT NULL"]) {
+      try { await conn.execute(`ALTER TABLE punches ADD COLUMN ${col}`); } catch { /* already exists */ }
+    }
+
     await conn.execute(
       `INSERT INTO punches (task_id, punch_type, punch_key, observed_at, source_hash, cost, tokens_input, tokens_output)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?
