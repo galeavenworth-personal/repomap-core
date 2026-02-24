@@ -269,6 +269,7 @@ export async function pollUntilDone(
     }
 
     const snapshot = await getProgressSnapshot(config, sessionId);
+    const sessionIdle = await isSessionIdle(config, sessionId);
 
     // Heartbeat with progress — Temporal uses this to detect liveness
     heartbeat({
@@ -318,7 +319,8 @@ export async function pollUntilDone(
       };
     }
 
-    if (snapshot.done) {
+    // Only declare done if BOTH message analysis AND session status agree
+    if (snapshot.done && sessionIdle) {
       log.info(
         `Session ${sessionId} completed: ${snapshot.toolCalls} tools, ${snapshot.totalParts} parts, $${snapshot.totalCost.toFixed(2)}, ${Math.round(elapsed / 1000)}s`
       );
@@ -337,11 +339,11 @@ export async function pollUntilDone(
 
     if (snapshot.runningTools > 0) {
       log.info(
-        `[${Math.round(elapsed / 1000)}s] Running: ${snapshot.runningTools} tools, last: ${snapshot.lastToolName} | $${snapshot.totalCost.toFixed(2)} | ${totalTokens.toLocaleString()} tok`
+        `[${Math.round(elapsed / 1000)}s] Running: ${snapshot.runningTools} tools, last: ${snapshot.lastToolName} | $${snapshot.totalCost.toFixed(2)} | ${totalTokens.toLocaleString()} tok | delegations: ${snapshot.delegations}`
       );
     } else {
       log.info(
-        `[${Math.round(elapsed / 1000)}s] Parts: ${snapshot.totalParts}, tools: ${snapshot.toolCalls} | $${snapshot.totalCost.toFixed(2)} | ${totalTokens.toLocaleString()} tok`
+        `[${Math.round(elapsed / 1000)}s] Parts: ${snapshot.totalParts}, tools: ${snapshot.toolCalls} | $${snapshot.totalCost.toFixed(2)} | ${totalTokens.toLocaleString()} tok | idle: ${sessionIdle} | delegations: ${snapshot.delegations}`
       );
     }
 
@@ -430,6 +432,22 @@ function isSessionDone(acc: PartAccumulator): boolean {
     acc.lastPartType === "patch" ||
     (acc.lastPartType === "text" && acc.toolCalls > 0);
   return hasContent && noActiveTools && isTerminal;
+}
+
+/**
+ * Check session status via kilo serve API.
+ * Returns true if the session is idle (not processing).
+ */
+async function isSessionIdle(config: KiloConfig, sessionId: string): Promise<boolean> {
+  try {
+    const res = await fetch(kiloUrl(config, `/session/${sessionId}`));
+    if (!res.ok) return false;
+    const data = await res.json() as Record<string, unknown>;
+    // Session is idle when not actively processing
+    return data.status === "idle" || data.status === "completed";
+  } catch {
+    return false;
+  }
 }
 
 /**
