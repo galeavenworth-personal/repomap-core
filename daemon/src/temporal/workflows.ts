@@ -188,6 +188,7 @@ export async function agentTaskWorkflow(
     const budget = {
       maxTokens: input.maxTokens ?? 100_000,
       maxCostUsd: input.maxCostUsd ?? 1.0,
+      maxExplorationBeforeDelegation: 3,
     };
     const result = await pollUntilDone(
       config,

@@ -34,16 +34,23 @@ export interface ProgressSnapshot {
   totalCost: number;
   tokensInput: number;
   tokensOutput: number;
+  /** Number of new_task tool calls (delegation events). */
+  delegations: number;
+  /** Number of codebase exploration tools called (read, bash, grep, etc). */
+  explorationCalls: number;
 }
 
 export interface BudgetLimits {
   maxTokens: number;
   maxCostUsd: number;
+  /** Max exploration tool calls allowed before a new_task delegation is required (default: 3). */
+  maxExplorationBeforeDelegation: number;
 }
 
 export const DEFAULT_BUDGET: BudgetLimits = {
   maxTokens: 100_000,
   maxCostUsd: 1.0,
+  maxExplorationBeforeDelegation: 3,
 };
 
 export interface AgentResult {
@@ -245,7 +252,6 @@ export async function pollUntilDone(
   timeoutMs: number = 1_800_000, // 30 minutes
   budget: BudgetLimits = DEFAULT_BUDGET
 ): Promise<AgentResult> {
-  const client = makeClient(config);
   const startTime = Date.now();
 
   while (true) {
@@ -256,7 +262,7 @@ export async function pollUntilDone(
       );
     }
 
-    const snapshot = await getProgressSnapshot(client, sessionId);
+    const snapshot = await getProgressSnapshot(config, sessionId);
 
     // Heartbeat with progress — Temporal uses this to detect liveness
     heartbeat({
@@ -282,6 +288,12 @@ export async function pollUntilDone(
     } else if (snapshot.totalCost > budget.maxCostUsd) {
       budgetExceeded = true;
       budgetReason = `Cost budget exceeded: $${snapshot.totalCost.toFixed(2)} > $${budget.maxCostUsd.toFixed(2)}`;
+    } else if (
+      snapshot.explorationCalls > budget.maxExplorationBeforeDelegation &&
+      snapshot.delegations === 0
+    ) {
+      budgetExceeded = true;
+      budgetReason = `Delegation required: ${snapshot.explorationCalls} exploration calls without a single new_task delegation (limit: ${budget.maxExplorationBeforeDelegation})`;
     }
 
     if (budgetExceeded) {
@@ -341,21 +353,27 @@ interface PartAccumulator {
   totalCost: number;
   tokensInput: number;
   tokensOutput: number;
+  delegations: number;
+  explorationCalls: number;
 }
 
-/** Extract flat parts from raw message groups. */
+const EXPLORATION_TOOLS = new Set([
+  "read", "read_file", "bash", "grep", "grep_search", "find", "find_by_name",
+  "list_dir", "list_files", "search", "code_search", "codebase-retrieval",
+]);
+
+/** Extract flat parts from message array (raw HTTP response format: [{info, parts}, ...]). */
 function flattenMessageParts(messages: unknown): Array<Record<string, unknown>> {
-  if (!messages) return [];
+  if (!messages || !Array.isArray(messages)) return [];
 
   const parts: Array<Record<string, unknown>> = [];
-  for (const group of messages as unknown[]) {
-    const items = Array.isArray(group) ? group : [group];
-    for (const msg of items) {
-      if (!msg || typeof msg !== "object") continue;
-      const msgParts = (msg as Record<string, unknown>).parts as
-        | Array<Record<string, unknown>>
-        | undefined;
-      if (msgParts) parts.push(...msgParts);
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") continue;
+    const m = msg as Record<string, unknown>;
+    // Direct parts array on message object
+    const msgParts = m.parts as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(msgParts)) {
+      parts.push(...msgParts);
     }
   }
   return parts;
@@ -380,13 +398,21 @@ function accumulatePart(acc: PartAccumulator, part: Record<string, unknown>): vo
   if (part.type !== "tool") return;
 
   acc.toolCalls++;
+  const toolName = (part.tool as string) ?? "unknown";
   const status = (part.state as Record<string, unknown> | undefined)?.status as string | undefined;
   if (status === "completed" || status === "error") {
     acc.completedTools++;
   } else if (status === "running" || status === "pending") {
     acc.runningTools++;
   }
-  acc.lastToolName = (part.tool as string) ?? acc.lastToolName;
+  acc.lastToolName = toolName;
+
+  // Track delegation and exploration
+  if (toolName === "new_task") {
+    acc.delegations++;
+  } else if (EXPLORATION_TOOLS.has(toolName)) {
+    acc.explorationCalls++;
+  }
 }
 
 /** Determine if the session is in a terminal state. */
@@ -404,12 +430,13 @@ function isSessionDone(acc: PartAccumulator): boolean {
  * Get a progress snapshot from session messages.
  */
 async function getProgressSnapshot(
-  client: ReturnType<typeof createOpencodeClient>,
+  config: KiloConfig,
   sessionId: string
 ): Promise<ProgressSnapshot> {
-  const { data: messages } = await client.session.messages({
-    path: { id: sessionId },
-  });
+  // Use raw HTTP instead of SDK to avoid ESM/response shape issues
+  const url = `http://${config.kiloHost}:${config.kiloPort}/session/${sessionId}/message`;
+  const res = await fetch(url);
+  const messages = await res.json();
 
   const acc: PartAccumulator = {
     totalParts: 0,
@@ -421,6 +448,8 @@ async function getProgressSnapshot(
     totalCost: 0,
     tokensInput: 0,
     tokensOutput: 0,
+    delegations: 0,
+    explorationCalls: 0,
   };
 
   for (const part of flattenMessageParts(messages)) {
@@ -437,5 +466,7 @@ async function getProgressSnapshot(
     totalCost: acc.totalCost,
     tokensInput: acc.tokensInput,
     tokensOutput: acc.tokensOutput,
+    delegations: acc.delegations,
+    explorationCalls: acc.explorationCalls,
   };
 }
