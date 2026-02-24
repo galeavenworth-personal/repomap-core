@@ -366,8 +366,9 @@ interface PartAccumulator {
 }
 
 const EXPLORATION_TOOLS = new Set([
-  "read", "read_file", "bash", "grep", "grep_search", "find", "find_by_name",
+  "read", "read_file", "grep", "grep_search", "find", "find_by_name",
   "list_dir", "list_files", "search", "code_search", "codebase-retrieval",
+  "read_notebook", "view_file",
 ]);
 
 /** Extract flat parts from message array (raw HTTP response format: [{info, parts}, ...]). */
