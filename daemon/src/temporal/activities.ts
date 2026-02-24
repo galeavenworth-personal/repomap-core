@@ -201,21 +201,52 @@ export async function createSession(
 }
 
 /**
- * Abort a kilo serve session. Used for budget enforcement and cancellation cleanup.
+ * Find all child session IDs for a given parent.
  */
-export async function abortSession(
+async function getChildSessionIds(config: KiloConfig, parentId: string): Promise<string[]> {
+  try {
+    const res = await fetch(kiloUrl(config, "/session"));
+    if (!res.ok) return [];
+    const sessions = (await res.json()) as Array<Record<string, unknown>>;
+    return sessions
+      .filter((s) => s.parentID === parentId)
+      .map((s) => s.id as string);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Abort a single kilo serve session.
+ */
+async function abortOne(
   config: KiloConfig,
   sessionId: string
 ): Promise<boolean> {
   try {
-    const url = `http://${config.kiloHost}:${config.kiloPort}/session/${sessionId}/abort`;
-    const res = await fetch(url, { method: "POST" });
+    const res = await fetch(kiloUrl(config, `/session/${sessionId}/abort`), { method: "POST" });
     log.info(`Session ${sessionId} abort: HTTP ${res.status}`);
     return res.ok;
   } catch (err) {
     log.warn(`Failed to abort session ${sessionId}: ${err}`);
     return false;
   }
+}
+
+/**
+ * Abort a kilo serve session AND all its children.
+ * Used for budget enforcement and cancellation cleanup.
+ */
+export async function abortSession(
+  config: KiloConfig,
+  sessionId: string
+): Promise<boolean> {
+  const children = await getChildSessionIds(config, sessionId);
+  // Abort children first, then parent
+  for (const childId of children) {
+    await abortOne(config, childId);
+  }
+  return abortOne(config, sessionId);
 }
 
 /**
@@ -268,10 +299,21 @@ export async function pollUntilDone(
       );
     }
 
+    // ── Snapshot parent ──
     const snapshot = await getProgressSnapshot(config, sessionId);
-    const sessionIdle = await isSessionIdle(config, sessionId);
+    const parentIdle = await isSessionIdle(config, sessionId);
+
+    // ── Discover and snapshot children ──
+    const childIds = await getChildSessionIds(config, sessionId);
+    const childSnapshots: Array<{ id: string; snap: ProgressSnapshot; idle: boolean }> = [];
+    for (const cid of childIds) {
+      const csnap = await getProgressSnapshot(config, cid);
+      const cidle = await isSessionIdle(config, cid);
+      childSnapshots.push({ id: cid, snap: csnap, idle: cidle });
+    }
 
     // Heartbeat with progress — Temporal uses this to detect liveness
+    const totalTreeCost = snapshot.totalCost + childSnapshots.reduce((s, c) => s + c.snap.totalCost, 0);
     heartbeat({
       elapsed: Math.round(elapsed / 1000),
       totalParts: snapshot.totalParts,
@@ -280,31 +322,33 @@ export async function pollUntilDone(
       runningTools: snapshot.runningTools,
       lastTool: snapshot.lastToolName,
       cost: snapshot.totalCost,
+      treeCost: totalTreeCost,
       tokensIn: snapshot.tokensInput,
       tokensOut: snapshot.tokensOutput,
+      children: childSnapshots.length,
     });
 
-    // ── Budget enforcement ──
-    const totalTokens = snapshot.tokensInput + snapshot.tokensOutput;
+    // ── Per-session budget enforcement (parent) ──
+    const parentTokens = snapshot.tokensInput + snapshot.tokensOutput;
     let budgetExceeded = false;
     let budgetReason: string | null = null;
 
-    if (totalTokens > budget.maxTokens) {
+    if (parentTokens > budget.maxTokens) {
       budgetExceeded = true;
-      budgetReason = `Token budget exceeded: ${totalTokens.toLocaleString()} > ${budget.maxTokens.toLocaleString()}`;
+      budgetReason = `Parent token budget exceeded: ${parentTokens.toLocaleString()} > ${budget.maxTokens.toLocaleString()}`;
     } else if (snapshot.totalCost > budget.maxCostUsd) {
       budgetExceeded = true;
-      budgetReason = `Cost budget exceeded: $${snapshot.totalCost.toFixed(2)} > $${budget.maxCostUsd.toFixed(2)}`;
+      budgetReason = `Parent cost budget exceeded: $${snapshot.totalCost.toFixed(2)} > $${budget.maxCostUsd.toFixed(2)}`;
     } else if (
       snapshot.explorationCalls > budget.maxExplorationBeforeDelegation &&
       snapshot.delegations === 0
     ) {
       budgetExceeded = true;
-      budgetReason = `Delegation required: ${snapshot.explorationCalls} exploration calls without a single new_task delegation (limit: ${budget.maxExplorationBeforeDelegation})`;
+      budgetReason = `Delegation required: ${snapshot.explorationCalls} exploration calls without delegation (limit: ${budget.maxExplorationBeforeDelegation})`;
     }
 
     if (budgetExceeded) {
-      log.warn(`BUDGET KILL: ${budgetReason} — aborting session ${sessionId}`);
+      log.warn(`BUDGET KILL (parent): ${budgetReason} — aborting tree from ${sessionId}`);
       await abortSession(config, sessionId);
       return {
         sessionId,
@@ -319,17 +363,38 @@ export async function pollUntilDone(
       };
     }
 
-    // Only declare done if BOTH message analysis AND session status agree
-    if (snapshot.done && sessionIdle) {
+    // ── Per-session budget enforcement (each child individually) ──
+    for (const child of childSnapshots) {
+      const cTok = child.snap.tokensInput + child.snap.tokensOutput;
+      let childExceeded = false;
+      let childReason = "";
+
+      if (cTok > budget.maxTokens) {
+        childExceeded = true;
+        childReason = `Child ${child.id} token budget: ${cTok.toLocaleString()} > ${budget.maxTokens.toLocaleString()}`;
+      } else if (child.snap.totalCost > budget.maxCostUsd) {
+        childExceeded = true;
+        childReason = `Child ${child.id} cost budget: $${child.snap.totalCost.toFixed(2)} > $${budget.maxCostUsd.toFixed(2)}`;
+      }
+
+      if (childExceeded) {
+        log.warn(`BUDGET KILL (child): ${childReason}`);
+        await abortOne(config, child.id);
+      }
+    }
+
+    // ── Completion: parent done AND all children idle ──
+    const allChildrenIdle = childSnapshots.every((c) => c.idle);
+    if (snapshot.done && parentIdle && allChildrenIdle) {
       log.info(
-        `Session ${sessionId} completed: ${snapshot.toolCalls} tools, ${snapshot.totalParts} parts, $${snapshot.totalCost.toFixed(2)}, ${Math.round(elapsed / 1000)}s`
+        `Session tree completed: parent ${sessionId} + ${childSnapshots.length} children | $${totalTreeCost.toFixed(2)} total | ${Math.round(elapsed / 1000)}s`
       );
       return {
         sessionId,
         totalParts: snapshot.totalParts,
         toolCalls: snapshot.toolCalls,
         durationMs: elapsed,
-        totalCost: snapshot.totalCost,
+        totalCost: totalTreeCost,
         tokensInput: snapshot.tokensInput,
         tokensOutput: snapshot.tokensOutput,
         budgetExceeded: false,
@@ -337,13 +402,17 @@ export async function pollUntilDone(
       };
     }
 
+    // ── Logging ──
+    const childSummary = childSnapshots.length > 0
+      ? ` | children: ${childSnapshots.length} ($${childSnapshots.reduce((s, c) => s + c.snap.totalCost, 0).toFixed(2)})`
+      : "";
     if (snapshot.runningTools > 0) {
       log.info(
-        `[${Math.round(elapsed / 1000)}s] Running: ${snapshot.runningTools} tools, last: ${snapshot.lastToolName} | $${snapshot.totalCost.toFixed(2)} | ${totalTokens.toLocaleString()} tok | delegations: ${snapshot.delegations}`
+        `[${Math.round(elapsed / 1000)}s] Running: ${snapshot.runningTools} tools, last: ${snapshot.lastToolName} | $${snapshot.totalCost.toFixed(2)} | ${parentTokens.toLocaleString()} tok | delegations: ${snapshot.delegations}${childSummary}`
       );
     } else {
       log.info(
-        `[${Math.round(elapsed / 1000)}s] Parts: ${snapshot.totalParts}, tools: ${snapshot.toolCalls} | $${snapshot.totalCost.toFixed(2)} | ${totalTokens.toLocaleString()} tok | idle: ${sessionIdle} | delegations: ${snapshot.delegations}`
+        `[${Math.round(elapsed / 1000)}s] Parts: ${snapshot.totalParts}, tools: ${snapshot.toolCalls} | $${snapshot.totalCost.toFixed(2)} | ${parentTokens.toLocaleString()} tok | idle: ${parentIdle} | delegations: ${snapshot.delegations}${childSummary}`
       );
     }
 
