@@ -11,6 +11,12 @@
 
 export { LoopDetector, type LoopDetectorOptions } from "./loop-detector.js";
 export {
+  killSession,
+  getSessionMetrics,
+  type SessionKillerConfig,
+  type SessionKillerDeps,
+} from "./session-killer.js";
+export {
   type LoopClassification,
   type LoopDetection,
   type SessionMetrics,
