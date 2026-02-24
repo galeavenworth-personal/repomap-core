@@ -417,7 +417,7 @@ function accumulatePart(acc: PartAccumulator, part: Record<string, unknown>): vo
   acc.lastToolName = toolName;
 
   // Track delegation and exploration
-  if (toolName === "new_task") {
+  if (toolName === "new_task" || toolName === "task") {
     acc.delegations++;
   } else if (EXPLORATION_TOOLS.has(toolName)) {
     acc.explorationCalls++;
