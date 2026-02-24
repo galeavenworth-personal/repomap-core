@@ -367,17 +367,13 @@ function accumulatePart(acc: PartAccumulator, part: Record<string, unknown>): vo
   acc.lastPartType = (part.type as string) ?? null;
 
   // step-finish parts carry cost and token data
+  // Format: { cost: number, tokens: { input: number, output: number, reasoning?: number } }
   if (part.type === "step-finish") {
     if (typeof part.cost === "number") acc.totalCost += part.cost;
-    if (typeof part.tokensInput === "number") acc.tokensInput += part.tokensInput;
-    if (typeof part.tokensOutput === "number") acc.tokensOutput += part.tokensOutput;
-    // Also check nested usage object
-    const usage = part.usage as Record<string, unknown> | undefined;
-    if (usage) {
-      if (typeof usage.inputTokens === "number") acc.tokensInput += usage.inputTokens;
-      if (typeof usage.outputTokens === "number") acc.tokensOutput += usage.outputTokens;
-      if (typeof usage.input_tokens === "number") acc.tokensInput += usage.input_tokens;
-      if (typeof usage.output_tokens === "number") acc.tokensOutput += usage.output_tokens;
+    const tokens = part.tokens as Record<string, unknown> | undefined;
+    if (tokens) {
+      if (typeof tokens.input === "number") acc.tokensInput += tokens.input;
+      if (typeof tokens.output === "number") acc.tokensOutput += tokens.output;
     }
   }
 
