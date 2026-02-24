@@ -16,6 +16,8 @@
  *   --poll <ms>          Poll interval in ms (default: 10000)
  *   --no-wait            Start workflow and exit (fire-and-forget)
  *   --workflow-id <id>   Custom workflow ID (default: auto-generated)
+ *   --max-tokens <n>     Token budget per session (default: 100000)
+ *   --max-cost <usd>     Cost budget per session in USD (default: 1.00)
  *
  * Environment:
  *   TEMPORAL_ADDRESS     Temporal server gRPC address (default: localhost:7233)
@@ -39,6 +41,8 @@ async function main() {
   let pollIntervalMs = 10_000;
   let noWait = false;
   let workflowId: string | undefined;
+  let maxTokens = 100_000;
+  let maxCostUsd = 1.0;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -66,6 +70,12 @@ async function main() {
         break;
       case "--workflow-id":
         workflowId = args[++i];
+        break;
+      case "--max-tokens":
+        maxTokens = parseInt(args[++i], 10);
+        break;
+      case "--max-cost":
+        maxCostUsd = parseFloat(args[++i]);
         break;
       default:
         positional.push(args[i]);
@@ -96,12 +106,15 @@ async function main() {
     kiloPort,
     pollIntervalMs,
     timeoutMs,
+    maxTokens,
+    maxCostUsd,
   };
 
   console.log(`[dispatch] Starting workflow: ${wfId}`);
   console.log(`[dispatch] Agent: ${agent}`);
   console.log(`[dispatch] Prompt: ${prompt.length} chars`);
   console.log(`[dispatch] kilo serve: ${kiloHost}:${kiloPort}`);
+  console.log(`[dispatch] Budget: ${maxTokens.toLocaleString()} tokens / $${maxCostUsd.toFixed(2)}`);
 
   const handle = await client.workflow.start("agentTaskWorkflow", {
     taskQueue: TASK_QUEUE,
@@ -142,7 +155,12 @@ async function main() {
     console.log(`[dispatch] Session: ${result.sessionId}`);
     console.log(`[dispatch] Tools: ${result.toolCalls}`);
     console.log(`[dispatch] Parts: ${result.totalParts}`);
+    console.log(`[dispatch] Cost: $${result.totalCost?.toFixed(2) ?? "??"}`);
+    console.log(`[dispatch] Tokens: ${((result.tokensInput ?? 0) + (result.tokensOutput ?? 0)).toLocaleString()} (in: ${(result.tokensInput ?? 0).toLocaleString()}, out: ${(result.tokensOutput ?? 0).toLocaleString()})`);
     console.log(`[dispatch] Duration: ${Math.round(result.durationMs / 1000)}s`);
+    if (result.budgetReason) {
+      console.log(`[dispatch] ⚠ BUDGET: ${result.budgetReason}`);
+    }
     if (result.error) {
       console.log(`[dispatch] Error: ${result.error}`);
     }

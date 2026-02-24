@@ -29,13 +29,31 @@ export interface ProgressSnapshot {
   runningTools: number;
   lastToolName: string | null;
   done: boolean;
+  totalCost: number;
+  tokensInput: number;
+  tokensOutput: number;
 }
+
+export interface BudgetLimits {
+  maxTokens: number;
+  maxCostUsd: number;
+}
+
+export const DEFAULT_BUDGET: BudgetLimits = {
+  maxTokens: 100_000,
+  maxCostUsd: 1.0,
+};
 
 export interface AgentResult {
   sessionId: string;
   totalParts: number;
   toolCalls: number;
   durationMs: number;
+  totalCost: number;
+  tokensInput: number;
+  tokensOutput: number;
+  budgetExceeded: boolean;
+  budgetReason: string | null;
 }
 
 function makeClient(config: KiloConfig) {
@@ -87,6 +105,24 @@ export async function createSession(
 }
 
 /**
+ * Abort a kilo serve session. Used for budget enforcement and cancellation cleanup.
+ */
+export async function abortSession(
+  config: KiloConfig,
+  sessionId: string
+): Promise<boolean> {
+  try {
+    const url = `http://${config.kiloHost}:${config.kiloPort}/session/${sessionId}/abort`;
+    const res = await fetch(url, { method: "POST" });
+    log.info(`Session ${sessionId} abort: HTTP ${res.status}`);
+    return res.ok;
+  } catch (err) {
+    log.warn(`Failed to abort session ${sessionId}: ${err}`);
+    return false;
+  }
+}
+
+/**
  * Send a prompt to a kilo serve session (async dispatch).
  */
 export async function sendPrompt(
@@ -118,7 +154,8 @@ export async function pollUntilDone(
   config: KiloConfig,
   sessionId: string,
   pollIntervalMs: number = 10_000,
-  timeoutMs: number = 1_800_000 // 30 minutes
+  timeoutMs: number = 1_800_000, // 30 minutes
+  budget: BudgetLimits = DEFAULT_BUDGET
 ): Promise<AgentResult> {
   const client = makeClient(config);
   const startTime = Date.now();
@@ -141,27 +178,64 @@ export async function pollUntilDone(
       completedTools: snapshot.completedTools,
       runningTools: snapshot.runningTools,
       lastTool: snapshot.lastToolName,
+      cost: snapshot.totalCost,
+      tokensIn: snapshot.tokensInput,
+      tokensOut: snapshot.tokensOutput,
     });
+
+    // ── Budget enforcement ──
+    const totalTokens = snapshot.tokensInput + snapshot.tokensOutput;
+    let budgetExceeded = false;
+    let budgetReason: string | null = null;
+
+    if (totalTokens > budget.maxTokens) {
+      budgetExceeded = true;
+      budgetReason = `Token budget exceeded: ${totalTokens.toLocaleString()} > ${budget.maxTokens.toLocaleString()}`;
+    } else if (snapshot.totalCost > budget.maxCostUsd) {
+      budgetExceeded = true;
+      budgetReason = `Cost budget exceeded: $${snapshot.totalCost.toFixed(2)} > $${budget.maxCostUsd.toFixed(2)}`;
+    }
+
+    if (budgetExceeded) {
+      log.warn(`BUDGET KILL: ${budgetReason} — aborting session ${sessionId}`);
+      await abortSession(config, sessionId);
+      return {
+        sessionId,
+        totalParts: snapshot.totalParts,
+        toolCalls: snapshot.toolCalls,
+        durationMs: elapsed,
+        totalCost: snapshot.totalCost,
+        tokensInput: snapshot.tokensInput,
+        tokensOutput: snapshot.tokensOutput,
+        budgetExceeded: true,
+        budgetReason,
+      };
+    }
 
     if (snapshot.done) {
       log.info(
-        `Session ${sessionId} completed: ${snapshot.toolCalls} tools, ${snapshot.totalParts} parts, ${Math.round(elapsed / 1000)}s`
+        `Session ${sessionId} completed: ${snapshot.toolCalls} tools, ${snapshot.totalParts} parts, $${snapshot.totalCost.toFixed(2)}, ${Math.round(elapsed / 1000)}s`
       );
       return {
         sessionId,
         totalParts: snapshot.totalParts,
         toolCalls: snapshot.toolCalls,
         durationMs: elapsed,
+        totalCost: snapshot.totalCost,
+        tokensInput: snapshot.tokensInput,
+        tokensOutput: snapshot.tokensOutput,
+        budgetExceeded: false,
+        budgetReason: null,
       };
     }
 
     if (snapshot.runningTools > 0) {
       log.info(
-        `[${Math.round(elapsed / 1000)}s] Running: ${snapshot.runningTools} tools, last: ${snapshot.lastToolName}`
+        `[${Math.round(elapsed / 1000)}s] Running: ${snapshot.runningTools} tools, last: ${snapshot.lastToolName} | $${snapshot.totalCost.toFixed(2)} | ${totalTokens.toLocaleString()} tok`
       );
     } else {
       log.info(
-        `[${Math.round(elapsed / 1000)}s] Parts: ${snapshot.totalParts}, tools: ${snapshot.toolCalls}`
+        `[${Math.round(elapsed / 1000)}s] Parts: ${snapshot.totalParts}, tools: ${snapshot.toolCalls} | $${snapshot.totalCost.toFixed(2)} | ${totalTokens.toLocaleString()} tok`
       );
     }
 
@@ -176,6 +250,9 @@ interface PartAccumulator {
   runningTools: number;
   lastToolName: string | null;
   lastPartType: string | null;
+  totalCost: number;
+  tokensInput: number;
+  tokensOutput: number;
 }
 
 /** Extract flat parts from raw message groups. */
@@ -196,10 +273,25 @@ function flattenMessageParts(messages: unknown): Array<Record<string, unknown>> 
   return parts;
 }
 
-/** Accumulate tool statistics from a single part. */
+/** Accumulate tool statistics and cost/token data from a single part. */
 function accumulatePart(acc: PartAccumulator, part: Record<string, unknown>): void {
   acc.totalParts++;
   acc.lastPartType = (part.type as string) ?? null;
+
+  // step-finish parts carry cost and token data
+  if (part.type === "step-finish") {
+    if (typeof part.cost === "number") acc.totalCost += part.cost;
+    if (typeof part.tokensInput === "number") acc.tokensInput += part.tokensInput;
+    if (typeof part.tokensOutput === "number") acc.tokensOutput += part.tokensOutput;
+    // Also check nested usage object
+    const usage = part.usage as Record<string, unknown> | undefined;
+    if (usage) {
+      if (typeof usage.inputTokens === "number") acc.tokensInput += usage.inputTokens;
+      if (typeof usage.outputTokens === "number") acc.tokensOutput += usage.outputTokens;
+      if (typeof usage.input_tokens === "number") acc.tokensInput += usage.input_tokens;
+      if (typeof usage.output_tokens === "number") acc.tokensOutput += usage.output_tokens;
+    }
+  }
 
   if (part.type !== "tool") return;
 
@@ -242,6 +334,9 @@ async function getProgressSnapshot(
     runningTools: 0,
     lastToolName: null,
     lastPartType: null,
+    totalCost: 0,
+    tokensInput: 0,
+    tokensOutput: 0,
   };
 
   for (const part of flattenMessageParts(messages)) {
@@ -255,5 +350,8 @@ async function getProgressSnapshot(
     runningTools: acc.runningTools,
     lastToolName: acc.lastToolName,
     done: isSessionDone(acc),
+    totalCost: acc.totalCost,
+    tokensInput: acc.tokensInput,
+    tokensOutput: acc.tokensOutput,
   };
 }

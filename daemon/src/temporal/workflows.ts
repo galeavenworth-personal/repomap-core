@@ -16,6 +16,8 @@ import {
   defineQuery,
   setHandler,
   sleep,
+  CancellationScope,
+  isCancellation,
 } from "@temporalio/workflow";
 import type * as activities from "./activities.js";
 
@@ -33,6 +35,12 @@ const {
     maximumInterval: "60s",
     backoffCoefficient: 2,
   },
+});
+
+// Cleanup activities that must run even during cancellation
+const { abortSession } = proxyActivities<typeof activities>({
+  startToCloseTimeout: "30 seconds",
+  retry: { maximumAttempts: 2, initialInterval: "1s" },
 });
 
 // Override for short-lived activities
@@ -73,14 +81,20 @@ export interface AgentTaskInput {
   kiloPort?: number;
   pollIntervalMs?: number;
   timeoutMs?: number;
+  maxTokens?: number;
+  maxCostUsd?: number;
 }
 
 export interface AgentTaskResult {
-  status: "completed" | "aborted" | "failed";
+  status: "completed" | "aborted" | "failed" | "budget_exceeded";
   sessionId: string | null;
   totalParts: number;
   toolCalls: number;
   durationMs: number;
+  totalCost: number;
+  tokensInput: number;
+  tokensOutput: number;
+  budgetReason: string | null;
   error: string | null;
 }
 
@@ -140,19 +154,38 @@ export async function agentTaskWorkflow(
 
     // Step 5: Poll until done (activity heartbeats keep Temporal informed)
     state.phase = "agent_working";
+    const budget = {
+      maxTokens: input.maxTokens ?? 100_000,
+      maxCostUsd: input.maxCostUsd ?? 1.0,
+    };
     const result = await pollUntilDone(
       config,
       sessionId,
       input.pollIntervalMs ?? 10_000,
-      input.timeoutMs ?? 1_800_000
+      input.timeoutMs ?? 1_800_000,
+      budget
     );
 
     state.totalParts = result.totalParts;
     state.toolCalls = result.toolCalls;
-    state.phase = "completed";
 
-    return makeResult("completed", state, startTime);
+    if (result.budgetExceeded) {
+      state.phase = "budget_exceeded";
+      state.error = result.budgetReason;
+      return makeResult("budget_exceeded", state, startTime, result);
+    }
+
+    state.phase = "completed";
+    return makeResult("completed", state, startTime, result);
   } catch (err: unknown) {
+    // On cancellation, abort the kilo serve session so it stops burning tokens
+    if (isCancellation(err) && state.sessionId) {
+      await CancellationScope.nonCancellable(async () => {
+        await abortSession(config, state.sessionId!);
+      });
+      state.phase = "aborted";
+      return makeResult("aborted", state, startTime);
+    }
     const errorMsg = err instanceof Error ? err.message : String(err);
     state.phase = "failed";
     state.error = errorMsg;
@@ -163,7 +196,8 @@ export async function agentTaskWorkflow(
 function makeResult(
   status: AgentTaskResult["status"],
   state: AgentTaskStatus,
-  startTime: number
+  startTime: number,
+  agentResult?: { totalCost: number; tokensInput: number; tokensOutput: number; budgetReason: string | null }
 ): AgentTaskResult {
   return {
     status,
@@ -171,6 +205,10 @@ function makeResult(
     totalParts: state.totalParts,
     toolCalls: state.toolCalls,
     durationMs: Date.now() - startTime,
+    totalCost: agentResult?.totalCost ?? 0,
+    tokensInput: agentResult?.tokensInput ?? 0,
+    tokensOutput: agentResult?.tokensOutput ?? 0,
+    budgetReason: agentResult?.budgetReason ?? null,
     error: state.error,
   };
 }
