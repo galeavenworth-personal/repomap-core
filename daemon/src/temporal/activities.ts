@@ -10,6 +10,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { execSync } from "node:child_process";
 import { heartbeat, log } from "@temporalio/activity";
 import mysql from "mysql2/promise";
 
@@ -152,6 +153,106 @@ export async function punchCard(
   } finally {
     if (conn) await conn.end();
   }
+}
+
+// ── Bootstrap Manifest ──
+
+export interface BootstrapTarget {
+  id: string;
+  status: string;
+  title: string;
+  description: string;
+}
+
+export interface BootstrapManifest {
+  repo: { branch: string; head: string; dirty: boolean };
+  beads: { total: number; open: number; closed: number };
+  targets: BootstrapTarget[];
+  invariants: string[];
+  generatedAt: string;
+}
+
+export interface BootstrapConfig {
+  repoDir: string;
+  bdPath: string;
+  epicId?: string;
+}
+
+function shell(cmd: string, cwd: string): string {
+  try {
+    return execSync(cmd, { cwd, encoding: "utf-8", timeout: 15_000 }).trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Build a bootstrap manifest — runs bd/git commands outside the LLM.
+ * Returns a compact JSON digest the parent can consume in a single read
+ * instead of 6+ bash tool calls.
+ */
+export async function buildBootstrapManifest(
+  bootstrapConfig: BootstrapConfig
+): Promise<BootstrapManifest> {
+  const { repoDir, bdPath, epicId } = bootstrapConfig;
+
+  // Git state
+  const branch = shell("git rev-parse --abbrev-ref HEAD", repoDir);
+  const head = shell("git rev-parse --short HEAD", repoDir);
+  const dirty = shell("git status --porcelain", repoDir).length > 0;
+
+  // Bead counts
+  const allBeads = shell(`${bdPath} list --all --limit 0 --format '{{.ID}}\\t{{.Status}}'`, repoDir);
+  const beadLines = allBeads.split("\n").filter(Boolean);
+  const openCount = beadLines.filter((l) => !l.includes("CLOSED")).length;
+  const closedCount = beadLines.length - openCount;
+
+  // Target beads: children of the epic (or all open beads if no epic)
+  const targets: BootstrapTarget[] = [];
+  if (epicId) {
+    // Get children of the epic
+    const childrenRaw = shell(`${bdPath} children ${epicId}`, repoDir);
+    const childIds = childrenRaw
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        // Parse "◐ repomap-core-7xo.5 [● P1] ..." → extract ID
+        const match = line.match(/[○◐●✓✗]\s+(\S+)/);
+        return match ? match[1] : null;
+      })
+      .filter(Boolean) as string[];
+
+    for (const cid of childIds) {
+      const detail = shell(`${bdPath} show ${cid}`, repoDir);
+      // Extract title from first line
+      const titleMatch = detail.match(/[○◐●✓✗]\s+\S+\s+·\s+(.+?)\s+\[/);
+      const title = titleMatch ? titleMatch[1] : cid;
+      // Extract status
+      const statusMatch = detail.match(/\[(OPEN|IN_PROGRESS|CLOSED)\]/i) || detail.match(/(IN_PROGRESS|CLOSED)/i);
+      const status = statusMatch ? statusMatch[1] : "OPEN";
+      // Extract description (everything after DESCRIPTION header)
+      const descMatch = detail.match(/DESCRIPTION\n([\s\S]*?)(?:\n(?:LABELS|PARENT|CHILDREN|$))/);
+      const description = descMatch ? descMatch[1].trim().substring(0, 500) : "";
+
+      targets.push({ id: cid, status, title, description });
+    }
+  }
+
+  const manifest: BootstrapManifest = {
+    repo: { branch, head, dirty },
+    beads: { total: beadLines.length, open: openCount, closed: closedCount },
+    targets,
+    invariants: [
+      "Parent MUST NOT call bash, read, grep, or any exploration tool",
+      "Parent ONLY calls: task (to delegate) and abort (to kill)",
+      "Each child session has a $1.00 / 100k token budget",
+      "Delegate immediately — do not discover, do not plan, just dispatch",
+    ],
+    generatedAt: new Date().toISOString(),
+  };
+
+  log.info(`Bootstrap manifest: ${targets.length} targets, branch=${branch}, head=${head}`);
+  return manifest;
 }
 
 /**

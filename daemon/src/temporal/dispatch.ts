@@ -18,6 +18,9 @@
  *   --workflow-id <id>   Custom workflow ID (default: auto-generated)
  *   --max-tokens <n>     Token budget per session (default: 100000)
  *   --max-cost <usd>     Cost budget per session in USD (default: 1.00)
+ *   --repo-dir <path>    Repo directory for bootstrap manifest
+ *   --bd-path <path>     Path to bd binary for bootstrap manifest
+ *   --epic-id <id>       Epic bead ID for bootstrap manifest targets
  *
  * Environment:
  *   TEMPORAL_ADDRESS     Temporal server gRPC address (default: localhost:7233)
@@ -43,6 +46,9 @@ async function main() {
   let workflowId: string | undefined;
   let maxTokens = 100_000;
   let maxCostUsd = 1.0;
+  let repoDir: string | undefined;
+  let bdPath: string | undefined;
+  let epicId: string | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -77,6 +83,15 @@ async function main() {
       case "--max-cost":
         maxCostUsd = parseFloat(args[++i]);
         break;
+      case "--repo-dir":
+        repoDir = args[++i];
+        break;
+      case "--bd-path":
+        bdPath = args[++i];
+        break;
+      case "--epic-id":
+        epicId = args[++i];
+        break;
       default:
         positional.push(args[i]);
     }
@@ -108,6 +123,9 @@ async function main() {
     timeoutMs,
     maxTokens,
     maxCostUsd,
+    ...(repoDir ? { repoDir } : {}),
+    ...(bdPath ? { bdPath } : {}),
+    ...(epicId ? { epicId } : {}),
   };
 
   console.log(`[dispatch] Starting workflow: ${wfId}`);
@@ -115,6 +133,7 @@ async function main() {
   console.log(`[dispatch] Prompt: ${prompt.length} chars`);
   console.log(`[dispatch] kilo serve: ${kiloHost}:${kiloPort}`);
   console.log(`[dispatch] Budget: ${maxTokens.toLocaleString()} tokens / $${maxCostUsd.toFixed(2)}`);
+  if (repoDir) console.log(`[dispatch] Bootstrap: repo=${repoDir}, bd=${bdPath}, epic=${epicId ?? 'none'}`);
 
   const handle = await client.workflow.start("agentTaskWorkflow", {
     taskQueue: TASK_QUEUE,
