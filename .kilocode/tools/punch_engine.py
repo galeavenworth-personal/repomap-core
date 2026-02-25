@@ -322,7 +322,7 @@ def _fetch_card_requirements(card_id: str) -> list[dict[str, object]]:
     """Load punch card requirement rows for the provided card_id."""
     card_q = _sql_escape_literal(card_id)
     query = (
-        "SELECT punch_type, punch_key_pattern, required, description "
+        "SELECT punch_type, punch_key_pattern, required, forbidden, description "
         "FROM punch_cards.punch_cards "
         f"WHERE card_id = '{card_q}'"
     )
@@ -336,16 +336,19 @@ def _fetch_card_requirements(card_id: str) -> list[dict[str, object]]:
 
     reqs: list[dict[str, object]] = []
     for row in rows[1:]:
-        if len(row) < 4:
+        if len(row) < 5:
             continue
         required_value = row[2].strip().lower()
         required = required_value in {"1", "true", "t", "yes", "y"}
+        forbidden_value = row[3].strip().lower()
+        forbidden = forbidden_value in {"1", "true", "t", "yes", "y"}
         reqs.append(
             {
                 "punch_type": row[0],
                 "punch_key_pattern": row[1],
                 "required": required,
-                "description": row[3],
+                "forbidden": forbidden,
+                "description": row[4],
             }
         )
     return reqs
@@ -376,24 +379,44 @@ def _count_matching_punches(
         return 0
 
 
-def cmd_evaluate(task_id: str, card_id: str) -> tuple[str, list[dict[str, str]]]:
-    """Evaluate whether required punches exist for task/card requirements."""
+def cmd_evaluate(
+    task_id: str, card_id: str
+) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
+    """Evaluate whether required punches exist for task/card requirements.
+
+    Handles two enforcement modes per row:
+    - required=TRUE, forbidden=FALSE → punch must exist (count == 0 → fail)
+    - required=TRUE, forbidden=TRUE  → punch must NOT exist (count > 0 → fail)
+    - required=FALSE → skip (informational/optional row)
+    """
     requirements = _fetch_card_requirements(card_id)
     if not requirements:
         print(f"FAIL: no requirements found for card_id '{card_id}'", file=sys.stderr)
-        return "fail", []
+        return "fail", [], []
 
     missing: list[dict[str, str]] = []
+    violations: list[dict[str, str]] = []
 
     for req in requirements:
         required = bool(req.get("required"))
         if not required:
             continue
+        forbidden = bool(req.get("forbidden"))
         punch_type = str(req.get("punch_type", ""))
         punch_key_pattern = str(req.get("punch_key_pattern", ""))
         description = str(req.get("description", ""))
         count = _count_matching_punches(task_id, punch_type, punch_key_pattern)
-        if count == 0:
+
+        if forbidden and count > 0:
+            violations.append(
+                {
+                    "punch_type": punch_type,
+                    "punch_key_pattern": punch_key_pattern,
+                    "description": description,
+                    "count": str(count),
+                }
+            )
+        elif not forbidden and count == 0:
             missing.append(
                 {
                     "punch_type": punch_type,
@@ -402,7 +425,8 @@ def cmd_evaluate(task_id: str, card_id: str) -> tuple[str, list[dict[str, str]]]
                 }
             )
 
-    status = "pass" if not missing else "fail"
+    has_failures = bool(missing) or bool(violations)
+    status = "pass" if not has_failures else "fail"
     print(f"Status: {status}")
     if missing:
         print("Missing required punches:")
@@ -412,7 +436,15 @@ def cmd_evaluate(task_id: str, card_id: str) -> tuple[str, list[dict[str, str]]]
                 f"{item['punch_type']} key LIKE {item['punch_key_pattern']} "
                 f"({item['description']})"
             )
-    return status, missing
+    if violations:
+        print("Forbidden punch violations (anti-delegation):")
+        for item in violations:
+            print(
+                "- "
+                f"{item['punch_type']} key LIKE {item['punch_key_pattern']} "
+                f"found {item['count']}x ({item['description']})"
+            )
+    return status, missing, violations
 
 
 def _insert_checkpoint(
@@ -421,6 +453,7 @@ def _insert_checkpoint(
     status: str,
     validated_at: str,
     missing: list[dict[str, str]],
+    violations: list[dict[str, str]],
 ) -> int | None:
     """Insert checkpoint row and return checkpoint_id from LAST_INSERT_ID."""
     task_q = _sql_escape_literal(task_id)
@@ -434,13 +467,28 @@ def _insert_checkpoint(
     else:
         missing_clause = "NULL"
 
-    insert_query = (
+    if violations:
+        violations_json = json.dumps(violations, separators=(",", ":"))
+        violations_clause = f"'{_sql_escape_literal(violations_json)}'"
+    else:
+        violations_clause = "NULL"
+
+    insert_query_with_violations = (
         "INSERT INTO punch_cards.checkpoints "
-        "(task_id, card_id, status, validated_at, missing_punches) "
+        "(task_id, card_id, status, validated_at, missing_punches, violations) "
         "VALUES "
-        f"('{task_q}', '{card_q}', '{status_q}', '{validated_q}', {missing_clause})"
+        f"('{task_q}', '{card_q}', '{status_q}', '{validated_q}', {missing_clause}, {violations_clause})"
     )
-    out = dolt_sql(insert_query)
+    out = dolt_sql(insert_query_with_violations)
+    if out is None:
+        # Backward-compatible fallback when checkpoints table has no `violations` column.
+        insert_query_legacy = (
+            "INSERT INTO punch_cards.checkpoints "
+            "(task_id, card_id, status, validated_at, missing_punches) "
+            "VALUES "
+            f"('{task_q}', '{card_q}', '{status_q}', '{validated_q}', {missing_clause})"
+        )
+        out = dolt_sql(insert_query_legacy)
     if out is None:
         return None
 
@@ -497,12 +545,14 @@ def _update_checkpoint_commit_hash(checkpoint_id: int, commit_hash: str) -> bool
 
 def cmd_checkpoint(task_id: str, card_id: str) -> tuple[int | None, str | None, str]:
     """Evaluate card, persist checkpoint, and optionally commit on pass."""
-    status, missing = cmd_evaluate(task_id, card_id)
+    status, missing, violations = cmd_evaluate(task_id, card_id)
     validated_at = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
 
-    checkpoint_id = _insert_checkpoint(task_id, card_id, status, validated_at, missing)
+    checkpoint_id = _insert_checkpoint(
+        task_id, card_id, status, validated_at, missing, violations
+    )
     if checkpoint_id is None:
         print("checkpoint_id: n/a")
         print("dolt_commit_hash: n/a")
@@ -520,6 +570,16 @@ def cmd_checkpoint(task_id: str, card_id: str) -> tuple[int | None, str | None, 
 
     print(f"checkpoint_id: {checkpoint_id}")
     print(f"dolt_commit_hash: {dolt_commit_hash or 'n/a'}")
+    print(
+        "checkpoint_record: "
+        + json.dumps(
+            {
+                "missing_punches": missing,
+                "violations": violations,
+            },
+            separators=(",", ":"),
+        )
+    )
     return checkpoint_id, dolt_commit_hash, status
 
 
@@ -556,7 +616,7 @@ def main() -> int:
         cmd_mint(args.task_id, bead_id=args.bead_id)
         return 0
     elif args.command == "evaluate":
-        status, _missing = cmd_evaluate(args.task_id, args.card_id)
+        status, _missing, _violations = cmd_evaluate(args.task_id, args.card_id)
         return 0 if status == "pass" else 1
     elif args.command == "checkpoint":
         _cp_id, _hash, status = cmd_checkpoint(args.task_id, args.card_id)
