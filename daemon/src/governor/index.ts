@@ -17,6 +17,19 @@ export {
   type SessionKillerDeps,
 } from "./session-killer.js";
 export {
+  diagnoseSession,
+  type DiagnosisConfig,
+} from "./diagnosis-engine.js";
+export {
+  FitterDispatch,
+  DEFAULT_FITTER_CONFIG,
+  type FitterDispatchConfig,
+  type FitterDispatchDeps,
+  type SessionDispatcher,
+  type SessionRequest,
+  type SessionResponse,
+} from "./fitter-dispatch.js";
+export {
   type LoopClassification,
   type LoopDetection,
   type SessionMetrics,

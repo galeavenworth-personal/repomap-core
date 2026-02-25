@@ -1,16 +1,16 @@
 ---
-description: Meta-workflow for software fabrication task initiation. Orchestrates beads task discovery, codebase exploration, and task preparation in a single invocation.
+description: Delegation orchestrator for task preparation. Spawns architect children for discover, explore, and prepare phases. Process-orchestrator runs this — it coordinates, never implements.
 auto_execution_mode: 3
-punch_card: start-task
+punch_card: start-task-orchestrate
 ---
 
-# Start Task Workflow
+# Start Task Workflow (Delegation Orchestrator)
 
-A meta-workflow that orchestrates the initial phases of software fabrication task execution.
-This workflow consolidates task discovery, context gathering, and preparation into a single,
-streamlined invocation.
+A delegation orchestrator that coordinates the preparation phases of software fabrication.
+Each phase runs in its own isolated child session via `new_task`, ensuring context isolation,
+bounded cost, and punch card enforcement at every phase boundary.
 
-**Punch Card:** `start-task` (7 rows, 6 required)
+**Punch Card:** `start-task-orchestrate` (8 rows, 3 required, 4 forbidden)
 **Commands Reference:** [`.kilocode/commands.toml`](../commands.toml)
 
 ## Usage
@@ -19,159 +19,106 @@ streamlined invocation.
 /start-task <task-id>
 ```
 
-## What This Workflow Does
+## Architecture
 
-Three sequential phases, each driven by commands.toml routes:
+**You are a process-orchestrator (Tier 2).** You coordinate, you do not implement.
 
-1. **Task Discovery** — Fetch task details from beads
-2. **Codebase Exploration** — Gather semantic understanding of relevant code
-3. **Task Preparation** — Transform the task into actionable work via sequential thinking
+```
+process-orchestrator (this workflow)
+├── Phase 1: new_task → architect (discover-phase)
+│   └── punch card: discover-phase
+├── Phase 2: new_task → architect (explore-phase)
+│   └── punch card: explore-phase
+├── Phase 3: new_task → architect (prepare-phase)
+│   └── punch card: prepare-phase
+└── punch card: start-task-orchestrate (requires architect child_spawn, forbids direct tool use)
+```
 
-**Exit Gate:** `checkpoint punch-card` must PASS before returning to parent.
+**Anti-delegation enforcement:** If you call `retrieve codebase`, `edit_file`, `apply_diff`,
+or `write_to_file` directly, your punch card checkpoint will FAIL. Delegate to children.
 
 ---
 
-## Phase 1: Task Discovery
+## Pre-Flight
 
-**Objective:** Understand what needs to be done and why.
-
-**Steps:**
-
-1. Preflight Beads setup (fail-fast):
+1. Beads preflight (fail-fast):
 
    ```bash
    .kilocode/tools/beads_preflight.sh
    ```
 
-   If it reports `.beads/ not initialized`, run once per clone:
+   If `.beads/ not initialized`:
 
    ```bash
    .kilocode/tools/bd init
    ```
 
-2. Fetch task details:
+2. Fetch task details (orchestrator reads task metadata — this is coordination, not exploration):
 
    > 📌 `show issue {task-id}` → [`commands.show_issue`](../commands.toml)
    > Resolves to: `.kilocode/tools/bd show {id}`
 
-3. If the task has a parent epic, fetch that context:
+3. If the task has a parent epic:
 
    > 📌 `show issue {parent-id}` → [`commands.show_issue`](../commands.toml)
 
-4. Review task description, acceptance criteria, and any linked context.
-   Identify key components, files, or systems mentioned.
-
-**Key Questions:**
-- What is the task asking for? (bug fix, feature, refactor, investigation)
-- What is the expected outcome?
-- Are there dependencies or blockers?
-- What is the parent epic's strategic context?
-
-**Output:** Clear understanding of task scope and strategic alignment.
+4. Build the handoff packet for Phase 1 from the task details.
 
 ---
 
-## Phase 2: Codebase Exploration
+## Phase 1: Discover (Delegate to Architect Child)
 
-**Objective:** Gather comprehensive context about the code involved in this task.
+> 📌 `dispatch architect` → [`commands.dispatch_architect`](../commands.toml)
+> Resolves to: `new_task` with `target_mode=architect`
+> Contract: [`.kilocode/contracts/composability/handoff_packet.md`](../contracts/composability/handoff_packet.md)
 
-### Layer 1: Semantic Understanding
+**Handoff packet must include:**
+- `task_id`
+- `objective`: "Perform task discovery — understand scope, gather strategic context"
+- `evidence`: [bead description, acceptance criteria, epic context]
+- `success_criteria`: ["Discovery summary with key components, scope boundaries, dependencies"]
+- `workflow_instruction`: "Follow `/discover-phase` workflow. Your punch card is `discover-phase`."
 
-> 📌 `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
-> Resolves to: `mcp--augment___context___engine--codebase___retrieval`
+**Child workflow:** [`discover-phase.md`](./discover-phase.md)
 
-Query for:
-- How does the feature/component mentioned in the task work?
-- What are the architectural patterns around the task area?
-- What are the key files and modules involved?
-
-### Layer 2: Structural Analysis (Kilo Native Tools)
-
-Use `list_files` to understand directory structure, `read_file` to examine key files
-(batch up to 5), and `search_files` to find specific patterns.
-
-### Layer 3: Library Documentation (if external deps involved)
-
-> 📌 `resolve library` → [`commands.resolve_library`](../commands.toml)
-> 📌 `query docs` → [`commands.query_docs`](../commands.toml)
-
-**Output:** Comprehensive understanding of code structure, patterns, and constraints.
+**Wait for child completion.** Parse the discovery summary from the child's return.
 
 ---
 
-## Phase 3: Task Preparation
+## Phase 2: Explore (Delegate to Architect Child)
 
-**Objective:** Transform the task into actionable, well-scoped work using sequential thinking.
+> 📌 `dispatch architect` → [`commands.dispatch_architect`](../commands.toml)
+> Resolves to: `new_task` with `target_mode=architect`
 
-**MANDATORY: All reasoning must go through sequential thinking commands.**
+**Handoff packet must include:**
+- `task_id`
+- `objective`: "Perform codebase exploration — deep structural and semantic analysis"
+- `evidence`: [discovery summary from Phase 1, key components list]
+- `success_criteria`: ["Exploration summary with architecture map, test coverage, impact analysis"]
+- `workflow_instruction`: "Follow `/explore-phase` workflow. Your punch card is `explore-phase`."
 
-### Step 1: Problem Definition (≥2 thoughts)
+**Child workflow:** [`explore-phase.md`](./explore-phase.md)
 
-> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
-> Resolves to: `mcp--sequentialthinking--process_thought`
+**Wait for child completion.** Parse the exploration summary from the child's return.
 
-Minimum 2 interpretation branches required:
+---
 
-```
-decompose task: "Task interpretation 1: [first way to understand the task]"
-  stage=Problem Definition, tags=[prep, interpretation]
+## Phase 3: Prepare (Delegate to Architect Child)
 
-decompose task: "Task interpretation 2: [alternative understanding]"
-  stage=Problem Definition, tags=[prep, interpretation]
-```
+> 📌 `dispatch architect` → [`commands.dispatch_architect`](../commands.toml)
+> Resolves to: `new_task` with `target_mode=architect`
 
-### Step 2: Analysis (≥2 thoughts)
+**Handoff packet must include:**
+- `task_id`
+- `objective`: "Prepare implementation plan via sequential thinking"
+- `evidence`: [discovery summary, exploration summary]
+- `success_criteria`: ["Preparation summary with chosen approach, success criteria, subtask plan, exported session"]
+- `workflow_instruction`: "Follow `/prepare-phase` workflow. Your punch card is `prepare-phase`."
 
-> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
+**Child workflow:** [`prepare-phase.md`](./prepare-phase.md)
 
-Minimum 2 approach branches required:
-
-```
-decompose task: "Approach A: [strategy]. Pros: [...]. Cons: [...]"
-  stage=Analysis, tags=[prep, approach]
-
-decompose task: "Approach B: [alternative]. Pros: [...]. Cons: [...]"
-  stage=Analysis, tags=[prep, approach]
-```
-
-### Step 3: Verify Exploration Completeness
-
-> 📌 `summarize thinking` → [`commands.summarize_thinking`](../commands.toml)
-> Resolves to: `mcp--sequentialthinking--generate_summary`
-
-Verify output shows:
-- Multiple Problem Definition thoughts (interpretations)
-- Multiple Analysis thoughts (approaches)
-- Clear reasoning for each branch
-
-### Step 4: Synthesis & Conclusion
-
-> 📌 `decompose task` → [`commands.decompose_task`](../commands.toml)
-
-```
-decompose task: "Choosing [approach] because [rationale]. Implementation plan: [steps]."
-  stage=Synthesis, tags=[prep, decision]
-
-decompose task: "Success criteria: [outcomes]. Risks: [issues]. Mitigation: [how]."
-  stage=Conclusion, tags=[prep, success-criteria]
-```
-
-**CRITICAL: You MUST reach Conclusion stage before proceeding.**
-
-### 8-Step Methodology (Apply During Sequential Thinking)
-
-While using sequential thinking above, ensure you address:
-
-1. **Clarify ambiguous language** — Replace vague terms with specific file/function references
-2. **Add missing context** — Include architecture patterns from Phase 2
-3. **Specify success criteria** — Define measurable outcomes
-4. **Break down complexity** — Decompose into subtasks with dependencies
-5. **Correct technical errors** — Verify API signatures and file paths
-6. **Align with conventions** — Follow [`repomap.toml`](../../repomap.toml) layer rules
-7. **Remove scope creep** — Eliminate implied work not explicitly requested
-8. **Preserve code samples** — Keep user-provided code blocks unchanged
-
-**Output:** Actionable task with clear subtasks, success criteria, and implementation plan.
+**Wait for child completion.** Parse the preparation summary from the child's return.
+The preparation summary contains the **subtask plan** needed by `/execute-task`.
 
 ---
 
@@ -179,34 +126,42 @@ While using sequential thinking above, ensure you address:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  PHASE 1: TASK DISCOVERY                                        │
+│  PRE-FLIGHT (orchestrator reads task metadata)                   │
 │  ├── show issue {task-id}           → commands.show_issue       │
 │  ├── show issue {parent-id}         → commands.show_issue       │
-│  └── Review task description and acceptance criteria            │
+│  └── Build handoff packet from task details                     │
 ├─────────────────────────────────────────────────────────────────┤
-│  PHASE 2: CODEBASE EXPLORATION                                  │
-│  ├── retrieve codebase              → commands.retrieve_codebase│
-│  ├── list_files + read_file (structural analysis)               │
-│  └── resolve library / query docs   → commands.resolve_library  │
+│  PHASE 1: DISCOVER (delegate)                                    │
+│  ├── dispatch architect             → commands.dispatch_architect│
+│  │   └── child runs /discover-phase with punch card             │
+│  └── Parse discovery summary from child return                  │
 ├─────────────────────────────────────────────────────────────────┤
-│  PHASE 3: TASK PREPARATION                                      │
-│  ├── decompose task (≥2 interpretations) → commands.decompose_task
-│  ├── decompose task (≥2 approaches)      → commands.decompose_task
-│  ├── summarize thinking                  → commands.summarize_thinking
-│  ├── decompose task (synthesis+conclusion)→ commands.decompose_task
-│  └── export session                      → commands.export_session│
+│  PHASE 2: EXPLORE (delegate)                                     │
+│  ├── dispatch architect             → commands.dispatch_architect│
+│  │   └── child runs /explore-phase with punch card              │
+│  └── Parse exploration summary from child return                │
+├─────────────────────────────────────────────────────────────────┤
+│  PHASE 3: PREPARE (delegate)                                     │
+│  ├── dispatch architect             → commands.dispatch_architect│
+│  │   └── child runs /prepare-phase with punch card              │
+│  └── Parse preparation summary with subtask plan                │
 ├─────────────────────────────────────────────────────────────────┤
 │  EXIT GATE: PUNCH CARD CHECKPOINT                               │
 │  ├── mint punches {task_id}         → commands.punch_mint       │
-│  ├── checkpoint punch-card {task_id} start-task                 │
+│  ├── checkpoint punch-card {task_id} process-orchestrate        │
 │  │                                  → commands.punch_checkpoint  │
-│  └── MUST PASS — blocks attempt_completion on failure           │
+│  └── MUST PASS — checks child_spawn + forbids direct tool use   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Critical Rules
+
+### Delegation Is Mandatory
+You are a Tier 2 orchestrator. You MUST delegate specialist work to children via `new_task`.
+Direct calls to `retrieve codebase`, `edit_file`, `apply_diff`, or `write_to_file` will
+cause your punch card checkpoint to FAIL (forbidden punch violations).
 
 ### Virtual Environment Mandate
 **ALWAYS** use `.venv/bin/python -m ...` for Python execution.
@@ -218,25 +173,8 @@ While using sequential thinking above, ensure you address:
 
 Run at session start if not already synced.
 
-### Quality Gates (Non-Negotiable)
-
-> 📌 `gate quality` → [`commands.gate_quality`](../commands.toml)
-> Composite: `format_ruff` → `check_ruff` → `check_mypy` → `test_pytest`
-> All run through `bounded_gate.py` with receipt tracking.
-
 ### Layered Architecture
 Respect layer boundaries defined in [`repomap.toml`](../../repomap.toml).
-
----
-
-## MANDATORY: Export Session
-
-After completing Phase 3:
-
-> 📌 `export session` → [`commands.export_session`](../commands.toml)
-> Resolves to: `mcp--sequentialthinking--export_session`
-
-File path: `.kilocode/thinking/task-{task-id}-prep-{YYYY-MM-DD}.json`
 
 ---
 
@@ -247,27 +185,33 @@ File path: `.kilocode/thinking/task-{task-id}-prep-{YYYY-MM-DD}.json`
 > 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
 > Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id}`
 
-> 🚪 `checkpoint punch-card {task_id} start-task` → [`commands.punch_checkpoint`](../commands.toml)
-> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} start-task`
+> 🚪 `checkpoint punch-card {task_id} start-task-orchestrate` → [`commands.punch_checkpoint`](../commands.toml)
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} start-task-orchestrate`
 > **receipt_required = true** — this is a hard gate.
 
-**If checkpoint FAILS:** Do NOT call `attempt_completion`. Review which required punches
-are missing, complete the missing steps, re-mint, and re-checkpoint.
+**Checkpoint verifies:**
+- ✅ You spawned at least one `architect` child (delegation happened)
+- ✅ You received child completions
+- ❌ You did NOT call `edit_file`, `apply_diff`, `write_to_file`, or `codebase_retrieval` directly
+
+**If checkpoint FAILS:** Do NOT call `attempt_completion`. Review failures:
+- Missing `child_spawn` → you forgot to delegate a phase
+- Forbidden violations → you did specialist work yourself; re-run with proper delegation
 
 **If checkpoint PASSES:** Proceed to `attempt_completion` with the prepared task.
 
 ---
 
-## STOP HERE
+## STOP HERE (prep-only invocation)
 
-**This workflow STOPS after preparation is complete and the punch card checkpoint passes.**
+**If invoked as `/start-task` (prep only), STOP after Phase 3.**
 
 ✋ **DO NOT PROCEED TO IMPLEMENTATION.**
 
 Present the prepared task with:
-- Summary of task understanding
-- Key files and components identified
-- Proposed subtasks and success criteria
+- Discovery summary (from Phase 1 child)
+- Exploration summary (from Phase 2 child)
+- Preparation summary with subtask plan (from Phase 3 child)
 - Punch card checkpoint result (PASS)
 
 **To execute the task, the user must explicitly approve or run:**
@@ -280,6 +224,10 @@ Present the prepared task with:
 ## Related Workflows
 
 - [`/execute-task`](./execute-task.md) — Implementation phase (after approval)
+- [`/discover-phase`](./discover-phase.md) — Specialist child: task discovery
+- [`/explore-phase`](./explore-phase.md) — Specialist child: codebase exploration
+- [`/prepare-phase`](./prepare-phase.md) — Specialist child: sequential thinking prep
+- [`/execute-subtask`](./execute-subtask.md) — Specialist child: bounded implementation
 - [`/codebase-exploration`](./codebase-exploration.md) — Deep dive into code structure
 - [`/prep-task`](./prep-task.md) — Detailed task preparation methodology
 
@@ -293,6 +241,7 @@ Present the prepared task with:
 ## Philosophy: Software Fabrication
 
 - **Determinism** — Same task → same preparation → same execution
-- **Evidence-based** — Decisions backed by codebase analysis
+- **Delegation** — Orchestrators coordinate, specialists implement
+- **Evidence-based** — Decisions backed by codebase analysis, enforced by punch cards
 - **Structure discipline** — commands.toml routes all the way down
-- **Self-verifying** — Punch card checkpoint gates the exit
+- **Self-verifying** — Punch card checkpoint gates every phase boundary and the exit

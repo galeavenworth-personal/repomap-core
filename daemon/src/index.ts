@@ -12,7 +12,7 @@
  *   - mysql2: Dolt wire-protocol client (MySQL compatible)
  *
  * Related:
- *   - Schema: ../plans/punch-card-schema.sql
+ *   - Schema: ../.kilocode/schema/punch-card-schema.sql
  *   - Research: ../docs/research/kilo-cli-server-daemon-integration-2026-02-19.md
  */
 

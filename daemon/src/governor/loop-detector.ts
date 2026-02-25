@@ -65,7 +65,10 @@ export class LoopDetector {
       this.totalCost += punch.cost;
     }
 
-    this.sourceHashes.push(punch.sourceHash);
+    // Use contentHash for plateau detection (hash of content being read/processed).
+    // Falls back to sourceHash for backward compatibility with punches that
+    // don't carry a contentHash yet.
+    this.sourceHashes.push(punch.contentHash ?? punch.sourceHash);
   }
 
   /** Return current accumulated metrics. */
@@ -167,18 +170,18 @@ export class LoopDetector {
    * drops below the threshold, the agent is re-reading the same content.
    */
   private detectCachePlateau(): LoopDetection | null {
-    const { cacheWindowSize, cachePlateuRatio } = this.thresholds;
+    const { cacheWindowSize, cachePlateauRatio } = this.thresholds;
     if (this.sourceHashes.length < cacheWindowSize) return null;
 
     const window = this.sourceHashes.slice(-cacheWindowSize);
     const uniqueCount = new Set(window).size;
     const ratio = uniqueCount / cacheWindowSize;
 
-    if (ratio >= cachePlateuRatio) return null;
+    if (ratio >= cachePlateauRatio) return null;
 
     return this.makeDetection(
       "cache_plateau",
-      `Cache plateau: ${uniqueCount}/${cacheWindowSize} unique hashes (ratio ${ratio.toFixed(2)} < ${cachePlateuRatio})`
+      `Cache plateau: ${uniqueCount}/${cacheWindowSize} unique hashes (ratio ${ratio.toFixed(2)} < ${cachePlateauRatio})`
     );
   }
 

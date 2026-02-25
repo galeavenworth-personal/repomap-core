@@ -1,8 +1,9 @@
 /**
- * Temporal Dispatch CLI — Start Agent Task Workflows
+ * Temporal Dispatch CLI — Thin Client for kilo serve
  *
  * CLI tool to start agentTaskWorkflow executions via Temporal.
- * Replaces the manual factory_dispatch.sh → poll → verify loop.
+ * This is a thin durability wrapper — all orchestration intelligence
+ * lives in the kilo serve mode system.
  *
  * Usage:
  *   npx tsx src/temporal/dispatch.ts [options] <prompt>
@@ -16,11 +17,6 @@
  *   --poll <ms>          Poll interval in ms (default: 10000)
  *   --no-wait            Start workflow and exit (fire-and-forget)
  *   --workflow-id <id>   Custom workflow ID (default: auto-generated)
- *   --max-tokens <n>     Token budget per session (default: 100000)
- *   --max-cost <usd>     Cost budget per session in USD (default: 1.00)
- *   --repo-dir <path>    Repo directory for bootstrap manifest
- *   --bd-path <path>     Path to bd binary for bootstrap manifest
- *   --epic-id <id>       Epic bead ID for bootstrap manifest targets
  *
  * Environment:
  *   TEMPORAL_ADDRESS     Temporal server gRPC address (default: localhost:7233)
@@ -44,11 +40,6 @@ async function main() {
   let pollIntervalMs = 10_000;
   let noWait = false;
   let workflowId: string | undefined;
-  let maxTokens = 100_000;
-  let maxCostUsd = 1.0;
-  let repoDir: string | undefined;
-  let bdPath: string | undefined;
-  let epicId: string | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -76,21 +67,6 @@ async function main() {
         break;
       case "--workflow-id":
         workflowId = args[++i];
-        break;
-      case "--max-tokens":
-        maxTokens = parseInt(args[++i], 10);
-        break;
-      case "--max-cost":
-        maxCostUsd = parseFloat(args[++i]);
-        break;
-      case "--repo-dir":
-        repoDir = args[++i];
-        break;
-      case "--bd-path":
-        bdPath = args[++i];
-        break;
-      case "--epic-id":
-        epicId = args[++i];
         break;
       default:
         positional.push(args[i]);
@@ -121,19 +97,12 @@ async function main() {
     kiloPort,
     pollIntervalMs,
     timeoutMs,
-    maxTokens,
-    maxCostUsd,
-    ...(repoDir ? { repoDir } : {}),
-    ...(bdPath ? { bdPath } : {}),
-    ...(epicId ? { epicId } : {}),
   };
 
   console.log(`[dispatch] Starting workflow: ${wfId}`);
   console.log(`[dispatch] Agent: ${agent}`);
   console.log(`[dispatch] Prompt: ${prompt.length} chars`);
   console.log(`[dispatch] kilo serve: ${kiloHost}:${kiloPort}`);
-  console.log(`[dispatch] Budget: ${maxTokens.toLocaleString()} tokens / $${maxCostUsd.toFixed(2)}`);
-  if (repoDir) console.log(`[dispatch] Bootstrap: repo=${repoDir}, bd=${bdPath}, epic=${epicId ?? 'none'}`);
 
   const handle = await client.workflow.start("agentTaskWorkflow", {
     taskQueue: TASK_QUEUE,
@@ -177,9 +146,6 @@ async function main() {
     console.log(`[dispatch] Cost: $${result.totalCost?.toFixed(2) ?? "??"}`);
     console.log(`[dispatch] Tokens: ${((result.tokensInput ?? 0) + (result.tokensOutput ?? 0)).toLocaleString()} (in: ${(result.tokensInput ?? 0).toLocaleString()}, out: ${(result.tokensOutput ?? 0).toLocaleString()})`);
     console.log(`[dispatch] Duration: ${Math.round(result.durationMs / 1000)}s`);
-    if (result.budgetReason) {
-      console.log(`[dispatch] ⚠ BUDGET: ${result.budgetReason}`);
-    }
     if (result.error) {
       console.log(`[dispatch] Error: ${result.error}`);
     }

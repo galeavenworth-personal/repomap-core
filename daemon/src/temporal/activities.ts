@@ -1,18 +1,16 @@
 /**
- * Temporal Activities — Agent Task Orchestration
+ * Temporal Activities — Thin Client for kilo serve
  *
  * Activities contain all I/O: HTTP calls to kilo serve, polling, health checks.
  * Each activity is independently retryable by Temporal. The workflow orchestrates
  * the sequence; activities do the actual work.
  *
- * These wrap the existing prompt-driver and kilo serve SDK calls as Temporal-compatible
- * activity functions with heartbeat support.
+ * This is a thin durability wrapper. All orchestration intelligence lives in
+ * the kilo serve mode system (.kilocodemodes), contracts, and workflows.
+ * Temporal adds: retry, durability, observability. Nothing else.
  */
 
-import { createHash } from "node:crypto";
-import { execSync } from "node:child_process";
 import { heartbeat, log } from "@temporalio/activity";
-import mysql from "mysql2/promise";
 
 export interface KiloConfig {
   kiloHost: string;
@@ -34,24 +32,7 @@ export interface ProgressSnapshot {
   totalCost: number;
   tokensInput: number;
   tokensOutput: number;
-  /** Number of new_task tool calls (delegation events). */
-  delegations: number;
-  /** Number of codebase exploration tools called (read, bash, grep, etc). */
-  explorationCalls: number;
 }
-
-export interface BudgetLimits {
-  maxTokens: number;
-  maxCostUsd: number;
-  /** Max exploration tool calls allowed before a new_task delegation is required (default: 3). */
-  maxExplorationBeforeDelegation: number;
-}
-
-export const DEFAULT_BUDGET: BudgetLimits = {
-  maxTokens: 100_000,
-  maxCostUsd: 1.0,
-  maxExplorationBeforeDelegation: 3,
-};
 
 export interface AgentResult {
   sessionId: string;
@@ -61,198 +42,10 @@ export interface AgentResult {
   totalCost: number;
   tokensInput: number;
   tokensOutput: number;
-  budgetExceeded: boolean;
-  budgetReason: string | null;
 }
 
 function kiloUrl(config: KiloConfig, path: string): string {
   return `http://${config.kiloHost}:${config.kiloPort}${path}`;
-}
-
-// ── Punch Card ──
-
-export interface PunchCardConfig {
-  doltHost: string;
-  doltPort: number;
-  doltDatabase: string;
-  doltUser: string;
-}
-
-export const DEFAULT_PUNCH_CONFIG: PunchCardConfig = {
-  doltHost: process.env.DOLT_HOST ?? "127.0.0.1",
-  doltPort: parseInt(process.env.DOLT_PORT ?? "3307", 10),
-  doltDatabase: process.env.DOLT_DATABASE ?? "plant",
-  doltUser: process.env.DOLT_USER ?? "root",
-};
-
-export interface WorkflowPunch {
-  taskId: string;
-  punchType: string;
-  punchKey: string;
-  cost?: number;
-  tokensInput?: number;
-  tokensOutput?: number;
-  meta?: Record<string, unknown>;
-}
-
-/**
- * Write a workflow-level punch to Dolt.
- * These are distinct from SSE-derived punches — they record workflow
- * phase transitions, budget kills, and enforcement decisions.
- */
-export async function punchCard(
-  punch: WorkflowPunch,
-  punchConfig?: PunchCardConfig
-): Promise<void> {
-  const cfg = punchConfig ?? DEFAULT_PUNCH_CONFIG;
-  const now = new Date();
-  const sourceHash = createHash("sha256")
-    .update(JSON.stringify({
-      taskId: punch.taskId,
-      punchType: punch.punchType,
-      punchKey: punch.punchKey,
-      ts: now.toISOString(),
-      meta: punch.meta,
-    }))
-    .digest("hex");
-
-  let conn: mysql.Connection | null = null;
-  try {
-    conn = await mysql.createConnection({
-      host: cfg.doltHost,
-      port: cfg.doltPort,
-      database: cfg.doltDatabase,
-      user: cfg.doltUser,
-    });
-
-    // Ensure cost/token columns exist (idempotent)
-    for (const col of ["cost DECIMAL(10,6) NULL", "tokens_input INT NULL", "tokens_output INT NULL"]) {
-      try { await conn.execute(`ALTER TABLE punches ADD COLUMN ${col}`); } catch { /* already exists */ }
-    }
-
-    await conn.execute(
-      `INSERT INTO punches (task_id, punch_type, punch_key, observed_at, source_hash, cost, tokens_input, tokens_output)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?
-       FROM DUAL
-       WHERE NOT EXISTS (SELECT 1 FROM punches WHERE source_hash = ?)`,
-      [
-        punch.taskId,
-        punch.punchType,
-        punch.punchKey,
-        now,
-        sourceHash,
-        punch.cost ?? null,
-        punch.tokensInput ?? null,
-        punch.tokensOutput ?? null,
-        sourceHash,
-      ]
-    );
-    log.info(`PUNCH: ${punch.punchType}/${punch.punchKey} for ${punch.taskId}`);
-  } catch (err) {
-    log.warn(`Failed to write punch ${punch.punchType}/${punch.punchKey}: ${err}`);
-  } finally {
-    if (conn) await conn.end();
-  }
-}
-
-// ── Bootstrap Manifest ──
-
-export interface BootstrapTarget {
-  id: string;
-  status: string;
-  title: string;
-  description: string;
-}
-
-export interface BootstrapManifest {
-  repo: { branch: string; head: string; dirty: boolean };
-  beads: { total: number; open: number; closed: number };
-  targets: BootstrapTarget[];
-  invariants: string[];
-  generatedAt: string;
-}
-
-export interface BootstrapConfig {
-  repoDir: string;
-  bdPath: string;
-  epicId?: string;
-}
-
-function shell(cmd: string, cwd: string): string {
-  try {
-    return execSync(cmd, { cwd, encoding: "utf-8", timeout: 15_000 }).trim();
-  } catch {
-    return "";
-  }
-}
-
-/**
- * Build a bootstrap manifest — runs bd/git commands outside the LLM.
- * Returns a compact JSON digest the parent can consume in a single read
- * instead of 6+ bash tool calls.
- */
-export async function buildBootstrapManifest(
-  bootstrapConfig: BootstrapConfig
-): Promise<BootstrapManifest> {
-  const { repoDir, bdPath, epicId } = bootstrapConfig;
-
-  // Git state
-  const branch = shell("git rev-parse --abbrev-ref HEAD", repoDir);
-  const head = shell("git rev-parse --short HEAD", repoDir);
-  const dirty = shell("git status --porcelain", repoDir).length > 0;
-
-  // Bead counts
-  const allBeads = shell(`${bdPath} list --all --limit 0 --format '{{.ID}}\\t{{.Status}}'`, repoDir);
-  const beadLines = allBeads.split("\n").filter(Boolean);
-  const openCount = beadLines.filter((l) => !l.includes("CLOSED")).length;
-  const closedCount = beadLines.length - openCount;
-
-  // Target beads: children of the epic (or all open beads if no epic)
-  const targets: BootstrapTarget[] = [];
-  if (epicId) {
-    // Get children of the epic
-    const childrenRaw = shell(`${bdPath} children ${epicId}`, repoDir);
-    const childIds = childrenRaw
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        // Parse "◐ repomap-core-7xo.5 [● P1] ..." → extract ID
-        const match = line.match(/[○◐●✓✗]\s+(\S+)/);
-        return match ? match[1] : null;
-      })
-      .filter(Boolean) as string[];
-
-    for (const cid of childIds) {
-      const detail = shell(`${bdPath} show ${cid}`, repoDir);
-      // Extract title from first line
-      const titleMatch = detail.match(/[○◐●✓✗]\s+\S+\s+·\s+(.+?)\s+\[/);
-      const title = titleMatch ? titleMatch[1] : cid;
-      // Extract status
-      const statusMatch = detail.match(/\[(OPEN|IN_PROGRESS|CLOSED)\]/i) || detail.match(/(IN_PROGRESS|CLOSED)/i);
-      const status = statusMatch ? statusMatch[1] : "OPEN";
-      // Extract description (everything after DESCRIPTION header)
-      const descMatch = detail.match(/DESCRIPTION\n([\s\S]*?)(?:\n(?:LABELS|PARENT|CHILDREN|$))/);
-      const description = descMatch ? descMatch[1].trim().substring(0, 500) : "";
-
-      targets.push({ id: cid, status, title, description });
-    }
-  }
-
-  const manifest: BootstrapManifest = {
-    repo: { branch, head, dirty },
-    beads: { total: beadLines.length, open: openCount, closed: closedCount },
-    targets,
-    invariants: [
-      "Parent MUST NOT call bash, read, grep, or any exploration tool",
-      "Parent ONLY calls: task (to delegate) and abort (to kill)",
-      "Each child session has a $1.00 / 100k token budget",
-      "Delegate immediately — do not discover, do not plan, just dispatch",
-    ],
-    generatedAt: new Date().toISOString(),
-  };
-
-  log.info(`Bootstrap manifest: ${targets.length} targets, branch=${branch}, head=${head}`);
-  return manifest;
 }
 
 /**
@@ -336,7 +129,7 @@ async function abortOne(
 
 /**
  * Abort a kilo serve session AND all its children.
- * Used for budget enforcement and cancellation cleanup.
+ * Used for cancellation cleanup.
  */
 export async function abortSession(
   config: KiloConfig,
@@ -388,7 +181,6 @@ export async function pollUntilDone(
   sessionId: string,
   pollIntervalMs: number = 10_000,
   timeoutMs: number = 1_800_000, // 30 minutes
-  budget: BudgetLimits = DEFAULT_BUDGET
 ): Promise<AgentResult> {
   const startTime = Date.now();
 
@@ -404,91 +196,34 @@ export async function pollUntilDone(
     const snapshot = await getProgressSnapshot(config, sessionId);
     const parentIdle = await isSessionIdle(config, sessionId);
 
-    // ── Discover and snapshot children ──
+    // ── Discover children (for completion tracking only) ──
     const childIds = await getChildSessionIds(config, sessionId);
-    const childSnapshots: Array<{ id: string; snap: ProgressSnapshot; idle: boolean }> = [];
+    const childIdle: boolean[] = [];
+    let childTreeCost = 0;
     for (const cid of childIds) {
-      const csnap = await getProgressSnapshot(config, cid);
       const cidle = await isSessionIdle(config, cid);
-      childSnapshots.push({ id: cid, snap: csnap, idle: cidle });
+      childIdle.push(cidle);
+      const csnap = await getProgressSnapshot(config, cid);
+      childTreeCost += csnap.totalCost;
     }
 
+    const totalTreeCost = snapshot.totalCost + childTreeCost;
+
     // Heartbeat with progress — Temporal uses this to detect liveness
-    const totalTreeCost = snapshot.totalCost + childSnapshots.reduce((s, c) => s + c.snap.totalCost, 0);
     heartbeat({
       elapsed: Math.round(elapsed / 1000),
       totalParts: snapshot.totalParts,
       toolCalls: snapshot.toolCalls,
-      completedTools: snapshot.completedTools,
-      runningTools: snapshot.runningTools,
-      lastTool: snapshot.lastToolName,
       cost: snapshot.totalCost,
       treeCost: totalTreeCost,
-      tokensIn: snapshot.tokensInput,
-      tokensOut: snapshot.tokensOutput,
-      children: childSnapshots.length,
+      children: childIds.length,
     });
 
-    // ── Per-session budget enforcement (parent) ──
-    const parentTokens = snapshot.tokensInput + snapshot.tokensOutput;
-    let budgetExceeded = false;
-    let budgetReason: string | null = null;
-
-    if (parentTokens > budget.maxTokens) {
-      budgetExceeded = true;
-      budgetReason = `Parent token budget exceeded: ${parentTokens.toLocaleString()} > ${budget.maxTokens.toLocaleString()}`;
-    } else if (snapshot.totalCost > budget.maxCostUsd) {
-      budgetExceeded = true;
-      budgetReason = `Parent cost budget exceeded: $${snapshot.totalCost.toFixed(2)} > $${budget.maxCostUsd.toFixed(2)}`;
-    } else if (
-      snapshot.explorationCalls > budget.maxExplorationBeforeDelegation &&
-      snapshot.delegations === 0
-    ) {
-      budgetExceeded = true;
-      budgetReason = `Delegation required: ${snapshot.explorationCalls} exploration calls without delegation (limit: ${budget.maxExplorationBeforeDelegation})`;
-    }
-
-    if (budgetExceeded) {
-      log.warn(`BUDGET KILL (parent): ${budgetReason} — aborting tree from ${sessionId}`);
-      await abortSession(config, sessionId);
-      return {
-        sessionId,
-        totalParts: snapshot.totalParts,
-        toolCalls: snapshot.toolCalls,
-        durationMs: elapsed,
-        totalCost: snapshot.totalCost,
-        tokensInput: snapshot.tokensInput,
-        tokensOutput: snapshot.tokensOutput,
-        budgetExceeded: true,
-        budgetReason,
-      };
-    }
-
-    // ── Per-session budget enforcement (each child individually) ──
-    for (const child of childSnapshots) {
-      const cTok = child.snap.tokensInput + child.snap.tokensOutput;
-      let childExceeded = false;
-      let childReason = "";
-
-      if (cTok > budget.maxTokens) {
-        childExceeded = true;
-        childReason = `Child ${child.id} token budget: ${cTok.toLocaleString()} > ${budget.maxTokens.toLocaleString()}`;
-      } else if (child.snap.totalCost > budget.maxCostUsd) {
-        childExceeded = true;
-        childReason = `Child ${child.id} cost budget: $${child.snap.totalCost.toFixed(2)} > $${budget.maxCostUsd.toFixed(2)}`;
-      }
-
-      if (childExceeded) {
-        log.warn(`BUDGET KILL (child): ${childReason}`);
-        await abortOne(config, child.id);
-      }
-    }
-
     // ── Completion: parent done AND all children idle ──
-    const allChildrenIdle = childSnapshots.every((c) => c.idle);
+    const allChildrenIdle = childIdle.every((idle) => idle);
     if (snapshot.done && parentIdle && allChildrenIdle) {
       log.info(
-        `Session tree completed: parent ${sessionId} + ${childSnapshots.length} children | $${totalTreeCost.toFixed(2)} total | ${Math.round(elapsed / 1000)}s`
+        `Session tree completed: parent ${sessionId} + ${childIds.length} children | $${totalTreeCost.toFixed(2)} total | ${Math.round(elapsed / 1000)}s`
       );
       return {
         sessionId,
@@ -498,24 +233,17 @@ export async function pollUntilDone(
         totalCost: totalTreeCost,
         tokensInput: snapshot.tokensInput,
         tokensOutput: snapshot.tokensOutput,
-        budgetExceeded: false,
-        budgetReason: null,
       };
     }
 
     // ── Logging ──
-    const childSummary = childSnapshots.length > 0
-      ? ` | children: ${childSnapshots.length} ($${childSnapshots.reduce((s, c) => s + c.snap.totalCost, 0).toFixed(2)})`
+    const tokens = snapshot.tokensInput + snapshot.tokensOutput;
+    const childSummary = childIds.length > 0
+      ? ` | children: ${childIds.length} ($${childTreeCost.toFixed(2)})`
       : "";
-    if (snapshot.runningTools > 0) {
-      log.info(
-        `[${Math.round(elapsed / 1000)}s] Running: ${snapshot.runningTools} tools, last: ${snapshot.lastToolName} | $${snapshot.totalCost.toFixed(2)} | ${parentTokens.toLocaleString()} tok | delegations: ${snapshot.delegations}${childSummary}`
-      );
-    } else {
-      log.info(
-        `[${Math.round(elapsed / 1000)}s] Parts: ${snapshot.totalParts}, tools: ${snapshot.toolCalls} | $${snapshot.totalCost.toFixed(2)} | ${parentTokens.toLocaleString()} tok | idle: ${parentIdle} | delegations: ${snapshot.delegations}${childSummary}`
-      );
-    }
+    log.info(
+      `[${Math.round(elapsed / 1000)}s] Parts: ${snapshot.totalParts}, tools: ${snapshot.toolCalls} | $${snapshot.totalCost.toFixed(2)} | ${tokens.toLocaleString()} tok | idle: ${parentIdle}${childSummary}`
+    );
 
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
@@ -531,15 +259,7 @@ interface PartAccumulator {
   totalCost: number;
   tokensInput: number;
   tokensOutput: number;
-  delegations: number;
-  explorationCalls: number;
 }
-
-const EXPLORATION_TOOLS = new Set([
-  "read", "read_file", "grep", "grep_search", "find", "find_by_name",
-  "list_dir", "list_files", "search", "code_search", "codebase-retrieval",
-  "read_notebook", "view_file",
-]);
 
 /** Extract flat parts from message array (raw HTTP response format: [{info, parts}, ...]). */
 function flattenMessageParts(messages: unknown): Array<Record<string, unknown>> {
@@ -585,13 +305,6 @@ function accumulatePart(acc: PartAccumulator, part: Record<string, unknown>): vo
     acc.runningTools++;
   }
   acc.lastToolName = toolName;
-
-  // Track delegation and exploration
-  if (toolName === "new_task" || toolName === "task") {
-    acc.delegations++;
-  } else if (EXPLORATION_TOOLS.has(toolName)) {
-    acc.explorationCalls++;
-  }
 }
 
 /** Determine if the session is in a terminal state. */
@@ -628,10 +341,20 @@ async function getProgressSnapshot(
   config: KiloConfig,
   sessionId: string
 ): Promise<ProgressSnapshot> {
-  // Use raw HTTP instead of SDK to avoid ESM/response shape issues
+  // Raw HTTP (activities.ts was ported from SDK in ab95f6c to fix sync prompt() blocking)
   const url = `http://${config.kiloHost}:${config.kiloPort}/session/${sessionId}/message`;
-  const res = await fetch(url);
-  const messages = await res.json();
+  let messages: unknown;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      log.warn(`getProgressSnapshot: ${res.status} for session ${sessionId}`);
+      return { totalParts: 0, toolCalls: 0, completedTools: 0, runningTools: 0, lastToolName: null, done: false, totalCost: 0, tokensInput: 0, tokensOutput: 0 };
+    }
+    messages = await res.json();
+  } catch (err) {
+    log.warn(`getProgressSnapshot fetch failed for session ${sessionId}: ${err}`);
+    return { totalParts: 0, toolCalls: 0, completedTools: 0, runningTools: 0, lastToolName: null, done: false, totalCost: 0, tokensInput: 0, tokensOutput: 0 };
+  }
 
   const acc: PartAccumulator = {
     totalParts: 0,
@@ -643,8 +366,6 @@ async function getProgressSnapshot(
     totalCost: 0,
     tokensInput: 0,
     tokensOutput: 0,
-    delegations: 0,
-    explorationCalls: 0,
   };
 
   for (const part of flattenMessageParts(messages)) {
@@ -661,7 +382,5 @@ async function getProgressSnapshot(
     totalCost: acc.totalCost,
     tokensInput: acc.tokensInput,
     tokensOutput: acc.tokensOutput,
-    delegations: acc.delegations,
-    explorationCalls: acc.explorationCalls,
   };
 }

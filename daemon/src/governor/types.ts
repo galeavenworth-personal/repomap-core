@@ -54,7 +54,7 @@ export interface GovernorThresholds {
   /** Size of the sliding window for cache_plateau detection (default: 20). */
   cacheWindowSize: number;
   /** If unique hashes / window size falls below this ratio, it's a plateau (default: 0.3). */
-  cachePlateuRatio: number;
+  cachePlateauRatio: number;
 }
 
 export const DEFAULT_THRESHOLDS: GovernorThresholds = {
@@ -64,7 +64,7 @@ export const DEFAULT_THRESHOLDS: GovernorThresholds = {
   maxCycleLength: 6,
   cycleRepetitions: 3,
   cacheWindowSize: 20,
-  cachePlateuRatio: 0.3,
+  cachePlateauRatio: 0.3,
 };
 
 // ── Kill ──
@@ -99,8 +99,6 @@ export interface DiagnosisReport {
   summary: string;
   /** Suggested recovery action. */
   suggestedAction: string;
-  /** Files touched by the session (blast radius). */
-  blastRadius: string[];
   /** The tool patterns that led to this diagnosis. */
   toolPatterns: ToolPattern[];
   diagnosedAt: Date;
@@ -111,6 +109,35 @@ export interface ToolPattern {
   count: number;
   errorCount: number;
   lastStatus: string;
+}
+
+// ── Session Inspection ──
+
+/** A single tool call record from a session's message history. */
+export interface ToolCallRecord {
+  /** Tool name (e.g. "Edit", "Bash", "Read"). */
+  tool: string;
+  /** "ok" | "error" — final status of the tool call. */
+  status: string;
+  /** Error message, if status === "error". */
+  error?: string;
+  /** Text content returned by the tool (may be truncated). */
+  content?: string;
+  /** File path argument, if applicable. */
+  filePath?: string;
+  /** Timestamp of the tool call, if available. */
+  calledAt?: Date;
+}
+
+/**
+ * Abstraction over the external API that retrieves session history.
+ *
+ * Production implementations call kilo serve; tests can supply a
+ * mock that returns canned ToolCallRecord arrays.
+ */
+export interface SessionInspector {
+  /** Retrieve the tool call history for a given session. */
+  getToolCalls(sessionId: string): Promise<ToolCallRecord[]>;
 }
 
 // ── Fitter Dispatch ──

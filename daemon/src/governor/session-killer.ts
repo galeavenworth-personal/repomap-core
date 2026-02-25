@@ -157,7 +157,7 @@ export async function getSessionMetrics(
 
     for (const part of flatParts) {
       if (part.type === "tool") toolCalls++;
-      if (part.type === "step-start" || part.type === "step-finish") stepCount++;
+      if (part.type === "step-finish") stepCount++;
     }
 
     return {
