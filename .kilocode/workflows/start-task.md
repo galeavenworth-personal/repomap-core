@@ -148,7 +148,7 @@ The preparation summary contains the **subtask plan** needed by `/execute-task`.
 ├─────────────────────────────────────────────────────────────────┤
 │  EXIT GATE: PUNCH CARD CHECKPOINT                               │
 │  ├── mint punches {task_id}         → commands.punch_mint       │
-│  ├── checkpoint punch-card {task_id} process-orchestrate        │
+│  ├── checkpoint punch-card {task_id} start-task-orchestrate     │
 │  │                                  → commands.punch_checkpoint  │
 │  └── MUST PASS — checks child_spawn + forbids direct tool use   │
 └─────────────────────────────────────────────────────────────────┘
@@ -188,6 +188,8 @@ Respect layer boundaries defined in [`repomap.toml`](../../repomap.toml).
 > 🚪 `checkpoint punch-card {task_id} start-task-orchestrate` → [`commands.punch_checkpoint`](../commands.toml)
 > Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} start-task-orchestrate`
 > **receipt_required = true** — this is a hard gate.
+>
+> **Note:** Plant tooling (`.kilocode/tools/`) uses system `python3`, not `.venv/bin/python`. The virtual environment mandate applies to product code (`src/`) and quality gates only.
 
 **Checkpoint verifies:**
 - ✅ You spawned at least one `architect` child (delegation happened)

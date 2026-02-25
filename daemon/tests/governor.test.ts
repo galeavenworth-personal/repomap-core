@@ -12,6 +12,8 @@ import type { Punch } from "../src/classifier/index.js";
 
 // ── Helpers ──
 
+let punchCounter = 0;
+
 /** Create a minimal punch with the given overrides. */
 function makePunch(overrides: Partial<Punch & { contentHash?: string }> = {}): Punch {
   return {
@@ -19,7 +21,7 @@ function makePunch(overrides: Partial<Punch & { contentHash?: string }> = {}): P
     punchType: "tool_call",
     punchKey: "readFile",
     observedAt: new Date(),
-    sourceHash: `hash-${Math.random().toString(36).slice(2, 10)}`,
+    sourceHash: `hash-${String(++punchCounter).padStart(8, "0")}`,
     ...overrides,
   } as Punch;
 }

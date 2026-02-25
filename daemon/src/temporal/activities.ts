@@ -99,12 +99,10 @@ export async function createSession(
  */
 async function getChildSessionIds(config: KiloConfig, parentId: string): Promise<string[]> {
   try {
-    const res = await fetch(kiloUrl(config, "/session"));
+    const res = await fetch(kiloUrl(config, `/session/${parentId}/children`));
     if (!res.ok) return [];
     const sessions = (await res.json()) as Array<Record<string, unknown>>;
-    return sessions
-      .filter((s) => s.parentID === parentId)
-      .map((s) => s.id as string);
+    return sessions.map((s) => s.id as string);
   } catch {
     return [];
   }

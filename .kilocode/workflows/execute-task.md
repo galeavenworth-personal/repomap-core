@@ -200,12 +200,16 @@ Max 1 retry per failed subtask. If a subtask fails twice, STOP and escalate.
 > 🚪 `checkpoint punch-card {task_id} process-orchestrate` → [`commands.punch_checkpoint`](../commands.toml)
 > Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} process-orchestrate`
 > **receipt_required = true** — this is a hard gate.
+>
+> **Note:** Plant tooling (`.kilocode/tools/`) uses system `python3`, not `.venv/bin/python`. The virtual environment mandate applies to product code (`src/`) and quality gates only.
 
-**Checkpoint verifies:**
+**Checkpoint verifies (enforced by punch card):**
 - ✅ You spawned at least one `code` child (execute delegation happened)
+- ❌ You did NOT call `edit_file`, `apply_diff`, `write_to_file`, or `codebase_retrieval` directly
+
+**Operational expectations (not enforced by punch card, but required by this workflow):**
 - ✅ You spawned at least one `architect` child (prep delegation — if this is a combined run)
 - ✅ You received child completions
-- ❌ You did NOT call `edit_file`, `apply_diff`, `write_to_file`, or `codebase_retrieval` directly
 
 **If checkpoint FAILS:** Do NOT call `attempt_completion`. Review failures:
 - Missing `child_spawn` → you forgot to delegate subtasks
