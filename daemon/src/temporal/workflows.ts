@@ -1,13 +1,13 @@
 /**
- * Temporal Workflows — Agent Task Orchestration
+ * Temporal Workflows — Thin Client for kilo serve
  *
  * Workflows are deterministic orchestration functions. They contain NO I/O —
  * all external calls happen in Activities. Temporal persists workflow state
  * and replays from the last checkpoint on failure.
  *
- * This module defines the agentTaskWorkflow, which replaces the manual
- * factory_dispatch.sh → poll → verify loop with a durable, queryable,
- * signal-aware workflow.
+ * This is a thin durability wrapper. All orchestration intelligence lives in
+ * the kilo serve mode system (.kilocodemodes), contracts, and workflows.
+ * Temporal adds: retry, durability, observability. Nothing else.
  */
 
 import {
@@ -16,6 +16,8 @@ import {
   defineQuery,
   setHandler,
   sleep,
+  CancellationScope,
+  isCancellation,
 } from "@temporalio/workflow";
 import type * as activities from "./activities.js";
 
@@ -33,6 +35,12 @@ const {
     maximumInterval: "60s",
     backoffCoefficient: 2,
   },
+});
+
+// Cleanup activities that must run even during cancellation
+const { abortSession } = proxyActivities<typeof activities>({
+  startToCloseTimeout: "30 seconds",
+  retry: { maximumAttempts: 2, initialInterval: "1s" },
 });
 
 // Override for short-lived activities
@@ -81,6 +89,9 @@ export interface AgentTaskResult {
   totalParts: number;
   toolCalls: number;
   durationMs: number;
+  totalCost: number;
+  tokensInput: number;
+  tokensOutput: number;
   error: string | null;
 }
 
@@ -129,7 +140,7 @@ export async function agentTaskWorkflow(
 
     if (aborted) return makeResult("aborted", state, startTime);
 
-    // Step 3: Send prompt
+    // Step 3: Send prompt (the mode system handles all orchestration)
     state.phase = "sending_prompt";
     await sendPrompt(config, sessionId, input.prompt, input.agent);
 
@@ -144,15 +155,22 @@ export async function agentTaskWorkflow(
       config,
       sessionId,
       input.pollIntervalMs ?? 10_000,
-      input.timeoutMs ?? 1_800_000
+      input.timeoutMs ?? 1_800_000,
     );
 
     state.totalParts = result.totalParts;
     state.toolCalls = result.toolCalls;
     state.phase = "completed";
-
-    return makeResult("completed", state, startTime);
+    return makeResult("completed", state, startTime, result);
   } catch (err: unknown) {
+    // On cancellation, abort the kilo serve session so it stops burning tokens
+    if (isCancellation(err) && state.sessionId) {
+      await CancellationScope.nonCancellable(async () => {
+        await abortSession(config, state.sessionId!);
+      });
+      state.phase = "aborted";
+      return makeResult("aborted", state, startTime);
+    }
     const errorMsg = err instanceof Error ? err.message : String(err);
     state.phase = "failed";
     state.error = errorMsg;
@@ -163,7 +181,8 @@ export async function agentTaskWorkflow(
 function makeResult(
   status: AgentTaskResult["status"],
   state: AgentTaskStatus,
-  startTime: number
+  startTime: number,
+  agentResult?: { totalCost: number; tokensInput: number; tokensOutput: number }
 ): AgentTaskResult {
   return {
     status,
@@ -171,6 +190,9 @@ function makeResult(
     totalParts: state.totalParts,
     toolCalls: state.toolCalls,
     durationMs: Date.now() - startTime,
+    totalCost: agentResult?.totalCost ?? 0,
+    tokensInput: agentResult?.tokensInput ?? 0,
+    tokensOutput: agentResult?.tokensOutput ?? 0,
     error: state.error,
   };
 }

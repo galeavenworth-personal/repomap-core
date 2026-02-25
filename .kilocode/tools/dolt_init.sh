@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DOLT_BIN=~/.local/bin/dolt
 DB_DIR="${ROOT_DIR}/.kilocode/dolt"
-SCHEMA_FILE="${ROOT_DIR}/plans/punch-card-schema.sql"
+SCHEMA_FILE="${ROOT_DIR}/.kilocode/schema/punch-card-schema.sql"
 
 extract_sql_section() {
   local file="$1"

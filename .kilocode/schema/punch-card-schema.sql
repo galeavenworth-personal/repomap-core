@@ -12,7 +12,7 @@
 --
 -- Usage:
 --   dolt init
---   dolt sql < plans/punch-card-schema.sql
+--   dolt sql < .kilocode/schema/punch-card-schema.sql
 --   dolt add .
 --   dolt commit -m "Initialize punch card schema"
 --

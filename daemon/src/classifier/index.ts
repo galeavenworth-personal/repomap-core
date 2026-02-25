@@ -25,6 +25,10 @@ export interface Punch {
   punchKey: string;
   observedAt: Date;
   sourceHash: string;
+  /** Hash of the content being read/processed (not the event envelope).
+   *  Used by the loop detector's cache_plateau heuristic to detect
+   *  repeated reads of the same content. Falls back to sourceHash if absent. */
+  contentHash?: string;
   cost?: number;
   tokensInput?: number;
   tokensOutput?: number;

@@ -1,8 +1,9 @@
 /**
- * Temporal Dispatch CLI — Start Agent Task Workflows
+ * Temporal Dispatch CLI — Thin Client for kilo serve
  *
  * CLI tool to start agentTaskWorkflow executions via Temporal.
- * Replaces the manual factory_dispatch.sh → poll → verify loop.
+ * This is a thin durability wrapper — all orchestration intelligence
+ * lives in the kilo serve mode system.
  *
  * Usage:
  *   npx tsx src/temporal/dispatch.ts [options] <prompt>
@@ -142,6 +143,8 @@ async function main() {
     console.log(`[dispatch] Session: ${result.sessionId}`);
     console.log(`[dispatch] Tools: ${result.toolCalls}`);
     console.log(`[dispatch] Parts: ${result.totalParts}`);
+    console.log(`[dispatch] Cost: $${result.totalCost?.toFixed(2) ?? "??"}`);
+    console.log(`[dispatch] Tokens: ${((result.tokensInput ?? 0) + (result.tokensOutput ?? 0)).toLocaleString()} (in: ${(result.tokensInput ?? 0).toLocaleString()}, out: ${(result.tokensOutput ?? 0).toLocaleString()})`);
     console.log(`[dispatch] Duration: ${Math.round(result.durationMs / 1000)}s`);
     if (result.error) {
       console.log(`[dispatch] Error: ${result.error}`);
