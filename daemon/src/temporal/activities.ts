@@ -382,3 +382,29 @@ async function getProgressSnapshot(
     tokensOutput: acc.tokensOutput,
   };
 }
+
+/**
+ * Validate punch card for a completed task.
+ * Called after pollUntilDone to verify the task meets its card requirements.
+ */
+export async function validateTaskPunchCard(
+  doltConfig: { host: string; port: number; database: string; user?: string; password?: string },
+  taskId: string,
+  cardId: string,
+): Promise<{ status: "pass" | "fail"; missing: string[]; violations: string[] }> {
+  const { PunchCardValidator } = await import("../governor/punch-card-validator.js");
+  const validator = new PunchCardValidator(doltConfig);
+  try {
+    await validator.connect();
+    const result = await validator.validatePunchCard(taskId, cardId);
+    return {
+      status: result.status,
+      missing: result.missing.map((m) => `${m.punchType}:${m.punchKeyPattern}`),
+      violations: result.violations.map(
+        (v) => `${v.punchType}:${v.punchKeyPattern} (${v.count}x)`
+      ),
+    };
+  } finally {
+    await validator.disconnect();
+  }
+}
