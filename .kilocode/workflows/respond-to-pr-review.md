@@ -169,17 +169,47 @@ For each cluster:
 
 **CRITICAL:** Do not push until these pass.
 
+### Step 4.1: Local Quality Gates
+
 > 📌 `gate quality` → [`commands.gate_quality`](../commands.toml)
 > Composite: `format_ruff` → `check_ruff` → `check_mypy` → `test_pytest`
 > All run through `bounded_gate.py` with receipt tracking.
 
-Optional (if PR is scanned in SonarQube):
+### Step 4.2: SonarQube Quality Gate
 
-> 📌 `search issues` → [`commands.search_issues`](../commands.toml)
-> Resolves to: `mcp--sonarqube--search_sonar_issues_in_projects` with `pullRequestId=<PR_NUMBER>`
+Check the SonarQube quality gate for the PR and address any issues causing it to fail.
+SonarQube issues on a PR represent **new issues introduced by the PR** — treat them as
+blocking, just like reviewer comments.
 
 > 📌 `inspect quality-gate` → [`commands.inspect_quality_gate`](../commands.toml)
-> Resolves to: `mcp--sonarqube--get_project_quality_gate_status` with `pullRequest=<PR_NUMBER>`
+> Resolves to: `mcp--sonarqube--get_project_quality_gate_status` with `projectKey=<key>` and `pullRequest=<PR_NUMBER>`
+
+> 📌 `search issues` → [`commands.search_issues`](../commands.toml)
+> Resolves to: `mcp--sonarqube--search_sonar_issues_in_projects` with `projects=[<key>]` and `pullRequestId=<PR_NUMBER>`
+
+If the quality gate is **failing** or issues exist:
+
+1. List all issues on the PR using `search issues`
+2. For each issue, inspect the rule if unfamiliar: `mcp--sonarqube--show_rule` with `key=<rule_key>`
+3. Add SonarQube issues to the **Comment Ledger** (Phase 0.4) with `type=sonarqube`
+4. Implement fixes alongside reviewer-requested changes
+5. After pushing, the gate will re-evaluate on the next SonarQube analysis run
+
+**Line Fault:** If the SonarQube MCP server is unavailable or unresponsive, this is a
+**line fault**. Do NOT skip and proceed — emit a Line Fault Contract and dispatch the fitter:
+
+> 📌 `dispatch fitter` → [`commands.dispatch_fitter`](../commands.toml)
+> Contract: [`.kilocode/contracts/line_health/line_fault_contract.md`](../contracts/line_health/line_fault_contract.md)
+
+Emit a fault payload with:
+- `gate_id`: `"sonarqube-quality-gate"`
+- `invocation`: the MCP tool call that failed (e.g., `mcp--sonarqube--get_project_quality_gate_status`)
+- `stop_reason`: `"env_missing"` (server down/unreachable)
+- `repro_hints`: SonarQube URL, project key, PR number
+
+The fitter will attempt to restore the SonarQube connection. If the fitter succeeds,
+retry Step 4.2. If the fitter cannot restore the line, the fitter escalates to a human.
+Max 1 retry — do not thrash.
 
 ---
 
