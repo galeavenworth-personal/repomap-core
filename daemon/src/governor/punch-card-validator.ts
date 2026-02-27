@@ -19,6 +19,10 @@ interface RequirementRow {
   description?: string | null;
 }
 
+interface ChildRow {
+  child_id: string;
+}
+
 export class PunchCardValidator {
   private connection: Connection | null = null;
 
@@ -186,5 +190,15 @@ export class PunchCardValidator {
       expectedRange,
       withinRange,
     };
+  }
+
+  async getChildIds(parentTaskId: string): Promise<string[]> {
+    const conn = this.requireConnection();
+    const [rowsUnknown] = await conn.execute(
+      `SELECT child_id FROM child_rels WHERE parent_id = ?`,
+      [parentTaskId],
+    );
+    const rows = rowsUnknown as ChildRow[];
+    return rows.map((row) => row.child_id);
   }
 }

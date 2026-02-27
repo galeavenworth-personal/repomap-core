@@ -69,7 +69,7 @@ describe("verification loop e2e", () => {
     await parentValidator.connect();
     const parentResult = await parentValidator.validatePunchCard("parent-1", "card-parent");
 
-    const subtaskVerifier = new SubtaskVerifier(cfg);
+    const subtaskVerifier = new SubtaskVerifier(new PunchCardValidator(cfg));
     await subtaskVerifier.connect();
     const subtaskResult = await subtaskVerifier.verifySubtasks("parent-1", "card-child");
 
@@ -112,7 +112,7 @@ describe("verification loop e2e", () => {
     await parentValidator.connect();
     const parentResult = await parentValidator.validatePunchCard("parent-2", "card-parent");
 
-    const subtaskVerifier = new SubtaskVerifier(cfg);
+    const subtaskVerifier = new SubtaskVerifier(new PunchCardValidator(cfg));
     await subtaskVerifier.connect();
     const subtaskResult = await subtaskVerifier.verifySubtasks("parent-2", "card-child");
 
@@ -155,7 +155,7 @@ describe("verification loop e2e", () => {
     await parentValidator.connect();
     const parentResult = await parentValidator.validatePunchCard("parent-3", "card-parent");
 
-    const subtaskVerifier = new SubtaskVerifier(cfg);
+    const subtaskVerifier = new SubtaskVerifier(new PunchCardValidator(cfg));
     await subtaskVerifier.connect();
     const subtaskResult = await subtaskVerifier.verifySubtasks("parent-3", "card-child");
 

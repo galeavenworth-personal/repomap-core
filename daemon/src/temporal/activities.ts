@@ -12,6 +12,8 @@
 
 import { heartbeat, log } from "@temporalio/activity";
 
+import type { DoltConfig } from "../writer/index.js";
+
 export interface KiloConfig {
   kiloHost: string;
   kiloPort: number;
@@ -388,12 +390,16 @@ async function getProgressSnapshot(
  * Called after pollUntilDone to verify the task meets its card requirements.
  */
 export async function validateTaskPunchCard(
-  doltConfig: { host: string; port: number; database: string; user?: string; password?: string },
+  doltConfig: Omit<DoltConfig, "password">,
   taskId: string,
   cardId: string,
 ): Promise<{ status: "pass" | "fail"; missing: string[]; violations: string[] }> {
+  const fullConfig: DoltConfig = {
+    ...doltConfig,
+    password: process.env.DOLT_DB_PASSWORD,
+  };
   const { PunchCardValidator } = await import("../governor/punch-card-validator.js");
-  const validator = new PunchCardValidator(doltConfig);
+  const validator = new PunchCardValidator(fullConfig);
   try {
     await validator.connect();
     const result = await validator.validatePunchCard(taskId, cardId);

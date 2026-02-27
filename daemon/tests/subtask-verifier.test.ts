@@ -10,6 +10,7 @@ vi.mock("mysql2/promise", () => ({
   },
 }));
 
+import { PunchCardValidator } from "../src/governor/punch-card-validator.js";
 import { SubtaskVerifier } from "../src/governor/subtask-verifier.js";
 
 describe("SubtaskVerifier", () => {
@@ -48,7 +49,7 @@ describe("SubtaskVerifier", () => {
       ])
       .mockResolvedValueOnce([[{ count: 2 }]]);
 
-    const verifier = new SubtaskVerifier({ host: "127.0.0.1", port: 3307, database: "plant" });
+    const verifier = new SubtaskVerifier(new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" }));
     await verifier.connect();
     const result = await verifier.verifySubtasks("parent-1", "card-1");
 
@@ -83,7 +84,7 @@ describe("SubtaskVerifier", () => {
       ])
       .mockResolvedValueOnce([[{ count: 0 }]]);
 
-    const verifier = new SubtaskVerifier({ host: "127.0.0.1", port: 3307, database: "plant" });
+    const verifier = new SubtaskVerifier(new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" }));
     await verifier.connect();
     const result = await verifier.verifySubtasks("parent-2", "card-2");
 
@@ -96,7 +97,7 @@ describe("SubtaskVerifier", () => {
   it("no children is vacuously valid", async () => {
     executeMock.mockResolvedValueOnce([[]]);
 
-    const verifier = new SubtaskVerifier({ host: "127.0.0.1", port: 3307, database: "plant" });
+    const verifier = new SubtaskVerifier(new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" }));
     await verifier.connect();
     const result = await verifier.verifySubtasks("parent-empty", "card-3");
 
@@ -119,7 +120,7 @@ describe("SubtaskVerifier", () => {
       ])
       .mockResolvedValueOnce([[{ count: 1 }]]);
 
-    const verifier = new SubtaskVerifier({ host: "127.0.0.1", port: 3307, database: "plant" });
+    const verifier = new SubtaskVerifier(new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" }));
     await verifier.connect();
     const result = await verifier.verifySubtasks("parent-3", "card-4");
 
