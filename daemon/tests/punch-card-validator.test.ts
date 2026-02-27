@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const executeMock = vi.hoisted(() => vi.fn());
-const endMock = vi.hoisted(() => vi.fn());
-const createConnectionMock = vi.hoisted(() => vi.fn());
-
+const { executeMock, endMock, createConnectionMock } = vi.hoisted(() => ({
+  executeMock: vi.fn(),
+  endMock: vi.fn(),
+  createConnectionMock: vi.fn(),
+}));
 vi.mock("mysql2/promise", () => ({
-  default: {
-    createConnection: createConnectionMock,
-  },
+  default: { createConnection: createConnectionMock },
 }));
 
 import {
+  chainValidation,
   createConnectedValidator,
   makeCountResult,
   makeRequirement,
@@ -49,16 +49,7 @@ describe("PunchCardValidator", () => {
   });
 
   it("fails when a required punch is missing", async () => {
-    executeMock
-      .mockResolvedValueOnce([
-        [
-          {
-            ...makeRequirement(),
-            description: "must read file",
-          },
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(0));
+    chainValidation(executeMock, { count: 0 });
 
     const validator = await createConnectedValidator();
     const result = await validator.validatePunchCard("task-2", "card-2");
@@ -72,16 +63,10 @@ describe("PunchCardValidator", () => {
   });
 
   it("fails when a forbidden required punch exists", async () => {
-    executeMock
-      .mockResolvedValueOnce([
-        [
-          {
-            ...makeRequirement({ punch_key_pattern: "apply_diff%", forbidden: 1 }),
-            description: "must not apply diff",
-          },
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(3));
+    chainValidation(executeMock, {
+      requirements: [{ punch_key_pattern: "apply_diff%", forbidden: 1 }],
+      count: 3,
+    });
 
     const validator = await createConnectedValidator();
     const result = await validator.validatePunchCard("task-3", "card-3");

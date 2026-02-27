@@ -1,20 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const executeMock = vi.hoisted(() => vi.fn());
-const endMock = vi.hoisted(() => vi.fn());
-const createConnectionMock = vi.hoisted(() => vi.fn());
-
+const { executeMock, endMock, createConnectionMock } = vi.hoisted(() => ({
+  executeMock: vi.fn(),
+  endMock: vi.fn(),
+  createConnectionMock: vi.fn(),
+}));
 vi.mock("mysql2/promise", () => ({
-  default: {
-    createConnection: createConnectionMock,
-  },
+  default: { createConnection: createConnectionMock },
 }));
 
 import {
+  chainSubtaskVerification,
   createConnectedVerifier,
-  makeChildIds,
-  makeCountResult,
-  makeRequirement,
   setupMysqlMocks,
 } from "./helpers/punch-card-test-utils.js";
 
@@ -25,20 +22,7 @@ describe("SubtaskVerifier", () => {
   });
 
   it("all children valid", async () => {
-    executeMock
-      .mockResolvedValueOnce(makeChildIds("child-1", "child-2"))
-      .mockResolvedValueOnce([
-        [
-          makeRequirement(),
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(1))
-      .mockResolvedValueOnce([
-        [
-          makeRequirement(),
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(2));
+    chainSubtaskVerification(executeMock, ["child-1", "child-2"], [{ count: 1 }, { count: 2 }]);
 
     const verifier = await createConnectedVerifier();
     const result = await verifier.verifySubtasks("parent-1", "card-1");
@@ -49,20 +33,7 @@ describe("SubtaskVerifier", () => {
   });
 
   it("one child invalid", async () => {
-    executeMock
-      .mockResolvedValueOnce(makeChildIds("child-1", "child-2"))
-      .mockResolvedValueOnce([
-        [
-          makeRequirement(),
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(1))
-      .mockResolvedValueOnce([
-        [
-          makeRequirement(),
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(0));
+    chainSubtaskVerification(executeMock, ["child-1", "child-2"], [{ count: 1 }, { count: 0 }]);
 
     const verifier = await createConnectedVerifier();
     const result = await verifier.verifySubtasks("parent-2", "card-2");
@@ -84,14 +55,12 @@ describe("SubtaskVerifier", () => {
   });
 
   it("single child passing", async () => {
-    executeMock
-      .mockResolvedValueOnce(makeChildIds("child-only"))
-      .mockResolvedValueOnce([
-        [
-          makeRequirement({ punch_key_pattern: "edit_file%" }),
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(1));
+    chainSubtaskVerification(executeMock, ["child-only"], [
+      {
+        requirements: [{ punch_key_pattern: "edit_file%" }],
+        count: 1,
+      },
+    ]);
 
     const verifier = await createConnectedVerifier();
     const result = await verifier.verifySubtasks("parent-3", "card-4");

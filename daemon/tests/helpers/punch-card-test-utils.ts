@@ -52,6 +52,36 @@ export function makeChildIds(...ids: string[]) {
   return [ids.map((id) => ({ child_id: id }))];
 }
 
+/** Chain requirement + count mock responses for a single validation. */
+export function chainValidation(
+  mock: Mock,
+  opts: {
+    requirements?: Parameters<typeof makeRequirement>[0][];
+    count: number;
+  },
+): Mock {
+  const reqs = (opts.requirements ?? [{}]).map((r) => makeRequirement(r));
+  return mock
+    .mockResolvedValueOnce([reqs])
+    .mockResolvedValueOnce(makeCountResult(opts.count));
+}
+
+/** Chain child IDs + per-child validations for subtask verification. */
+export function chainSubtaskVerification(
+  mock: Mock,
+  childIds: string[],
+  childValidations: {
+    requirements?: Parameters<typeof makeRequirement>[0][];
+    count: number;
+  }[],
+): Mock {
+  mock.mockResolvedValueOnce(makeChildIds(...childIds));
+  for (const cv of childValidations) {
+    chainValidation(mock, cv);
+  }
+  return mock;
+}
+
 /** Create and connect a PunchCardValidator with default config. */
 export async function createConnectedValidator(
   config = DEFAULT_DOLT_CONFIG,

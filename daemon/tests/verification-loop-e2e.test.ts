@@ -1,21 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const executeMock = vi.hoisted(() => vi.fn());
-const endMock = vi.hoisted(() => vi.fn());
-const createConnectionMock = vi.hoisted(() => vi.fn());
-
+const { executeMock, endMock, createConnectionMock } = vi.hoisted(() => ({
+  executeMock: vi.fn(),
+  endMock: vi.fn(),
+  createConnectionMock: vi.fn(),
+}));
 vi.mock("mysql2/promise", () => ({
-  default: {
-    createConnection: createConnectionMock,
-  },
+  default: { createConnection: createConnectionMock },
 }));
 
 import {
+  chainSubtaskVerification,
+  chainValidation,
   createConnectedValidator,
   createConnectedVerifier,
-  makeChildIds,
-  makeCountResult,
-  makeRequirement,
   setupMysqlMocks,
 } from "./helpers/punch-card-test-utils.js";
 
@@ -26,30 +24,8 @@ describe("verification loop e2e", () => {
   });
 
   it("full pipeline: parent with children, all valid", async () => {
-    executeMock
-      // parent validator: requirements + count
-      .mockResolvedValueOnce([
-        [
-          makeRequirement(),
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(2))
-      // subtask verifier: child ids
-      .mockResolvedValueOnce(makeChildIds("child-1", "child-2"))
-      // child-1 validation
-      .mockResolvedValueOnce([
-        [
-          makeRequirement(),
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(1))
-      // child-2 validation
-      .mockResolvedValueOnce([
-        [
-          makeRequirement(),
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(1));
+    chainValidation(executeMock, { count: 2 });
+    chainSubtaskVerification(executeMock, ["child-1", "child-2"], [{ count: 1 }, { count: 1 }]);
 
     const parentValidator = await createConnectedValidator();
     const parentResult = await parentValidator.validatePunchCard("parent-1", "card-parent");
@@ -63,23 +39,13 @@ describe("verification loop e2e", () => {
   });
 
   it("validation blocks parent completion when child fails", async () => {
-    executeMock
-      // parent validator: requirements + count
-      .mockResolvedValueOnce([
-        [
-          makeRequirement(),
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(1))
-      // subtask verifier: one child
-      .mockResolvedValueOnce(makeChildIds("child-fail"))
-      // child validation requirements + missing count
-      .mockResolvedValueOnce([
-        [
-          makeRequirement({ punch_key_pattern: "edit_file%" }),
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(0));
+    chainValidation(executeMock, { count: 1 });
+    chainSubtaskVerification(executeMock, ["child-fail"], [
+      {
+        requirements: [{ punch_key_pattern: "edit_file%" }],
+        count: 0,
+      },
+    ]);
 
     const parentValidator = await createConnectedValidator();
     const parentResult = await parentValidator.validatePunchCard("parent-2", "card-parent");
@@ -93,23 +59,13 @@ describe("verification loop e2e", () => {
   });
 
   it("forbidden punch violation detected in pipeline", async () => {
-    executeMock
-      // parent validator: requirements + count
-      .mockResolvedValueOnce([
-        [
-          makeRequirement(),
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(1))
-      // subtask verifier: one child
-      .mockResolvedValueOnce(makeChildIds("child-violates"))
-      // child validation requirements + forbidden count > 0
-      .mockResolvedValueOnce([
-        [
-          makeRequirement({ punch_key_pattern: "apply_diff%", forbidden: 1 }),
-        ],
-      ])
-      .mockResolvedValueOnce(makeCountResult(2));
+    chainValidation(executeMock, { count: 1 });
+    chainSubtaskVerification(executeMock, ["child-violates"], [
+      {
+        requirements: [{ punch_key_pattern: "apply_diff%", forbidden: 1 }],
+        count: 2,
+      },
+    ]);
 
     const parentValidator = await createConnectedValidator();
     const parentResult = await parentValidator.validatePunchCard("parent-3", "card-parent");
