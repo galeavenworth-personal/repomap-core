@@ -23,6 +23,16 @@ describe("PunchCardValidator", () => {
     setupMysqlMocks(executeMock, endMock, createConnectionMock);
   });
 
+  async function validate(taskId: string, cardId: string) {
+    const validator = await createConnectedValidator();
+    return validator.validatePunchCard(taskId, cardId);
+  }
+
+  async function checkAdherence(taskId: string, range: [number, number]) {
+    const validator = await createConnectedValidator();
+    return validator.checkToolAdherence(taskId, range);
+  }
+
   it("passes when all required punches exist", async () => {
     executeMock
       .mockResolvedValueOnce([
@@ -40,8 +50,7 @@ describe("PunchCardValidator", () => {
       .mockResolvedValueOnce(makeCountResult(1))
       .mockResolvedValueOnce(makeCountResult(2));
 
-    const validator = await createConnectedValidator();
-    const result = await validator.validatePunchCard("task-1", "card-1");
+    const result = await validate("task-1", "card-1");
 
     expect(result.status).toBe("pass");
     expect(result.missing).toEqual([]);
@@ -51,8 +60,7 @@ describe("PunchCardValidator", () => {
   it("fails when a required punch is missing", async () => {
     chainValidation(executeMock, { count: 0 });
 
-    const validator = await createConnectedValidator();
-    const result = await validator.validatePunchCard("task-2", "card-2");
+    const result = await validate("task-2", "card-2");
 
     expect(result.status).toBe("fail");
     expect(result.missing).toHaveLength(1);
@@ -68,8 +76,7 @@ describe("PunchCardValidator", () => {
       count: 3,
     });
 
-    const validator = await createConnectedValidator();
-    const result = await validator.validatePunchCard("task-3", "card-3");
+    const result = await validate("task-3", "card-3");
 
     expect(result.status).toBe("fail");
     expect(result.violations).toHaveLength(1);
@@ -90,8 +97,7 @@ describe("PunchCardValidator", () => {
       ],
     ]);
 
-    const validator = await createConnectedValidator();
-    const result = await validator.validatePunchCard("task-4", "card-4");
+    const result = await validate("task-4", "card-4");
 
     expect(result.status).toBe("pass");
     expect(result.missing).toEqual([]);
@@ -102,8 +108,7 @@ describe("PunchCardValidator", () => {
   it("tool adherence is within range", async () => {
     executeMock.mockResolvedValueOnce(makeCountResult(2));
 
-    const validator = await createConnectedValidator();
-    const result = await validator.checkToolAdherence("task-5", [1, 3]);
+    const result = await checkAdherence("task-5", [1, 3]);
 
     expect(result.editCount).toBe(2);
     expect(result.withinRange).toBe(true);
@@ -112,8 +117,7 @@ describe("PunchCardValidator", () => {
   it("tool adherence fails when below range", async () => {
     executeMock.mockResolvedValueOnce(makeCountResult(0));
 
-    const validator = await createConnectedValidator();
-    const result = await validator.checkToolAdherence("task-6", [1, 3]);
+    const result = await checkAdherence("task-6", [1, 3]);
 
     expect(result.editCount).toBe(0);
     expect(result.withinRange).toBe(false);
@@ -122,8 +126,7 @@ describe("PunchCardValidator", () => {
   it("empty card returns fail", async () => {
     executeMock.mockResolvedValueOnce([[]]);
 
-    const validator = await createConnectedValidator();
-    const result = await validator.validatePunchCard("task-7", "card-empty");
+    const result = await validate("task-7", "card-empty");
 
     expect(result.status).toBe("fail");
     expect(result.missing).toEqual([]);
