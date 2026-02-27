@@ -16,10 +16,11 @@ Use this skill when you need to:
 ## Default tool order
 
 1. Discover accessible projects: `mcp--sonarqube--search_my_sonarqube_projects`
-2. Check quality gate: `mcp--sonarqube--get_project_quality_gate_status`
-3. List issues: `mcp--sonarqube--search_sonar_issues_in_projects`
-4. Inspect rule details (if needed): `mcp--sonarqube--show_rule`
-5. Inspect raw source (if needed): `mcp--sonarqube--get_raw_source`
+2. Check quality gate for PR context first: `mcp--sonarqube--get_project_quality_gate_status` with `pullRequest`
+3. If no PR context exists, check quality gate for branch/default: `mcp--sonarqube--get_project_quality_gate_status` with `branch` (or omit for default)
+4. List issues: `mcp--sonarqube--search_sonar_issues_in_projects`
+5. Inspect rule details (if needed): `mcp--sonarqube--show_rule`
+6. Inspect raw source (if needed): `mcp--sonarqube--get_raw_source`
 
 ## Prerequisites
 

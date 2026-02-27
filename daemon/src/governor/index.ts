@@ -30,6 +30,12 @@ export {
   type SessionResponse,
 } from "./fitter-dispatch.js";
 export {
+  PunchCardValidator,
+} from "./punch-card-validator.js";
+export {
+  SubtaskVerifier,
+} from "./subtask-verifier.js";
+export {
   type LoopClassification,
   type LoopDetection,
   type SessionMetrics,
@@ -41,4 +47,8 @@ export {
   type ToolPattern,
   type FitterDispatchInput,
   type FitterResult,
+  type PunchCardRequirement,
+  type ValidationResult,
+  type ToolAdherenceResult,
+  type SubtaskValidation,
 } from "./types.js";

@@ -19,6 +19,7 @@ import {
   CancellationScope,
   isCancellation,
 } from "@temporalio/workflow";
+import type { DoltConfig } from "../writer/index.js";
 import type * as activities from "./activities.js";
 
 const {
@@ -81,10 +82,16 @@ export interface AgentTaskInput {
   kiloPort?: number;
   pollIntervalMs?: number;
   timeoutMs?: number;
+  /** Dolt config for punch card validation (omit to skip validation). */
+  doltConfig?: Omit<DoltConfig, "password">;
+  /** Card ID to validate against after completion. */
+  cardId?: string;
+  /** Task ID for punch card validation (defaults to sessionId). */
+  punchCardTaskId?: string;
 }
 
 export interface AgentTaskResult {
-  status: "completed" | "aborted" | "failed";
+  status: "completed" | "aborted" | "failed" | "validation_failed";
   sessionId: string | null;
   totalParts: number;
   toolCalls: number;
@@ -160,6 +167,22 @@ export async function agentTaskWorkflow(
 
     state.totalParts = result.totalParts;
     state.toolCalls = result.toolCalls;
+
+    // Step 6: Validate punch card (if configured)
+    if (input.doltConfig && input.cardId) {
+      state.phase = "validating";
+      const validation = await quickActivities.validateTaskPunchCard(
+        input.doltConfig,
+        input.punchCardTaskId ?? sessionId,
+        input.cardId,
+      );
+      if (validation.status === "fail") {
+        state.phase = "validation_failed";
+        state.error = `Punch card validation failed: missing=[${validation.missing.join(", ")}] violations=[${validation.violations.join(", ")}]`;
+        return makeResult("validation_failed", state, startTime, result);
+      }
+    }
+
     state.phase = "completed";
     return makeResult("completed", state, startTime, result);
   } catch (err: unknown) {
