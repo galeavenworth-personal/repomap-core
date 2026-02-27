@@ -10,47 +10,37 @@ vi.mock("mysql2/promise", () => ({
   },
 }));
 
-import { PunchCardValidator } from "../src/governor/punch-card-validator.js";
-import { SubtaskVerifier } from "../src/governor/subtask-verifier.js";
+import {
+  createConnectedVerifier,
+  makeChildIds,
+  makeCountResult,
+  makeRequirement,
+  setupMysqlMocks,
+} from "./helpers/punch-card-test-utils.js";
 
 describe("SubtaskVerifier", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    endMock.mockResolvedValue(undefined);
-    createConnectionMock.mockResolvedValue({
-      execute: executeMock,
-      end: endMock,
-    });
+    setupMysqlMocks(executeMock, endMock, createConnectionMock);
   });
 
   it("all children valid", async () => {
     executeMock
-      .mockResolvedValueOnce([[{ child_id: "child-1" }, { child_id: "child-2" }]])
+      .mockResolvedValueOnce(makeChildIds("child-1", "child-2"))
       .mockResolvedValueOnce([
         [
-          {
-            punch_type: "tool_call",
-            punch_key_pattern: "read_file%",
-            required: 1,
-            forbidden: 0,
-          },
+          makeRequirement(),
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 1 }]])
+      .mockResolvedValueOnce(makeCountResult(1))
       .mockResolvedValueOnce([
         [
-          {
-            punch_type: "tool_call",
-            punch_key_pattern: "read_file%",
-            required: 1,
-            forbidden: 0,
-          },
+          makeRequirement(),
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 2 }]]);
+      .mockResolvedValueOnce(makeCountResult(2));
 
-    const verifier = new SubtaskVerifier(new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" }));
-    await verifier.connect();
+    const verifier = await createConnectedVerifier();
     const result = await verifier.verifySubtasks("parent-1", "card-1");
 
     expect(result.parentTaskId).toBe("parent-1");
@@ -60,32 +50,21 @@ describe("SubtaskVerifier", () => {
 
   it("one child invalid", async () => {
     executeMock
-      .mockResolvedValueOnce([[{ child_id: "child-1" }, { child_id: "child-2" }]])
+      .mockResolvedValueOnce(makeChildIds("child-1", "child-2"))
       .mockResolvedValueOnce([
         [
-          {
-            punch_type: "tool_call",
-            punch_key_pattern: "read_file%",
-            required: 1,
-            forbidden: 0,
-          },
+          makeRequirement(),
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 1 }]])
+      .mockResolvedValueOnce(makeCountResult(1))
       .mockResolvedValueOnce([
         [
-          {
-            punch_type: "tool_call",
-            punch_key_pattern: "read_file%",
-            required: 1,
-            forbidden: 0,
-          },
+          makeRequirement(),
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 0 }]]);
+      .mockResolvedValueOnce(makeCountResult(0));
 
-    const verifier = new SubtaskVerifier(new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" }));
-    await verifier.connect();
+    const verifier = await createConnectedVerifier();
     const result = await verifier.verifySubtasks("parent-2", "card-2");
 
     expect(result.children).toHaveLength(2);
@@ -97,8 +76,7 @@ describe("SubtaskVerifier", () => {
   it("no children is vacuously valid", async () => {
     executeMock.mockResolvedValueOnce([[]]);
 
-    const verifier = new SubtaskVerifier(new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" }));
-    await verifier.connect();
+    const verifier = await createConnectedVerifier();
     const result = await verifier.verifySubtasks("parent-empty", "card-3");
 
     expect(result.children).toEqual([]);
@@ -107,21 +85,15 @@ describe("SubtaskVerifier", () => {
 
   it("single child passing", async () => {
     executeMock
-      .mockResolvedValueOnce([[{ child_id: "child-only" }]])
+      .mockResolvedValueOnce(makeChildIds("child-only"))
       .mockResolvedValueOnce([
         [
-          {
-            punch_type: "tool_call",
-            punch_key_pattern: "edit_file%",
-            required: 1,
-            forbidden: 0,
-          },
+          makeRequirement({ punch_key_pattern: "edit_file%" }),
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 1 }]]);
+      .mockResolvedValueOnce(makeCountResult(1));
 
-    const verifier = new SubtaskVerifier(new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" }));
-    await verifier.connect();
+    const verifier = await createConnectedVerifier();
     const result = await verifier.verifySubtasks("parent-3", "card-4");
 
     expect(result.children).toHaveLength(1);

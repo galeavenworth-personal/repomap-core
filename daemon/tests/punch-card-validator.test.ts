@@ -10,16 +10,17 @@ vi.mock("mysql2/promise", () => ({
   },
 }));
 
-import { PunchCardValidator } from "../src/governor/punch-card-validator.js";
+import {
+  createConnectedValidator,
+  makeCountResult,
+  makeRequirement,
+  setupMysqlMocks,
+} from "./helpers/punch-card-test-utils.js";
 
 describe("PunchCardValidator", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    endMock.mockResolvedValue(undefined);
-    createConnectionMock.mockResolvedValue({
-      execute: executeMock,
-      end: endMock,
-    });
+    setupMysqlMocks(executeMock, endMock, createConnectionMock);
   });
 
   it("passes when all required punches exist", async () => {
@@ -27,26 +28,19 @@ describe("PunchCardValidator", () => {
       .mockResolvedValueOnce([
         [
           {
-            punch_type: "tool_call",
-            punch_key_pattern: "read_file%",
-            required: 1,
-            forbidden: 0,
+            ...makeRequirement(),
             description: "must read file",
           },
           {
-            punch_type: "tool_call",
-            punch_key_pattern: "edit_file%",
-            required: 1,
-            forbidden: 0,
+            ...makeRequirement({ punch_key_pattern: "edit_file%" }),
             description: "must edit file",
           },
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 1 }]])
-      .mockResolvedValueOnce([[{ count: 2 }]]);
+      .mockResolvedValueOnce(makeCountResult(1))
+      .mockResolvedValueOnce(makeCountResult(2));
 
-    const validator = new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" });
-    await validator.connect();
+    const validator = await createConnectedValidator();
     const result = await validator.validatePunchCard("task-1", "card-1");
 
     expect(result.status).toBe("pass");
@@ -59,18 +53,14 @@ describe("PunchCardValidator", () => {
       .mockResolvedValueOnce([
         [
           {
-            punch_type: "tool_call",
-            punch_key_pattern: "read_file%",
-            required: 1,
-            forbidden: 0,
+            ...makeRequirement(),
             description: "must read file",
           },
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 0 }]]);
+      .mockResolvedValueOnce(makeCountResult(0));
 
-    const validator = new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" });
-    await validator.connect();
+    const validator = await createConnectedValidator();
     const result = await validator.validatePunchCard("task-2", "card-2");
 
     expect(result.status).toBe("fail");
@@ -86,18 +76,14 @@ describe("PunchCardValidator", () => {
       .mockResolvedValueOnce([
         [
           {
-            punch_type: "tool_call",
-            punch_key_pattern: "apply_diff%",
-            required: 1,
-            forbidden: 1,
+            ...makeRequirement({ punch_key_pattern: "apply_diff%", forbidden: 1 }),
             description: "must not apply diff",
           },
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 3 }]]);
+      .mockResolvedValueOnce(makeCountResult(3));
 
-    const validator = new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" });
-    await validator.connect();
+    const validator = await createConnectedValidator();
     const result = await validator.validatePunchCard("task-3", "card-3");
 
     expect(result.status).toBe("fail");
@@ -113,17 +99,13 @@ describe("PunchCardValidator", () => {
     executeMock.mockResolvedValueOnce([
       [
         {
-          punch_type: "tool_call",
-          punch_key_pattern: "optional%",
-          required: 0,
-          forbidden: 0,
+          ...makeRequirement({ punch_key_pattern: "optional%", required: 0 }),
           description: "optional",
         },
       ],
     ]);
 
-    const validator = new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" });
-    await validator.connect();
+    const validator = await createConnectedValidator();
     const result = await validator.validatePunchCard("task-4", "card-4");
 
     expect(result.status).toBe("pass");
@@ -133,10 +115,9 @@ describe("PunchCardValidator", () => {
   });
 
   it("tool adherence is within range", async () => {
-    executeMock.mockResolvedValueOnce([[{ count: 2 }]]);
+    executeMock.mockResolvedValueOnce(makeCountResult(2));
 
-    const validator = new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" });
-    await validator.connect();
+    const validator = await createConnectedValidator();
     const result = await validator.checkToolAdherence("task-5", [1, 3]);
 
     expect(result.editCount).toBe(2);
@@ -144,10 +125,9 @@ describe("PunchCardValidator", () => {
   });
 
   it("tool adherence fails when below range", async () => {
-    executeMock.mockResolvedValueOnce([[{ count: 0 }]]);
+    executeMock.mockResolvedValueOnce(makeCountResult(0));
 
-    const validator = new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" });
-    await validator.connect();
+    const validator = await createConnectedValidator();
     const result = await validator.checkToolAdherence("task-6", [1, 3]);
 
     expect(result.editCount).toBe(0);
@@ -157,8 +137,7 @@ describe("PunchCardValidator", () => {
   it("empty card returns fail", async () => {
     executeMock.mockResolvedValueOnce([[]]);
 
-    const validator = new PunchCardValidator({ host: "127.0.0.1", port: 3307, database: "plant" });
-    await validator.connect();
+    const validator = await createConnectedValidator();
     const result = await validator.validatePunchCard("task-7", "card-empty");
 
     expect(result.status).toBe("fail");

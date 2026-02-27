@@ -10,17 +10,19 @@ vi.mock("mysql2/promise", () => ({
   },
 }));
 
-import { PunchCardValidator } from "../src/governor/punch-card-validator.js";
-import { SubtaskVerifier } from "../src/governor/subtask-verifier.js";
+import {
+  createConnectedValidator,
+  createConnectedVerifier,
+  makeChildIds,
+  makeCountResult,
+  makeRequirement,
+  setupMysqlMocks,
+} from "./helpers/punch-card-test-utils.js";
 
 describe("verification loop e2e", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    endMock.mockResolvedValue(undefined);
-    createConnectionMock.mockResolvedValue({
-      execute: executeMock,
-      end: endMock,
-    });
+    setupMysqlMocks(executeMock, endMock, createConnectionMock);
   });
 
   it("full pipeline: parent with children, all valid", async () => {
@@ -28,49 +30,31 @@ describe("verification loop e2e", () => {
       // parent validator: requirements + count
       .mockResolvedValueOnce([
         [
-          {
-            punch_type: "tool_call",
-            punch_key_pattern: "read_file%",
-            required: 1,
-            forbidden: 0,
-          },
+          makeRequirement(),
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 2 }]])
+      .mockResolvedValueOnce(makeCountResult(2))
       // subtask verifier: child ids
-      .mockResolvedValueOnce([[{ child_id: "child-1" }, { child_id: "child-2" }]])
+      .mockResolvedValueOnce(makeChildIds("child-1", "child-2"))
       // child-1 validation
       .mockResolvedValueOnce([
         [
-          {
-            punch_type: "tool_call",
-            punch_key_pattern: "read_file%",
-            required: 1,
-            forbidden: 0,
-          },
+          makeRequirement(),
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 1 }]])
+      .mockResolvedValueOnce(makeCountResult(1))
       // child-2 validation
       .mockResolvedValueOnce([
         [
-          {
-            punch_type: "tool_call",
-            punch_key_pattern: "read_file%",
-            required: 1,
-            forbidden: 0,
-          },
+          makeRequirement(),
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 1 }]]);
+      .mockResolvedValueOnce(makeCountResult(1));
 
-    const cfg = { host: "127.0.0.1", port: 3307, database: "plant" };
-    const parentValidator = new PunchCardValidator(cfg);
-    await parentValidator.connect();
+    const parentValidator = await createConnectedValidator();
     const parentResult = await parentValidator.validatePunchCard("parent-1", "card-parent");
 
-    const subtaskVerifier = new SubtaskVerifier(new PunchCardValidator(cfg));
-    await subtaskVerifier.connect();
+    const subtaskVerifier = await createConnectedVerifier();
     const subtaskResult = await subtaskVerifier.verifySubtasks("parent-1", "card-child");
 
     expect(parentResult.status).toBe("pass");
@@ -83,37 +67,24 @@ describe("verification loop e2e", () => {
       // parent validator: requirements + count
       .mockResolvedValueOnce([
         [
-          {
-            punch_type: "tool_call",
-            punch_key_pattern: "read_file%",
-            required: 1,
-            forbidden: 0,
-          },
+          makeRequirement(),
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 1 }]])
+      .mockResolvedValueOnce(makeCountResult(1))
       // subtask verifier: one child
-      .mockResolvedValueOnce([[{ child_id: "child-fail" }]])
+      .mockResolvedValueOnce(makeChildIds("child-fail"))
       // child validation requirements + missing count
       .mockResolvedValueOnce([
         [
-          {
-            punch_type: "tool_call",
-            punch_key_pattern: "edit_file%",
-            required: 1,
-            forbidden: 0,
-          },
+          makeRequirement({ punch_key_pattern: "edit_file%" }),
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 0 }]]);
+      .mockResolvedValueOnce(makeCountResult(0));
 
-    const cfg = { host: "127.0.0.1", port: 3307, database: "plant" };
-    const parentValidator = new PunchCardValidator(cfg);
-    await parentValidator.connect();
+    const parentValidator = await createConnectedValidator();
     const parentResult = await parentValidator.validatePunchCard("parent-2", "card-parent");
 
-    const subtaskVerifier = new SubtaskVerifier(new PunchCardValidator(cfg));
-    await subtaskVerifier.connect();
+    const subtaskVerifier = await createConnectedVerifier();
     const subtaskResult = await subtaskVerifier.verifySubtasks("parent-2", "card-child");
 
     expect(parentResult.status).toBe("pass");
@@ -126,37 +97,24 @@ describe("verification loop e2e", () => {
       // parent validator: requirements + count
       .mockResolvedValueOnce([
         [
-          {
-            punch_type: "tool_call",
-            punch_key_pattern: "read_file%",
-            required: 1,
-            forbidden: 0,
-          },
+          makeRequirement(),
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 1 }]])
+      .mockResolvedValueOnce(makeCountResult(1))
       // subtask verifier: one child
-      .mockResolvedValueOnce([[{ child_id: "child-violates" }]])
+      .mockResolvedValueOnce(makeChildIds("child-violates"))
       // child validation requirements + forbidden count > 0
       .mockResolvedValueOnce([
         [
-          {
-            punch_type: "tool_call",
-            punch_key_pattern: "apply_diff%",
-            required: 1,
-            forbidden: 1,
-          },
+          makeRequirement({ punch_key_pattern: "apply_diff%", forbidden: 1 }),
         ],
       ])
-      .mockResolvedValueOnce([[{ count: 2 }]]);
+      .mockResolvedValueOnce(makeCountResult(2));
 
-    const cfg = { host: "127.0.0.1", port: 3307, database: "plant" };
-    const parentValidator = new PunchCardValidator(cfg);
-    await parentValidator.connect();
+    const parentValidator = await createConnectedValidator();
     const parentResult = await parentValidator.validatePunchCard("parent-3", "card-parent");
 
-    const subtaskVerifier = new SubtaskVerifier(new PunchCardValidator(cfg));
-    await subtaskVerifier.connect();
+    const subtaskVerifier = await createConnectedVerifier();
     const subtaskResult = await subtaskVerifier.verifySubtasks("parent-3", "card-child");
 
     expect(parentResult.status).toBe("pass");

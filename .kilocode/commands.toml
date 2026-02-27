@@ -413,16 +413,18 @@ receipt_required = false
 verb = "address"
 noun = "pr-feedback"
 skill = "github-cli-code-review"
-composite = ["fetch_pr", "list_pr_comments", "gate_quality"]
+composite = ["fetch_pr", "list_pr_comments", "inspect_quality_gate", "search_issues", "gate_quality"]
 receipt_required = true
 notes = """
 Full PR address-and-respond cycle:
 1. fetch_pr — pull PR metadata + review decision
 2. list_pr_comments — extract unresolved review threads
-3. [agent implements fixes based on thread contents]
-4. gate_quality — run quality gates before pushing
-5. [agent pushes + responds to threads]
-Steps 3 and 5 are agent-driven (not tool-bound).
+3. inspect_quality_gate — check SonarQube quality gate status for the PR
+4. search_issues — list SonarQube issues on the PR (with pullRequestId)
+5. [agent implements fixes for reviewer comments + SonarQube issues]
+6. gate_quality — run local quality gates before pushing
+7. [agent pushes + responds to threads]
+Steps 5 and 7 are agent-driven (not tool-bound).
 """
 
 # ─── Composite: Land Plane (full session landing) ──────────────────────────
