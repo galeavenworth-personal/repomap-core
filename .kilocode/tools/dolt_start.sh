@@ -12,7 +12,10 @@
 
 set -euo pipefail
 
-DOLT_BIN="${HOME}/.local/bin/dolt"
+DOLT_BIN="${DOLT_BIN:-${HOME}/.local/bin/dolt}"
+if [[ ! -x "${DOLT_BIN}" ]]; then
+    DOLT_BIN="$(command -v dolt)" || { echo "ERROR: dolt not found in PATH" >&2; exit 1; }
+fi
 DATA_DIR="${HOME}/.dolt-data/beads"
 HOST="127.0.0.1"
 PORT="3307"
@@ -25,10 +28,14 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 check_prereqs() {
     [[ -x "${DOLT_BIN}" ]] || die "Dolt not found at ${DOLT_BIN}"
     [[ -d "${DATA_DIR}" ]] || die "Dolt data dir not found at ${DATA_DIR}. Has beads been initialized?"
+    return 0
 }
 
 is_running() {
-    "${BD}" dolt test 2>&1 | grep -q "successful"
+    if "${BD}" dolt test 2>&1 | grep -q "successful"; then
+        return 0
+    fi
+    return 1
 }
 
 start_server() {
@@ -74,6 +81,7 @@ stop_server() {
     else
         echo "Could not find Dolt server process to stop."
     fi
+    return 0
 }
 
 check_status() {
@@ -86,6 +94,7 @@ check_status() {
         echo "✗ Dolt server not running"
         echo "  Start with: .kilocode/tools/dolt_start.sh"
     fi
+    return 0
 }
 
 case "${1:-}" in

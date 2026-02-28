@@ -25,6 +25,8 @@ dev = [
     "mypy>=1.15.0",
     "pytest>=8.3.0",
     "python-dotenv>=1.0.0",
+    "dspy>=2.0.0",
+    "pymysql>=1.1.0",
 ]
 
 optimization = [

@@ -80,6 +80,44 @@ function parseApiReqStartedText(text: unknown): {
   }
 }
 
+function applyApiRequestMetrics(
+  session: SessionAccumulator,
+  metrics: ReturnType<typeof parseApiReqStartedText>,
+  ts: number
+): void {
+  session.totalCost += metrics.cost ?? 0;
+  session.tokensIn += metrics.tokensIn ?? 0;
+  session.tokensOut += metrics.tokensOut ?? 0;
+  session.tokensReasoning += metrics.tokensReasoning ?? 0;
+  if (metrics.model) session.model ??= metrics.model;
+  if (!session.startedAt) session.startedAt = new Date(ts);
+  session.completedAt = new Date(ts);
+}
+
+function roleFromUiType(type: string): "user" | "assistant" {
+  return type === "ask.text" ? "user" : "assistant";
+}
+
+function parseToolUses(row: Record<string, unknown>): unknown[] {
+  if (Array.isArray(row.tool_use)) {
+    return row.tool_use;
+  }
+  if (Array.isArray(row.toolUse)) {
+    return row.toolUse;
+  }
+  return [];
+}
+
+function summarizeArgs(args: unknown): string | undefined {
+  if (typeof args === "string") {
+    return args;
+  }
+  if (args) {
+    return JSON.stringify(args).slice(0, 1024);
+  }
+  return undefined;
+}
+
 async function ingestUiMessages(
   sessionId: string,
   uiMessages: unknown[],
@@ -96,21 +134,14 @@ async function ingestUiMessages(
     const ts = toTimestamp(row.ts ?? row.timestamp ?? row.createdAt);
 
     if (type === "say.api_req_started") {
-      const metrics = parseApiReqStartedText(text);
-      session.totalCost += metrics.cost ?? 0;
-      session.tokensIn += metrics.tokensIn ?? 0;
-      session.tokensOut += metrics.tokensOut ?? 0;
-      session.tokensReasoning += metrics.tokensReasoning ?? 0;
-      if (!session.model && metrics.model) session.model = metrics.model;
-      if (!session.startedAt) session.startedAt = new Date(ts);
-      session.completedAt = new Date(ts);
+      applyApiRequestMetrics(session, parseApiReqStartedText(text), ts);
       continue;
     }
 
     if (type === "say.text" || type === "ask.text") {
       await writer.writeMessage({
         sessionId,
-        role: type === "ask.text" ? "user" : "assistant",
+        role: roleFromUiType(type),
         contentType: "text",
         contentPreview: asString(text)?.slice(0, 512),
         ts,
@@ -161,11 +192,7 @@ async function ingestApiConversationHistory(
       messages += 1;
     }
 
-    const toolUses = Array.isArray(row.tool_use)
-      ? row.tool_use
-      : Array.isArray(row.toolUse)
-        ? row.toolUse
-        : [];
+    const toolUses = parseToolUses(row);
     for (const toolUse of toolUses) {
       const toolRow = asRecord(toolUse);
       const toolName = asString(toolRow.name) ?? asString(toolRow.tool) ?? "unknown_tool";
@@ -175,12 +202,7 @@ async function ingestApiConversationHistory(
       await writer.writeToolCall({
         sessionId,
         toolName,
-        argsSummary:
-          typeof args === "string"
-            ? args
-            : args
-              ? JSON.stringify(args).slice(0, 1024)
-              : undefined,
+        argsSummary: summarizeArgs(args),
         status,
         error: asString(toolRow.error),
         durationMs: asNumber(toolRow.durationMs),
@@ -201,8 +223,8 @@ export async function runBackfill(taskStoreArg?: string): Promise<Counters> {
 
   const writer = createDoltWriter({
     host: process.env.DOLT_HOST || "127.0.0.1",
-    port: parseInt(process.env.DOLT_PORT || "3307", 10),
-    database: process.env.DOLT_DATABASE || "plant",
+    port: Number.parseInt(process.env.DOLT_PORT || "3307", 10),
+    database: process.env.DOLT_DATABASE || "punch_cards",
     user: process.env.DOLT_USER || "root",
     password: process.env.DOLT_PASSWORD || undefined,
   });

@@ -70,6 +70,43 @@ class ConstrainedDecompositionModule(dspy.Module):
         )
 
 
+def _parse_subtasks_json(prediction: Any) -> list[dict[str, Any]] | None:
+    raw_json = str(getattr(prediction, "subtasks_json", "")).strip()
+    if raw_json == "":
+        return None
+
+    try:
+        parsed = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(parsed, list):
+        return None
+    if not all(isinstance(subtask, dict) for subtask in parsed):
+        return None
+
+    return parsed
+
+
+def _violates_subtask_constraints(
+    subtask: dict[str, Any],
+    constraints: DecompositionConstraints,
+) -> bool:
+    cost = subtask.get("cost")
+    if not isinstance(cost, int | float):
+        return True
+    if float(cost) > constraints.max_cost_per_subtask:
+        return True
+
+    if not constraints.scope_keywords:
+        return False
+
+    subtask_blob = json.dumps(subtask, sort_keys=True).lower()
+    return any(
+        keyword.lower() in subtask_blob for keyword in constraints.scope_keywords
+    )
+
+
 def decomposition_constraint_metric(
     example: dspy.Example,
     prediction: Any,
@@ -79,16 +116,8 @@ def decomposition_constraint_metric(
 
     constraints = getattr(example, "constraints", DecompositionConstraints())
 
-    raw_json = str(getattr(prediction, "subtasks_json", "")).strip()
-    if raw_json == "":
-        return 0.0
-
-    try:
-        subtasks = json.loads(raw_json)
-    except json.JSONDecodeError:
-        return 0.0
-
-    if not isinstance(subtasks, list):
+    subtasks = _parse_subtasks_json(prediction)
+    if subtasks is None:
         return 0.0
 
     if (
@@ -98,22 +127,8 @@ def decomposition_constraint_metric(
         return 0.0
 
     for subtask in subtasks:
-        if not isinstance(subtask, dict):
+        if _violates_subtask_constraints(subtask, constraints):
             return 0.0
-
-        cost = subtask.get("cost")
-        if not isinstance(cost, int | float):
-            return 0.0
-        if float(cost) > constraints.max_cost_per_subtask:
-            return 0.0
-
-        if constraints.scope_keywords:
-            subtask_blob = json.dumps(subtask, sort_keys=True).lower()
-            if any(
-                keyword.lower() in subtask_blob
-                for keyword in constraints.scope_keywords
-            ):
-                return 0.0
 
     return 1.0
 

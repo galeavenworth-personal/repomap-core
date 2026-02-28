@@ -5,9 +5,9 @@ from collections.abc import Callable, Mapping
 
 import dspy  # type: ignore[import-untyped]
 
-_SUMMARY_FIELD_RE = re.compile(r"(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)=(?P<value>[^\s]+)")
+_SUMMARY_FIELD_RE = re.compile(r"(?P<key>[a-zA-Z_]\w*)=(?P<value>[^\s]+)")
 _TOOL_ACTIVITY_RE = re.compile(
-    r"^\s*-\s*(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(?P<value>-?\d+)\s*$"
+    r"^\s*-\s*(?P<key>[a-zA-Z_]\w*)\s*:\s*(?P<value>-?\d+)\s*$"
 )
 
 
@@ -95,7 +95,7 @@ def weighted_quality_score(
 
     effective_weights: Mapping[str, float]
     if weights is None:
-        effective_weights = {name: 0.2 for name in metric_fns}
+        effective_weights = dict.fromkeys(metric_fns, 0.2)
     else:
         effective_weights = weights
 

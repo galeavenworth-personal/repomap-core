@@ -4,6 +4,7 @@ from typing import Any
 from unittest.mock import patch
 
 import dspy  # type: ignore[import-untyped]
+import pytest
 from dspy.utils import DummyLM  # type: ignore[import-untyped]
 
 from optimization import classifier
@@ -117,7 +118,7 @@ def test_classify_session_clamps_invalid_values() -> None:
         )
 
     assert result.category == "model_confusion"
-    assert result.confidence == 1.0
+    assert result.confidence == pytest.approx(1.0)
     assert result.evidence != ""
 
 
@@ -154,5 +155,5 @@ def test_compare_with_heuristic_returns_summary() -> None:
         summary = classifier.compare_with_heuristic(module, examples)
 
     assert 0.0 <= summary.classifier_accuracy <= 1.0
-    assert summary.heuristic_accuracy == 1.0
+    assert summary.heuristic_accuracy == pytest.approx(1.0)
     assert "infer_diagnosis_category" in summary.note

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import dspy  # type: ignore[import-untyped]
+import pytest
 
 from optimization import metrics
 
@@ -49,7 +50,7 @@ def _example(**overrides: Any) -> dspy.Example:
 
 def test_punch_card_pass_rate_checkpoint_pass() -> None:
     example = _example()
-    assert metrics.punch_card_pass_rate(example) == 1.0
+    assert metrics.punch_card_pass_rate(example) == pytest.approx(1.0)
 
 
 def test_punch_card_pass_rate_checkpoint_fail() -> None:
@@ -59,7 +60,7 @@ def test_punch_card_pass_rate_checkpoint_fail() -> None:
             "duration_min=12 punches=20 completion_ratio=0.90"
         )
     )
-    assert metrics.punch_card_pass_rate(example) == 0.0
+    assert metrics.punch_card_pass_rate(example) == pytest.approx(0.0)
 
 
 def test_punch_card_pass_rate_checkpoint_none_uses_completion_ratio() -> None:
@@ -69,40 +70,37 @@ def test_punch_card_pass_rate_checkpoint_none_uses_completion_ratio() -> None:
             "duration_min=12 punches=20 completion_ratio=0.65"
         )
     )
-    assert metrics.punch_card_pass_rate(example) == 0.65
+    assert metrics.punch_card_pass_rate(example) == pytest.approx(0.65)
 
 
 def test_cost_efficiency_low_mid_high() -> None:
-    assert metrics.cost_efficiency(_example(total_cost=0.0)) == 1.0
-    assert metrics.cost_efficiency(_example(total_cost=4.0)) == 0.5
-    assert metrics.cost_efficiency(_example(total_cost=10.0)) == 0.0
+    assert metrics.cost_efficiency(_example(total_cost=0.0)) == pytest.approx(1.0)
+    assert metrics.cost_efficiency(_example(total_cost=4.0)) == pytest.approx(0.5)
+    assert metrics.cost_efficiency(_example(total_cost=10.0)) == pytest.approx(0.0)
 
 
 def test_task_completion_rate_success_failure_partial() -> None:
-    assert metrics.task_completion_rate(_example(outcome_label="success")) == 1.0
-    assert metrics.task_completion_rate(_example(outcome_label="failure")) == 0.0
-    assert metrics.task_completion_rate(_example(outcome_label="partial")) == 0.0
+    assert metrics.task_completion_rate(
+        _example(outcome_label="success")
+    ) == pytest.approx(1.0)
+    assert metrics.task_completion_rate(
+        _example(outcome_label="failure")
+    ) == pytest.approx(0.0)
+    assert metrics.task_completion_rate(
+        _example(outcome_label="partial")
+    ) == pytest.approx(0.0)
 
 
 def test_fitter_recovery_success_rate_cases() -> None:
-    assert (
-        metrics.fitter_recovery_success_rate(
-            _example(is_kill_recovery=True, outcome_label="success")
-        )
-        == 1.0
-    )
-    assert (
-        metrics.fitter_recovery_success_rate(
-            _example(is_kill_recovery=True, outcome_label="failure")
-        )
-        == 0.0
-    )
-    assert (
-        metrics.fitter_recovery_success_rate(
-            _example(is_kill_recovery=False, outcome_label="failure")
-        )
-        == 0.5
-    )
+    assert metrics.fitter_recovery_success_rate(
+        _example(is_kill_recovery=True, outcome_label="success")
+    ) == pytest.approx(1.0)
+    assert metrics.fitter_recovery_success_rate(
+        _example(is_kill_recovery=True, outcome_label="failure")
+    ) == pytest.approx(0.0)
+    assert metrics.fitter_recovery_success_rate(
+        _example(is_kill_recovery=False, outcome_label="failure")
+    ) == pytest.approx(0.5)
 
 
 def test_tool_adherence_score_all_recognized() -> None:
@@ -116,7 +114,7 @@ def test_tool_adherence_score_all_recognized() -> None:
             ]
         )
     )
-    assert metrics.tool_adherence_score(example) == 1.0
+    assert metrics.tool_adherence_score(example) == pytest.approx(1.0)
 
 
 def test_tool_adherence_score_some_unrecognized() -> None:
@@ -130,7 +128,7 @@ def test_tool_adherence_score_some_unrecognized() -> None:
             ]
         )
     )
-    assert metrics.tool_adherence_score(example) == 0.7
+    assert metrics.tool_adherence_score(example) == pytest.approx(0.7)
 
 
 def test_tool_adherence_score_zero_tools() -> None:
@@ -144,7 +142,7 @@ def test_tool_adherence_score_zero_tools() -> None:
             ]
         )
     )
-    assert metrics.tool_adherence_score(example) == 1.0
+    assert metrics.tool_adherence_score(example) == pytest.approx(1.0)
 
 
 def test_weighted_quality_score_range_and_composition() -> None:
@@ -217,7 +215,9 @@ def test_weighted_quality_score_custom_weights() -> None:
         "tool_adherence_score": 0.2,
     }
     expected = 0.4 * 0.5 + 0.2 * 0.5 + 0.1 * 0.0 + 0.1 * 0.5 + 0.2 * 0.5
-    assert metrics.weighted_quality_score(example, weights=weights) == expected
+    assert metrics.weighted_quality_score(example, weights=weights) == pytest.approx(
+        expected
+    )
 
 
 def test_metric_determinism_same_input_same_output() -> None:

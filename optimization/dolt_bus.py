@@ -1,19 +1,20 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, cast
 
 import pymysql
 from pymysql.cursors import DictCursor
 
 
-HOST = "127.0.0.1"
-PORT = 3307
-DATABASE = "punch_cards"
-USER = "root"
+HOST = os.getenv("DOLT_HOST", "127.0.0.1")
+PORT = int(os.getenv("DOLT_PORT", "3307"))
+DATABASE = os.getenv("DOLT_DATABASE", "punch_cards")
+USER = os.getenv("DOLT_USER", "root")
 
 
 CREATE_TABLE_SQL = """
@@ -61,7 +62,7 @@ class DiagnosisClassificationRecord:
 
 
 @contextmanager
-def _connection() -> Generator[Any, None, None]:
+def _connection(ensure_schema: bool = False) -> Generator[Any, None, None]:
     conn = pymysql.connect(
         host=HOST,
         port=PORT,
@@ -71,10 +72,11 @@ def _connection() -> Generator[Any, None, None]:
         autocommit=False,
     )
     try:
-        with conn.cursor() as cursor:
-            cursor.execute(CREATE_TABLE_SQL)
-            cursor.execute(CREATE_DIAGNOSIS_TABLE_SQL)
-        conn.commit()
+        if ensure_schema:
+            with conn.cursor() as cursor:
+                cursor.execute(CREATE_TABLE_SQL)
+                cursor.execute(CREATE_DIAGNOSIS_TABLE_SQL)
+            conn.commit()
         yield conn
     finally:
         conn.close()
@@ -88,8 +90,8 @@ def write_compiled_prompt(
     dspy_version: str,
 ) -> None:
     """Insert or update a compiled prompt record in Dolt/MySQL."""
-    now = datetime.utcnow()
-    with _connection() as conn:
+    now = datetime.now(timezone.utc)
+    with _connection(ensure_schema=True) as conn:
         with conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -162,8 +164,8 @@ def write_diagnosis_classification(
     classifier_version: str,
 ) -> None:
     """Insert or update a DSPy diagnosis classification in Dolt/MySQL."""
-    now = datetime.utcnow()
-    with _connection() as conn:
+    now = datetime.now(timezone.utc)
+    with _connection(ensure_schema=True) as conn:
         with conn.cursor() as cursor:
             cursor.execute(
                 """

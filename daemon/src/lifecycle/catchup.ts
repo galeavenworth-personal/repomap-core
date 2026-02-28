@@ -58,6 +58,53 @@ function pickTimestamp(record: Record<string, unknown>): number {
   return createdAt ? createdAt.getTime() : Date.now();
 }
 
+function summarizeArgs(args: unknown): string | undefined {
+  if (typeof args === "string") return args;
+  if (args) return JSON.stringify(args).slice(0, 1024);
+  return undefined;
+}
+
+async function writeTextMessagePart(
+  writer: DoltWriter,
+  sessionId: string,
+  partRecord: Record<string, unknown>,
+  messageRole: string,
+  punch: ReturnType<typeof classifyEvent>
+): Promise<void> {
+  const text = pickString(partRecord, "text", "content") ?? "";
+  await writer.writeMessage({
+    sessionId,
+    role: pickString(partRecord, "role") ?? messageRole,
+    contentType: "text",
+    contentPreview: text.slice(0, 512),
+    ts: pickTimestamp(partRecord),
+    cost: pickNumber(partRecord, "cost") ?? punch?.cost,
+    tokensIn: pickNumber(asRecord(partRecord.tokens), "input") ?? punch?.tokensInput,
+    tokensOut: pickNumber(asRecord(partRecord.tokens), "output") ?? punch?.tokensOutput,
+  });
+}
+
+async function writeToolPart(
+  writer: DoltWriter,
+  sessionId: string,
+  partRecord: Record<string, unknown>,
+  punch: ReturnType<typeof classifyEvent>
+): Promise<void> {
+  const state = asRecord(partRecord.state);
+  const args = partRecord.input;
+  const toolName = pickString(partRecord, "tool") ?? punch?.punchKey ?? "unknown_tool";
+  await writer.writeToolCall({
+    sessionId,
+    toolName,
+    argsSummary: summarizeArgs(args),
+    status: pickString(state, "status"),
+    error: pickString(state, "error"),
+    durationMs: pickNumber(partRecord, "durationMs"),
+    cost: pickNumber(partRecord, "cost") ?? punch?.cost,
+    ts: pickTimestamp(partRecord),
+  });
+}
+
 /** Emit synthetic lifecycle punches for a session (created + updated). */
 async function replayLifecycleEvents(session: Session, writer: DoltWriter): Promise<void> {
   const createdPunch = classifyEvent({
@@ -98,42 +145,9 @@ async function replayMessageParts(
 
       const partType = pickString(partRecord, "type");
       if (partType === "text") {
-        const text = pickString(partRecord, "text", "content") ?? "";
-        await writer.writeMessage({
-          sessionId: session.id,
-          role: pickString(partRecord, "role") ?? messageRole,
-          contentType: "text",
-          contentPreview: text.slice(0, 512),
-          ts: pickTimestamp(partRecord),
-          cost: pickNumber(partRecord, "cost") ?? punch?.cost,
-          tokensIn:
-            pickNumber(asRecord(partRecord.tokens), "input") ??
-            punch?.tokensInput,
-          tokensOut:
-            pickNumber(asRecord(partRecord.tokens), "output") ??
-            punch?.tokensOutput,
-        });
-      }
-
-      if (partType === "tool") {
-        const state = asRecord(partRecord.state);
-        const args = partRecord.input;
-        const toolName = pickString(partRecord, "tool") ?? punch?.punchKey ?? "unknown_tool";
-        await writer.writeToolCall({
-          sessionId: session.id,
-          toolName,
-          argsSummary:
-            typeof args === "string"
-              ? args
-              : args
-                ? JSON.stringify(args).slice(0, 1024)
-                : undefined,
-          status: pickString(state, "status"),
-          error: pickString(state, "error"),
-          durationMs: pickNumber(partRecord, "durationMs"),
-          cost: pickNumber(partRecord, "cost") ?? punch?.cost,
-          ts: pickTimestamp(partRecord),
-        });
+        await writeTextMessagePart(writer, session.id, partRecord, messageRole, punch);
+      } else if (partType === "tool") {
+        await writeToolPart(writer, session.id, partRecord, punch);
       }
     }
   }

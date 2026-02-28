@@ -17,6 +17,13 @@ DiagnosisCategory = Literal[
     "model_confusion",
 ]
 
+SESSION_ID_DESC = "Session ID of the failed session"
+SUMMARY_DESC = "Human-readable diagnosis summary"
+SUGGESTED_ACTION_DESC = "Suggested recovery action"
+TOOL_ACTIVITY_DESC = "Formatted tool activity lines"
+RECOVERY_PROMPT_DESC = "Complete recovery prompt for bounded fitter session"
+PREVIOUS_SESSION_TOOL_ACTIVITY_LINE = "Previous session tool activity:"
+
 
 @dataclass(frozen=True)
 class ToolPattern:
@@ -39,64 +46,54 @@ class DiagnosisReport:
 class StuckOnApprovalSignature(dspy.Signature):  # type: ignore[misc]
     """Generate a recovery prompt for a session stuck waiting for approval. The fitter has full auto-approve permissions."""
 
-    session_id: str = dspy.InputField(desc="Session ID of the failed session")
-    summary: str = dspy.InputField(desc="Human-readable diagnosis summary")
-    suggested_action: str = dspy.InputField(desc="Suggested recovery action")
-    tool_activity: str = dspy.InputField(desc="Formatted tool activity lines")
-    recovery_prompt: str = dspy.OutputField(
-        desc="Complete recovery prompt for bounded fitter session"
-    )
+    session_id: str = dspy.InputField(desc=SESSION_ID_DESC)
+    summary: str = dspy.InputField(desc=SUMMARY_DESC)
+    suggested_action: str = dspy.InputField(desc=SUGGESTED_ACTION_DESC)
+    tool_activity: str = dspy.InputField(desc=TOOL_ACTIVITY_DESC)
+    recovery_prompt: str = dspy.OutputField(desc=RECOVERY_PROMPT_DESC)
 
 
 class InfiniteRetrySignature(dspy.Signature):  # type: ignore[misc]
     """Generate a recovery prompt for repeated retries that keep failing with the same error."""
 
-    session_id: str = dspy.InputField(desc="Session ID of the failed session")
-    summary: str = dspy.InputField(desc="Human-readable diagnosis summary")
-    suggested_action: str = dspy.InputField(desc="Suggested recovery action")
-    tool_activity: str = dspy.InputField(desc="Formatted tool activity lines")
+    session_id: str = dspy.InputField(desc=SESSION_ID_DESC)
+    summary: str = dspy.InputField(desc=SUMMARY_DESC)
+    suggested_action: str = dspy.InputField(desc=SUGGESTED_ACTION_DESC)
+    tool_activity: str = dspy.InputField(desc=TOOL_ACTIVITY_DESC)
     last_error: str = dspy.InputField(desc="Last error extracted from summary")
     failing_tool: str = dspy.InputField(desc="Failing tool extracted from summary")
     retry_count: int = dspy.InputField(desc="Estimated retry count from tool activity")
-    recovery_prompt: str = dspy.OutputField(
-        desc="Complete recovery prompt for bounded fitter session"
-    )
+    recovery_prompt: str = dspy.OutputField(desc=RECOVERY_PROMPT_DESC)
 
 
 class ScopeCreepSignature(dspy.Signature):  # type: ignore[misc]
     """Generate a recovery prompt that constrains scope to the original task."""
 
-    session_id: str = dspy.InputField(desc="Session ID of the failed session")
-    summary: str = dspy.InputField(desc="Human-readable diagnosis summary")
-    suggested_action: str = dspy.InputField(desc="Suggested recovery action")
-    tool_activity: str = dspy.InputField(desc="Formatted tool activity lines")
-    recovery_prompt: str = dspy.OutputField(
-        desc="Complete recovery prompt for bounded fitter session"
-    )
+    session_id: str = dspy.InputField(desc=SESSION_ID_DESC)
+    summary: str = dspy.InputField(desc=SUMMARY_DESC)
+    suggested_action: str = dspy.InputField(desc=SUGGESTED_ACTION_DESC)
+    tool_activity: str = dspy.InputField(desc=TOOL_ACTIVITY_DESC)
+    recovery_prompt: str = dspy.OutputField(desc=RECOVERY_PROMPT_DESC)
 
 
 class ContextExhaustionSignature(dspy.Signature):  # type: ignore[misc]
     """Generate a recovery prompt for context-exhaustion failures with one-file-at-a-time strategy."""
 
-    session_id: str = dspy.InputField(desc="Session ID of the failed session")
-    summary: str = dspy.InputField(desc="Human-readable diagnosis summary")
-    suggested_action: str = dspy.InputField(desc="Suggested recovery action")
-    tool_activity: str = dspy.InputField(desc="Formatted tool activity lines")
-    recovery_prompt: str = dspy.OutputField(
-        desc="Complete recovery prompt for bounded fitter session"
-    )
+    session_id: str = dspy.InputField(desc=SESSION_ID_DESC)
+    summary: str = dspy.InputField(desc=SUMMARY_DESC)
+    suggested_action: str = dspy.InputField(desc=SUGGESTED_ACTION_DESC)
+    tool_activity: str = dspy.InputField(desc=TOOL_ACTIVITY_DESC)
+    recovery_prompt: str = dspy.OutputField(desc=RECOVERY_PROMPT_DESC)
 
 
 class ModelConfusionSignature(dspy.Signature):  # type: ignore[misc]
     """Generate a simplified recovery prompt when the previous session produced contradictory changes."""
 
-    session_id: str = dspy.InputField(desc="Session ID of the failed session")
-    summary: str = dspy.InputField(desc="Human-readable diagnosis summary")
-    suggested_action: str = dspy.InputField(desc="Suggested recovery action")
-    tool_activity: str = dspy.InputField(desc="Formatted tool activity lines")
-    recovery_prompt: str = dspy.OutputField(
-        desc="Complete recovery prompt for bounded fitter session"
-    )
+    session_id: str = dspy.InputField(desc=SESSION_ID_DESC)
+    summary: str = dspy.InputField(desc=SUMMARY_DESC)
+    suggested_action: str = dspy.InputField(desc=SUGGESTED_ACTION_DESC)
+    tool_activity: str = dspy.InputField(desc=TOOL_ACTIVITY_DESC)
+    recovery_prompt: str = dspy.OutputField(desc=RECOVERY_PROMPT_DESC)
 
 
 def format_tool_activity(patterns: list[ToolPattern]) -> str:
@@ -142,7 +139,7 @@ def _build_stuck_on_approval_prompt(report: DiagnosisReport) -> str:
             "",
             f"Action: {report.suggested_action}",
             "",
-            "Previous session tool activity:",
+            PREVIOUS_SESSION_TOOL_ACTIVITY_LINE,
             tool_activity,
             "",
             "You have full auto-approve permissions for all file operations.",
@@ -167,7 +164,7 @@ def _build_infinite_retry_prompt(report: DiagnosisReport) -> str:
             f"Hint: Do NOT retry the same approach. The previous session already tried it {retry_count} times and failed.",
             "Analyze the error, understand the root cause, and apply a different fix.",
             "",
-            "Previous session tool activity:",
+            PREVIOUS_SESSION_TOOL_ACTIVITY_LINE,
             tool_activity,
             "",
             "Fix the underlying issue, verify the fix works, commit, and exit.",
@@ -184,7 +181,7 @@ def _build_scope_creep_prompt(report: DiagnosisReport) -> str:
             f"Problem: {report.summary}",
             "The previous session expanded scope far beyond the original task.",
             "",
-            "Previous session tool activity:",
+            PREVIOUS_SESSION_TOOL_ACTIVITY_LINE,
             tool_activity,
             "",
             f"Action: {report.suggested_action}",
@@ -208,7 +205,7 @@ def _build_context_exhaustion_prompt(report: DiagnosisReport) -> str:
             f"Problem: {report.summary}",
             "The previous session exhausted its context window re-reading the same content.",
             "",
-            "Previous session tool activity:",
+            PREVIOUS_SESSION_TOOL_ACTIVITY_LINE,
             tool_activity,
             "",
             "Strategy: Work on ONE file at a time. Do not read files you don't need to edit.",
@@ -234,7 +231,7 @@ def _build_model_confusion_prompt(report: DiagnosisReport) -> str:
             f"Problem: {report.summary}",
             "The previous session was confused and producing contradictory changes.",
             "",
-            "Previous session tool activity:",
+            PREVIOUS_SESSION_TOOL_ACTIVITY_LINE,
             tool_activity,
             "",
             "SIMPLIFIED INSTRUCTIONS:",

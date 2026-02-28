@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS messages (
     cost           DECIMAL(10,6) DEFAULT NULL,
     tokens_in      INT          DEFAULT NULL,
     tokens_out     INT          DEFAULT NULL,
+    UNIQUE INDEX idx_session_ts_role (session_id, ts, role),
     INDEX idx_session (session_id),
     INDEX idx_ts (ts)
 );
@@ -150,6 +151,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     duration_ms   INT          DEFAULT NULL,
     cost          DECIMAL(10,6) DEFAULT NULL,
     ts            BIGINT       NOT NULL,
+    UNIQUE KEY uniq_session_ts_tool (session_id, ts, tool_name),
     INDEX idx_session (session_id),
     INDEX idx_tool (tool_name),
     INDEX idx_ts (ts)
@@ -263,7 +265,7 @@ commit_output="$("${DOLT_BIN}" sql -q "CALL DOLT_COMMIT('-m', 'Initialize punch 
 commit_status=$?
 set -e
 
-if [ "${commit_status}" -ne 0 ]; then
+if [[ "${commit_status}" -ne 0 ]]; then
   if echo "${commit_output}" | grep -qi "nothing to commit"; then
     echo "INFO: No new schema changes to commit"
   else

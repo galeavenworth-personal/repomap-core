@@ -4,6 +4,7 @@ import json
 from typing import Any, cast
 
 import dspy  # type: ignore[import-untyped]
+import pytest
 from dspy.utils import DummyLM  # type: ignore[import-untyped]
 
 from optimization import assertions
@@ -74,7 +75,7 @@ def test_constraint_metric_accepts_valid_decomposition() -> None:
 
     score = assertions.decomposition_constraint_metric(example, prediction)
 
-    assert score == 1.0
+    assert score == pytest.approx(1.0)
 
 
 def test_constraint_metric_rejects_too_many_subtasks() -> None:
@@ -89,7 +90,7 @@ def test_constraint_metric_rejects_too_many_subtasks() -> None:
 
     score = assertions.decomposition_constraint_metric(example, prediction)
 
-    assert score == 0.0
+    assert score == pytest.approx(0.0)
 
 
 def test_constraint_metric_rejects_over_budget_subtask() -> None:
@@ -105,7 +106,7 @@ def test_constraint_metric_rejects_over_budget_subtask() -> None:
 
     score = assertions.decomposition_constraint_metric(example, prediction)
 
-    assert score == 0.0
+    assert score == pytest.approx(0.0)
 
 
 def test_compile_constrained_decomposition_with_dummy_lm() -> None:

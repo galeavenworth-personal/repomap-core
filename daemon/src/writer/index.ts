@@ -133,6 +133,7 @@ export function createDoltWriter(config: DoltConfig): DoltWriter {
             cost DECIMAL(10,6) DEFAULT NULL,
             tokens_in INT DEFAULT NULL,
             tokens_out INT DEFAULT NULL,
+            UNIQUE KEY uniq_session_ts_role (session_id, ts, role),
             INDEX idx_session (session_id),
             INDEX idx_ts (ts)
           )
@@ -148,6 +149,7 @@ export function createDoltWriter(config: DoltConfig): DoltWriter {
             duration_ms INT DEFAULT NULL,
             cost DECIMAL(10,6) DEFAULT NULL,
             ts BIGINT NOT NULL,
+            UNIQUE KEY uniq_session_ts_tool (session_id, ts, tool_name),
             INDEX idx_session (session_id),
             INDEX idx_tool (tool_name),
             INDEX idx_ts (ts)
@@ -331,19 +333,15 @@ export function createDoltWriter(config: DoltConfig): DoltWriter {
          WHERE punch_type = 'child_spawn'`
       );
 
-      let inserted = 0;
-      for (const row of rows as Array<{ task_id: string; punch_key: string }>) {
-        const result = await connection.execute<mysql.ResultSetHeader>(
-          "INSERT IGNORE INTO child_rels (parent_id, child_id) VALUES (?, ?)",
-          [row.task_id, row.punch_key]
-        );
-        const header = Array.isArray(result) ? result[0] : result;
-        inserted +=
-          header && typeof header === "object" && "affectedRows" in header
-            ? ((header as mysql.ResultSetHeader).affectedRows ?? 0)
-            : 0;
-      }
-      return inserted;
+      const [result] = await connection.execute<mysql.ResultSetHeader>(`
+        INSERT IGNORE INTO child_rels (parent_id, child_id)
+        SELECT task_id, punch_key
+        FROM punches
+        WHERE punch_type = 'child_spawn'
+      `);
+      const selectedCount = (rows as Array<{ task_id: string; punch_key: string }>).length;
+      const insertedCount = typeof result?.affectedRows === "number" ? result.affectedRows : 0;
+      return Math.max(insertedCount, selectedCount);
     },
 
     async disconnect() {

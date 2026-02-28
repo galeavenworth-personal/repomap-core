@@ -72,7 +72,23 @@ function pickTimestamp(record: Record<string, unknown>): number {
   const ts = pickNumber(record, "ts", "timestamp", "time", "createdAtMs");
   if (typeof ts === "number") return ts;
   const created = pickDate(record, "createdAt", "updatedAt");
-  return created ? created.getTime() : Date.now();
+  if (created) return created.getTime();
+  console.warn("[oc-daemon] Missing timestamp fields in message part; using Date.now() fallback");
+  return Date.now();
+}
+
+function summarizeArgs(args: unknown): string | undefined {
+  if (typeof args === "string") return args;
+  if (args) return JSON.stringify(args).slice(0, 1024);
+  return undefined;
+}
+
+function resolveMessageRole(part: Record<string, unknown>, properties: Record<string, unknown>): string {
+  const partRole = pickString(part, "role");
+  if (partRole) return partRole;
+  const eventRole = pickString(properties, "role");
+  if (eventRole) return eventRole;
+  return "assistant";
 }
 
 /** Record child session relationships when a session completes. */
@@ -105,9 +121,10 @@ async function processEvent(
   if (!punch) return;
 
   await writer.writePunch(punch);
+  const properties = asRecord(rawEvent.properties);
 
   if (rawEvent.type === "session.created" || rawEvent.type === "session.updated") {
-    const info = asRecord(asRecord(rawEvent.properties).info);
+    const info = asRecord(properties.info);
     const sessionId = pickString(info, "id", "sessionId", "taskId") ?? punch.taskId;
     const tokens = asRecord(info.tokens);
     await writer.writeSession({
@@ -126,11 +143,11 @@ async function processEvent(
     });
   }
 
-  const part = asRecord(asRecord(rawEvent.properties).part);
+  const part = asRecord(properties.part);
   const partType = pickString(part, "type");
 
   if (punch.punchType === "message" || partType === "text") {
-    const role = pickString(part, "role") ?? pickString(asRecord(rawEvent.properties), "role") ?? "assistant";
+    const role = resolveMessageRole(part, properties);
     const previewSource = pickString(part, "text") ?? pickString(part, "content") ?? "";
     await writer.writeMessage({
       sessionId: punch.taskId,
@@ -151,7 +168,7 @@ async function processEvent(
     await writer.writeToolCall({
       sessionId: punch.taskId,
       toolName: punch.punchKey,
-      argsSummary: typeof args === "string" ? args : args ? JSON.stringify(args).slice(0, 1024) : undefined,
+      argsSummary: summarizeArgs(args),
       status,
       error: pickString(state, "error"),
       durationMs: pickNumber(part, "durationMs"),

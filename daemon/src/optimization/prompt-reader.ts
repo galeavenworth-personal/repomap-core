@@ -1,9 +1,9 @@
 import mysql from "mysql2/promise";
 
-const DEFAULT_HOST = "127.0.0.1";
-const DEFAULT_PORT = 3307;
-const DEFAULT_DATABASE = "punch_cards";
-const DEFAULT_USER = "root";
+const DOLT_HOST = process.env.DOLT_HOST || "127.0.0.1";
+const DOLT_PORT = Number.parseInt(process.env.DOLT_PORT || "3307", 10);
+const DOLT_DATABASE = process.env.DOLT_DATABASE || "punch_cards";
+const DOLT_USER = process.env.DOLT_USER || "root";
 
 export interface CompiledPromptRow {
   prompt_id: string;
@@ -16,10 +16,10 @@ export interface CompiledPromptRow {
 
 function createConnection() {
   return mysql.createConnection({
-    host: DEFAULT_HOST,
-    port: DEFAULT_PORT,
-    database: DEFAULT_DATABASE,
-    user: DEFAULT_USER,
+    host: DOLT_HOST,
+    port: DOLT_PORT,
+    database: DOLT_DATABASE,
+    user: DOLT_USER,
   });
 }
 
@@ -54,4 +54,3 @@ export async function listCompiledPrompts(): Promise<CompiledPromptRow[]> {
     await connection.end();
   }
 }
-
