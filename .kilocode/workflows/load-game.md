@@ -311,7 +311,7 @@ Agent: "I see you completed the determinism gate migration. Next step: run the b
 
 <!-- route: punch_checkpoint -->
 ```bash
-python3 .kilocode/tools/punch_engine.py checkpoint auto {card_id}
+python3 .kilocode/tools/punch_engine.py checkpoint {task_id} {card_id}
 ```
 
 The punch card verifies:

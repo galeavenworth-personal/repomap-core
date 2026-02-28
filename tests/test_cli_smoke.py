@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import shutil
 from pathlib import Path
 
@@ -7,6 +8,17 @@ import pytest
 
 from cli import main
 from rules.config import ConfigError, load_config, resolve_output_dir
+
+_PUNCH_ENGINE_PATH = (
+    Path(__file__).parent.parent / ".kilocode" / "tools" / "punch_engine.py"
+)
+_punch_spec = importlib.util.spec_from_file_location(
+    "kilocode_punch_engine", _PUNCH_ENGINE_PATH
+)
+assert _punch_spec is not None
+assert _punch_spec.loader is not None
+_punch_engine = importlib.util.module_from_spec(_punch_spec)
+_punch_spec.loader.exec_module(_punch_engine)
 
 
 def _write_minimal_repo(root: Path) -> None:
@@ -130,3 +142,29 @@ def test_resolve_output_dir_rejects_escape(tmp_path: Path) -> None:
     repo_root.mkdir()
     with pytest.raises(ConfigError, match="escapes the repository root"):
         resolve_output_dir(repo_root, "../outside")
+
+
+def test_punch_resolve_task_id_passthrough_uuid() -> None:
+    task_id = "123e4567-e89b-12d3-a456-426614174000"
+    assert _punch_engine.resolve_task_id(task_id) == task_id
+
+
+def test_punch_resolve_task_id_auto_uses_vscode_dirs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task_id = "123e4567-e89b-12d3-a456-426614174000"
+    monkeypatch.setattr(_punch_engine, "get_current_task_id", lambda: task_id)
+
+    assert _punch_engine.resolve_task_id("auto") == task_id
+
+
+def test_punch_resolve_task_id_auto_errors_when_no_discovery(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(_punch_engine, "get_current_task_id", lambda: None)
+
+    with pytest.raises(SystemExit) as exc_info:
+        _punch_engine.resolve_task_id("auto")
+
+    assert exc_info.value.code == 1
+    assert "task_id 'auto' requested but discovery failed" in capsys.readouterr().err

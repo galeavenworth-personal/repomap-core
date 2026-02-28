@@ -10,6 +10,7 @@ import json
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 KILO_STORAGE = Path.home() / ".config/Code/User/globalStorage/kilocode.kilo-code"
@@ -76,22 +77,36 @@ def get_current_task_id() -> str | None:
     return task_dirs[0].name if task_dirs else None
 
 
+def _is_uuid(value: str) -> bool:
+    """Return True when value parses as an RFC4122 UUID string."""
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
 def resolve_task_id(raw_task_id: str) -> str:
     """Resolve 'auto' sentinel to the current task UUID, or pass through as-is.
 
     Raises SystemExit with a clear message if auto-discovery fails.
     """
+    if _is_uuid(raw_task_id):
+        return raw_task_id
+
     if raw_task_id.lower() == "auto":
         discovered = get_current_task_id()
-        if discovered is None:
-            print(
-                "ERROR: task_id 'auto' requested but no task directories found in "
-                f"{TASKS_DIR}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        print(f"Auto-discovered task_id: {discovered}")
-        return discovered
+        if discovered is not None:
+            print(f"Auto-discovered task_id from VS Code tasks dir: {discovered}")
+            return discovered
+
+        print(
+            "ERROR: task_id 'auto' requested but discovery failed. "
+            f"No task directories found in {TASKS_DIR}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     return raw_task_id
 
 

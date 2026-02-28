@@ -183,11 +183,13 @@ Respect layer boundaries defined in [`repomap.toml`](../../repomap.toml).
 **Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
 
 > 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
-> Resolves to: `python3 .kilocode/tools/punch_engine.py mint auto`
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id}`
 
 > 🚪 `checkpoint punch-card {task_id} start-task-orchestrate` → [`commands.punch_checkpoint`](../commands.toml)
-> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint auto start-task-orchestrate`
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} start-task-orchestrate`
 > **receipt_required = true** — this is a hard gate.
+>
+> **task_id fallback:** Orchestrators should inject an explicit session/task UUID. If unavailable, pass `auto` so punch-engine discovery falls back to VS Code task-directory discovery.
 >
 > **Note:** Plant tooling (`.kilocode/tools/`) uses system `python3`, not `.venv/bin/python`. The virtual environment mandate applies to product code (`src/`) and quality gates only.
 

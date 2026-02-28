@@ -195,10 +195,10 @@ Max 1 retry per failed subtask. If a subtask fails twice, STOP and escalate.
 **Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
 
 > 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
-> Resolves to: `python3 .kilocode/tools/punch_engine.py mint auto`
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id}`
 
 > 🚪 `checkpoint punch-card {task_id} process-orchestrate` → [`commands.punch_checkpoint`](../commands.toml)
-> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint auto process-orchestrate`
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} process-orchestrate`
 > **receipt_required = true** — this is a hard gate.
 >
 > **Note:** Plant tooling (`.kilocode/tools/`) uses system `python3`, not `.venv/bin/python`. The virtual environment mandate applies to product code (`src/`) and quality gates only.

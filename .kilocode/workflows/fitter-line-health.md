@@ -166,10 +166,10 @@ The Fitter is dispatched via:
 **Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
 
 > 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
-> Resolves to: `python3 .kilocode/tools/punch_engine.py mint auto --bead-id {bead_id}`
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id} --bead-id {bead_id}`
 
 > 🚪 `checkpoint punch-card {task_id} fitter-line-health` → [`commands.punch_checkpoint`](../commands.toml)
-> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint auto fitter-line-health`
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} fitter-line-health`
 > **receipt_required = true** — this is a hard gate.
 
 **If checkpoint FAILS:** Do NOT call `attempt_completion`. Review which required punches

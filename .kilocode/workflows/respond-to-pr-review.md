@@ -262,10 +262,10 @@ gh pr edit <PR_NUMBER> --add-reviewer <reviewer>
 **Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
 
 > 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
-> Resolves to: `python3 .kilocode/tools/punch_engine.py mint auto --bead-id {bead_id}`
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id} --bead-id {bead_id}`
 
 > 🚪 `checkpoint punch-card {task_id} respond-to-pr-review` → [`commands.punch_checkpoint`](../commands.toml)
-> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint auto respond-to-pr-review`
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} respond-to-pr-review`
 > **receipt_required = true** — this is a hard gate.
 
 **If checkpoint FAILS:** Do NOT call `attempt_completion`. Review which required punches

@@ -163,10 +163,10 @@ Return via `attempt_completion` with this structure:
 **Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
 
 > 📌 `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
-> Resolves to: `python3 .kilocode/tools/punch_engine.py mint auto`
+> Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id}`
 
 > 🚪 `checkpoint punch-card {task_id} prepare-phase` → [`commands.punch_checkpoint`](../commands.toml)
-> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint auto prepare-phase`
+> Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} prepare-phase`
 > **receipt_required = true** — this is a hard gate.
 
 **If checkpoint FAILS:** Do NOT call `attempt_completion`. Review which required punches
