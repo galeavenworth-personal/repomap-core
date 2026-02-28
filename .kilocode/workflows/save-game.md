@@ -192,7 +192,7 @@ compatibility.
 
 <!-- route: punch_checkpoint -->
 ```bash
-python3 .kilocode/tools/punch_engine.py checkpoint {task_id} {card_id}
+python3 .kilocode/tools/punch_engine.py checkpoint auto {card_id}
 ```
 
 The punch card verifies:
