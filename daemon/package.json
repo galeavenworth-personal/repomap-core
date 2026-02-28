@@ -15,7 +15,8 @@
     "stack": "../.kilocode/tools/start-stack.sh",
     "temporal:worker": "tsx src/temporal/worker.ts",
     "temporal:dispatch": "tsx src/temporal/dispatch.ts",
-    "temporal:dep-watch": "tsx src/temporal/dep-watch.cli.ts"
+    "temporal:dep-watch": "tsx src/temporal/dep-watch.cli.ts",
+    "backfill": "tsx src/backfill/kilo-store.ts"
   },
   "keywords": [
     "opencode",

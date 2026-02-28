@@ -4,6 +4,10 @@ const {
   connectMock,
   disconnectMock,
   writePunchMock,
+  writeSessionMock,
+  writeMessageMock,
+  writeToolCallMock,
+  syncChildRelsFromPunchesMock,
   writeChildRelationMock,
   createDoltWriterMock,
   subscribeMock,
@@ -15,11 +19,19 @@ const {
   const connectMock = vi.fn();
   const disconnectMock = vi.fn();
   const writePunchMock = vi.fn();
+  const writeSessionMock = vi.fn();
+  const writeMessageMock = vi.fn();
+  const writeToolCallMock = vi.fn();
+  const syncChildRelsFromPunchesMock = vi.fn();
   const writeChildRelationMock = vi.fn();
   const createDoltWriterMock = vi.fn(() => ({
     connect: connectMock,
     writePunch: writePunchMock,
+    writeSession: writeSessionMock,
+    writeMessage: writeMessageMock,
+    writeToolCall: writeToolCallMock,
     writeChildRelation: writeChildRelationMock,
+    syncChildRelsFromPunches: syncChildRelsFromPunchesMock,
     disconnect: disconnectMock,
   }));
   const subscribeMock = vi.fn();
@@ -39,6 +51,10 @@ const {
     connectMock,
     disconnectMock,
     writePunchMock,
+    writeSessionMock,
+    writeMessageMock,
+    writeToolCallMock,
+    syncChildRelsFromPunchesMock,
     writeChildRelationMock,
     createDoltWriterMock,
     subscribeMock,
@@ -84,6 +100,10 @@ describe("e2e pipeline integration", () => {
     connectMock.mockResolvedValue(undefined);
     disconnectMock.mockResolvedValue(undefined);
     writePunchMock.mockResolvedValue(undefined);
+    writeSessionMock.mockResolvedValue(undefined);
+    writeMessageMock.mockResolvedValue(undefined);
+    writeToolCallMock.mockResolvedValue(undefined);
+    syncChildRelsFromPunchesMock.mockResolvedValue(0);
     writeChildRelationMock.mockResolvedValue(undefined);
     sessionListMock.mockResolvedValue({ data: [] });
     sessionMessagesMock.mockResolvedValue({ data: [] });

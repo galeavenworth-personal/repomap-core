@@ -4,6 +4,10 @@ const {
   connectMock,
   disconnectMock,
   writePunchMock,
+  writeSessionMock,
+  writeMessageMock,
+  writeToolCallMock,
+  syncChildRelsFromPunchesMock,
   writeChildRelationMock,
   createDoltWriterMock,
   classifyEventMock,
@@ -16,11 +20,19 @@ const {
   const connectMock = vi.fn();
   const disconnectMock = vi.fn();
   const writePunchMock = vi.fn();
+  const writeSessionMock = vi.fn();
+  const writeMessageMock = vi.fn();
+  const writeToolCallMock = vi.fn();
+  const syncChildRelsFromPunchesMock = vi.fn();
   const writeChildRelationMock = vi.fn();
   const createDoltWriterMock = vi.fn(() => ({
     connect: connectMock,
     writePunch: writePunchMock,
+    writeSession: writeSessionMock,
+    writeMessage: writeMessageMock,
+    writeToolCall: writeToolCallMock,
     writeChildRelation: writeChildRelationMock,
+    syncChildRelsFromPunches: syncChildRelsFromPunchesMock,
     disconnect: disconnectMock,
   }));
   const classifyEventMock = vi.fn();
@@ -40,6 +52,10 @@ const {
     connectMock,
     disconnectMock,
     writePunchMock,
+    writeSessionMock,
+    writeMessageMock,
+    writeToolCallMock,
+    syncChildRelsFromPunchesMock,
     writeChildRelationMock,
     createDoltWriterMock,
     classifyEventMock,
@@ -80,6 +96,10 @@ describe("createDaemon", () => {
     connectMock.mockResolvedValue(undefined);
     disconnectMock.mockResolvedValue(undefined);
     writePunchMock.mockResolvedValue(undefined);
+    writeSessionMock.mockResolvedValue(undefined);
+    writeMessageMock.mockResolvedValue(undefined);
+    writeToolCallMock.mockResolvedValue(undefined);
+    syncChildRelsFromPunchesMock.mockResolvedValue(0);
     writeChildRelationMock.mockResolvedValue(undefined);
     sessionListMock.mockResolvedValue({ data: [] });
     sessionMessagesMock.mockResolvedValue({ data: [] });
@@ -125,13 +145,20 @@ describe("createDaemon", () => {
         type: "message.part.updated",
         properties: {
           sessionId: "t1",
-          part: { type: "tool", toolName: "readFile" },
+          part: {
+            type: "tool",
+            tool: "readFile",
+            sessionID: "t1",
+            state: { status: "completed" },
+            input: { path: "README.md" },
+            ts: 100,
+          },
         },
       },
       { type: "file.edited", properties: {} },
       {
         type: "session.updated",
-        properties: { id: "t2", status: "completed" },
+        properties: { info: { id: "t2", status: "completed", mode: "code", model: "gpt" } },
       },
     ];
 
@@ -179,6 +206,8 @@ describe("createDaemon", () => {
 
     // Verify only 2 punches were written (unknown.event classified as null)
     expect(writePunchMock).toHaveBeenCalledTimes(2);
+    expect(writeToolCallMock).toHaveBeenCalledTimes(1);
+    expect(writeSessionMock).toHaveBeenCalledTimes(1);
 
     // Verify log messages
     expect(logSpy).toHaveBeenCalledWith(
@@ -235,6 +264,8 @@ describe("createDaemon", () => {
 
     // Verify punch written
     expect(writePunchMock).toHaveBeenCalledWith(expect.objectContaining({ taskId: "s1" }));
+    expect(writeSessionMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "s1" }));
+    expect(syncChildRelsFromPunchesMock).toHaveBeenCalledTimes(1);
   });
 
   it("stop() aborts the stream and disconnects from Dolt", async () => {
