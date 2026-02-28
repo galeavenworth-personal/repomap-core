@@ -28,6 +28,18 @@ CREATE TABLE IF NOT EXISTS compiled_prompts (
 """
 
 
+CREATE_DIAGNOSIS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS diagnosis_classifications (
+    session_id VARCHAR(100) NOT NULL PRIMARY KEY,
+    category VARCHAR(64) NOT NULL,
+    confidence DOUBLE NOT NULL,
+    evidence TEXT NOT NULL,
+    classified_at DATETIME NOT NULL,
+    classifier_version VARCHAR(32) NOT NULL
+)
+"""
+
+
 @dataclass(frozen=True)
 class CompiledPromptRecord:
     prompt_id: str
@@ -36,6 +48,16 @@ class CompiledPromptRecord:
     compiled_prompt: str
     compiled_at: datetime
     dspy_version: str
+
+
+@dataclass(frozen=True)
+class DiagnosisClassificationRecord:
+    session_id: str
+    category: str
+    confidence: float
+    evidence: str
+    classified_at: datetime
+    classifier_version: str
 
 
 @contextmanager
@@ -51,6 +73,7 @@ def _connection() -> Generator[Any, None, None]:
     try:
         with conn.cursor() as cursor:
             cursor.execute(CREATE_TABLE_SQL)
+            cursor.execute(CREATE_DIAGNOSIS_TABLE_SQL)
         conn.commit()
         yield conn
     finally:
@@ -128,6 +151,82 @@ def read_compiled_prompt(prompt_id: str) -> CompiledPromptRecord | None:
         compiled_prompt=str(record["compiled_prompt"]),
         compiled_at=cast(datetime, record["compiled_at"]),
         dspy_version=str(record["dspy_version"]),
+    )
+
+
+def write_diagnosis_classification(
+    session_id: str,
+    category: str,
+    confidence: float,
+    evidence: str,
+    classifier_version: str,
+) -> None:
+    """Insert or update a DSPy diagnosis classification in Dolt/MySQL."""
+    now = datetime.utcnow()
+    with _connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO diagnosis_classifications (
+                    session_id,
+                    category,
+                    confidence,
+                    evidence,
+                    classified_at,
+                    classifier_version
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    category = VALUES(category),
+                    confidence = VALUES(confidence),
+                    evidence = VALUES(evidence),
+                    classified_at = VALUES(classified_at),
+                    classifier_version = VALUES(classifier_version)
+                """,
+                (
+                    session_id,
+                    category,
+                    confidence,
+                    evidence,
+                    now,
+                    classifier_version,
+                ),
+            )
+        conn.commit()
+
+
+def read_diagnosis_classification(
+    session_id: str,
+) -> DiagnosisClassificationRecord | None:
+    """Read a DSPy diagnosis classification by session_id from Dolt/MySQL."""
+    with _connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    session_id,
+                    category,
+                    confidence,
+                    evidence,
+                    classified_at,
+                    classifier_version
+                FROM diagnosis_classifications
+                WHERE session_id = %s
+                """,
+                (session_id,),
+            )
+            row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    record = cast(dict[str, Any], row)
+    return DiagnosisClassificationRecord(
+        session_id=str(record["session_id"]),
+        category=str(record["category"]),
+        confidence=float(record["confidence"]),
+        evidence=str(record["evidence"]),
+        classified_at=cast(datetime, record["classified_at"]),
+        classifier_version=str(record["classifier_version"]),
     )
 
 
