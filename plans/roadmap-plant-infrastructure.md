@@ -2,8 +2,8 @@
 
 > **Scope:** Fabrication plant — workflow system, orchestration, observability, durable memory, and punch card verification.
 > **Not in scope:** Application code (`src/`), product features, artifact generation.
-> **Last updated:** 2026-02-23
-> **Revision:** v3.3 — Monorepo consolidation (daemon absorbed into `daemon/`)
+> **Last updated:** 2026-02-27
+> **Revision:** v3.5 — DSPy optimization layer + reconciliation with beads (4f0.11 closed, DSPy phase added)
 
 ## How to Read This
 
@@ -119,7 +119,7 @@ The Plant Manager role with minimal viable capabilities.
 
 ---
 
-## Phase 2: Command Infrastructure + Durable Memory
+## Phase 2: Command Infrastructure + Durable Memory (Complete)
 
 Build the command dialect as the plant's instruction language. Establish Dolt as the durable memory substrate. Ground it in actual infrastructure.
 
@@ -128,25 +128,38 @@ Build the command dialect as the plant's instruction language. Establish Dolt as
 | 1 | `core-4f0.6` | repomap-core | Ground routing matrix in actual infrastructure | — | ✓ Closed | [routing-matrix-inventory](../docs/research/routing-matrix-inventory-2026-02-18.md) |
 | 2 | `core-4f0.7` | repomap-core | Build `commands.toml` configuration | `4f0.6` | ✓ Closed | The routing matrix: verb+noun → skill binding + tool template |
 | 3 | `core-4f0.8` | repomap-core | Compressed workflow proof | `4f0.7` | ✓ Closed | [compressed-workflow-proof](../docs/research/compressed-workflow-proof-2026-02-20.md) |
-| 4 | `core-4f0.9` | repomap-core | Parent-child correlation + delegation proof | — | ◐ Expanded | **v3:** Now includes delegation proof via `child_relationships` table + punch-based verification |
-| 5 | `core-4f0.14a` | repomap-core | Dolt schema initialization | — | ○ New | **v3.1:** Split from `4f0.14`. DDL from [`punch-card-schema.sql`](punch-card-schema.sql), Dolt init |
-| 6 | `daemon-001` | repomap-core (`daemon/`) | Replication daemon MVP | `core-4f0.14a` | ○ New | **v3.3:** Absorbed into monorepo. `@opencode-ai/sdk` + SSE event stream → classify → mint punches → Dolt. Sidecar to `kilo serve`. |
+| 4 | `core-4f0.9` | repomap-core | Parent-child task correlation in session monitor | — | ✓ Closed | Session monitor provides parent-child tree with cost rollup |
+| 5 | `core-4f0.14` | repomap-core | Dolt schema initialization | — | ✓ Closed | DDL from [`punch-card-schema.sql`](punch-card-schema.sql), Dolt init, 13+ punch card definitions including delegation enforcement |
+| 6 | `core-4f0.16` | repomap-core | Dependency freshness — install Dolt + bump version floors | — | ✓ Closed | Dolt installed, pyproject.toml floors bumped |
+| 7 | `core-4f0.17` | repomap-core | Beads upgrade to v0.50+ (Dolt backend migration) | `4f0.16` | ✓ Closed | Beads migrated from SQLite to Dolt server backend |
+| 8 | `core-4f0.18` | repomap-core | Delegation proof expansion | `4f0.9` | ✓ Closed | `child_relationships` table + punch-based delegation verification |
+| 9 | `core-4f0.19` | repomap-core | Composable thinking system | — | ✓ Closed | Thinker modes, contracts, plans, handoff format |
 
-**Exit criteria:**
+**Exit criteria:** ✅ All met.
 - `commands.toml` exists and maps all current quality gate + beads operations to actual skills/tools
-- One workflow (quality gates) runs via command dialect and produces verifiable session data
+- Workflows run via command dialect and produce verifiable session data
 - `kilo_session_monitor.py children` command shows subtask tree with cost rollup
-- **Dolt database initialized with punch schema** (tables: `tasks`, `punches`, `punch_cards`, `checkpoints`, `child_relationships`)
-- **Replication daemon runs and mints punches** from live session events (or batch-at-gate fallback works)
+- Dolt database initialized with punch schema (tables: `tasks`, `punches`, `punch_cards`, `checkpoints`, `child_relationships`)
+- Punch engine (`punch_engine.py`) mints punches from session events and evaluates cards
 
-**Suggested order:** `4f0.6` ✓ → `4f0.7` ✓ → `4f0.8` ✓, with `4f0.9` and `4f0.14a` in parallel. `daemon-001` follows `4f0.14a`.
+**Note on daemon-001:** The replication daemon was never tracked as a separate bead. It was built incrementally across `repomap-core-hlr` (Temporal + daemon scaffold, monorepo migration) and `repomap-core-7xo` (governor). The daemon at `daemon/` includes: classifier, writer, lifecycle, prompt driver, governor, and Temporal orchestration.
 
-```
-          ┌─── 4f0.6 (inventory) ✓ → 4f0.7 (TOML) ✓ → 4f0.8 (proof) ✓ ──┐
-Phase 2 ──┤                                                                ├→ Phase 2 complete
-          ├─── 4f0.9 (parent-child + delegation proof) ───────────────────┘
-          └─── 4f0.14a (Dolt schema) → daemon-001 (daemon/, monorepo) ───┘
-```
+---
+
+## Phase 2.5: Governor — Session Enforcement (Complete)
+
+> Added in v3.4. This work was tracked as the `repomap-core-7xo` epic and delivered alongside the `repomap-core-hlr` monorepo migration. It was not in previous roadmap versions because it emerged from operational needs during daemon development.
+
+| # | Bead | Title | Status | Notes |
+|---|------|-------|--------|-------|
+| 1 | `repomap-core-hlr` | Monorepo migration: absorb oc-daemon | ✓ Closed | Temporal + daemon scaffold, monorepo at `daemon/` |
+| 2 | `repomap-core-7xo` (epic) | Governor: session loop detection + kill switch + fitter dispatch | ✓ Closed | |
+| 3 | `repomap-core-7xo.1` | Loop detection heuristics | ✓ Closed | Step count, cost, tool pattern matching |
+| 4 | `repomap-core-7xo.2` | Session kill mechanism | ✓ Closed | Abort runaway sessions via raw HTTP, cascading child kill |
+| 5 | `repomap-core-7xo.3` | Failure diagnosis engine | ✓ Closed | Classify line issue type from session state |
+| 6 | `repomap-core-7xo.4` | Line fitter dispatch | ✓ Closed | Bounded prompt generation + fresh session per diagnosis category |
+| 7 | `repomap-core-7xo.5` | Governor integration tests | ✓ Closed | End-to-end detect→kill→diagnose→dispatch loop |
+| 8 | `repomap-core-4f0.15` | Punch engine implementation | ✓ Closed | `punch_engine.py`: mint/evaluate/checkpoint commands, Dolt-backed |
 
 ---
 
@@ -156,38 +169,75 @@ The closed loop: deploy bounded cognition, verify via punch card at exit, commit
 
 | # | Bead | Title | Depends On | Status | Notes |
 |---|------|-------|------------|--------|-------|
-| 1 | `repomap-core-4f0.5` | Fitter dispatch via command dialect | `4f0.7` | ○ Open | "Dispatch to fitter" becomes a routable command |
-| 2 | `repomap-core-4f0.10` | Cost budget enforcement | `4f0.9`, `4f0.14a` | ◐ Updated | Cost queries via Dolt `cost_aggregate` view |
-| 3 | `repomap-core-4f0.11` | Punch-card-verified completion | `4f0.9`, `4f0.7`, `4f0.14a` | ◐ Expanded | **v3:** Task exit blocked unless punch card validates; parent verifies child punch cards |
-| 4 | `repomap-core-4f0.15` | Punch engine implementation | `4f0.14a`, `4f0.9` | ○ New | **v3:** Minting rules, card evaluation, `DOLT_COMMIT` on gate pass |
+| 1 | `repomap-core-4f0.5` | Fitter dispatch patterns from plant-manager context | `4f0.7` | ○ Open | Wire governor fitter-dispatch to command dialect as a routable command |
+| 2 | `repomap-core-4f0.10` | Cost budget enforcement via session monitor | `4f0.9`, `4f0.14` | ○ Open | Governor enforces in-memory per-session budgets; Dolt `cost_aggregate` view exists but not queried at runtime yet |
+| 3 | `repomap-core-4f0.11` | Command-triggered subtask verification loop | `4f0.9`, `4f0.7`, `4f0.14` | ✓ Closed | Punch-card-verified completion with governor enforcement. Merged 2026-02-26. |
 
 **Exit criteria:**
 - Plant Manager can dispatch Fitter via command dialect and verify restoration via session data
-- Cost budget enforcement prevents subtask runaway spend
-- **No task can complete without a valid punch card**
+- Cost budget enforcement prevents subtask runaway spend (both in-memory governor AND Dolt query path)
+- **No task can complete without a valid punch card** (runtime enforcement, not just workflow instructions)
 - **No parent can complete without valid child punch cards**
-- **All verification queries durable Dolt-backed state**
 - The full loop works: command → spawn → monitor → verify → **punch-validate** → **commit** → act
 
 ```
           ┌─── 4f0.5 (fitter via dialect) ──────────────────┐
 Phase 3 ──┤── 4f0.10 (cost budget via Dolt) ────────────────├→ Phase 3 complete
-          ├─── 4f0.11 (punch-card-verified completion) ─────┘
-          └─── 4f0.15 (punch engine) ───────────────────────┘
+          └─── 4f0.11 (punch-card-verified completion) ─────┘
 ```
 
 ---
 
-## Phase 4: Self-Healing & Self-Audit (Stretch)
+## Phase 3.5: DSPy Optimization Layer
 
-Automatic post-workflow audit. Plant Manager inspects its own work.
+> Added in v3.5. DSPy (Declarative Self-improving Python) closes the feedback loop between
+> execution data in Dolt and the prompts that drive agent behavior. Instead of hand-crafting
+> prompt templates, we declare typed signatures, compose them into modules, and compile
+> optimal prompts against metrics derived from punch card pass/fail data.
+
+**Why now:** Phase 3 produces the labeled training data (punch card outcomes, cost data,
+tool patterns, session success/failure) that DSPy needs. Phase 3.5 turns that data into
+better prompts — making Phase 4's self-audit and all future plant work more effective.
+
+**Research:** `docs/research/dspy-integration-analysis-2026-02-27.md`
 
 | # | Bead | Title | Depends On | Status | Notes |
 |---|------|-------|------------|--------|-------|
-| 1 | `repomap-core-4f0.12` | Post-workflow session audit | `4f0.9`, `4f0.14a` | ○ Open | Queries Dolt for anomalies (missing gates, high cost, stalls) |
-| 2 | `repomap-core-4f0.13` | Plant health composite command | `4f0.7`, `4f0.9`, `4f0.14a` | ○ Open | Includes punch card validity in health report |
+| 1 | `repomap-core-g6o.1` | DSPy foundation — installation, LM config, basic integration | — | ○ Open | `pip install dspy`, configure with existing model providers, validate basic signature→module→predict loop |
+| 2 | `repomap-core-g6o.2` | Formalize fitter dispatch as DSPy Signatures | `4f0.5` | ○ Open | Replace 5 hand-crafted prompt templates with typed DSPy signatures; modules per diagnosis category |
+| 3 | `repomap-core-g6o.3` | Dolt training data extractor | `4f0.11` | ○ Open | Extract (input, outcome) pairs from Dolt punch/session data as DSPy `Example` objects |
+| 4 | `repomap-core-g6o.4` | DSPy metrics from punch card data | `g6o.3` | ○ Open | Define quality metrics (pass rate, cost efficiency, task completion) as Python functions over Dolt data |
+| 5 | `repomap-core-g6o.5` | First compilation target — fitter prompts | `g6o.2`, `g6o.4` | ○ Open | Compile fitter dispatch with MIPROv2/GEPA against recovery success rate; A/B test vs hand-written |
+| 6 | `repomap-core-g6o.6` | DSPy assertions for task decomposition | `g6o.1` | ○ Open | Add `dspy.Assert`/`dspy.Suggest` inner-loop constraints complementing outer-loop punch cards |
+| 7 | `repomap-core-g6o.7` | Diagnosis classifier as compiled DSPy module | `g6o.4` | ○ Open | Replace/augment hand-coded heuristics in `diagnosis-engine.ts` with compiled DSPy classifier |
 
-**Exit criteria:** Every workflow run automatically produces an audit summary. `Inspect plant-health` returns a structured health report including punch card status.
+**Exit criteria:**
+- At least one DSPy-compiled module is deployed and outperforms hand-written prompts on a measurable metric
+- Training data pipeline from Dolt → DSPy examples is automated
+- Inner-loop assertions (`dspy.Assert`) complement outer-loop punch card enforcement
+- Compilation can be triggered on-demand (not per-session)
+
+**The seventh axis:**
+
+| # | Axis | What It Does | Primitive | Source |
+|---|------|-------------|-----------|--------|
+| 7 | **Optimization** | Data-driven prompt improvement | DSPy compile loop | This phase |
+
+---
+
+## Phase 4: Self-Improving Plant (was: Self-Healing & Self-Audit)
+
+> Renamed in v3.5. With DSPy in place, Phase 4 is no longer just reactive self-healing —
+> it's a self-improving plant that uses execution data to continuously refine agent behavior.
+
+Automatic post-workflow audit + continuous optimization from accumulated data.
+
+| # | Bead | Title | Depends On | Status | Notes |
+|---|------|-------|------------|--------|-------|
+| 1 | `repomap-core-4f0.12` | Post-workflow session audit | `4f0.9`, `4f0.14` | ○ Open | Queries Dolt for anomalies (missing gates, high cost, stalls). Can use DSPy classifier from `dspy.7`. |
+| 2 | `repomap-core-4f0.13` | Plant health composite command | `4f0.7`, `4f0.9`, `4f0.14` | ○ Open | Includes punch card validity + DSPy compilation status in health report |
+
+**Exit criteria:** Every workflow run automatically produces an audit summary. `Inspect plant-health` returns a structured health report including punch card status. Nightly/on-demand DSPy recompilation from accumulated Dolt data.
 
 ---
 
@@ -214,13 +264,17 @@ Phase 0 (research) ✓
   │
   └──→ Phase 1 (plant-manager foundation) ✓
          │
-         └──→ Phase 2 (command infrastructure + durable memory)
+         └──→ Phase 2 (command infrastructure + durable memory) ✓
                 │
-                └──→ Phase 3 (punch-gated deployment)
+                └──→ Phase 2.5 (governor — session enforcement) ✓
                        │
-                       ├──→ Phase 4 (self-healing, stretch)
-                       │
-                       └──→ Phase 5 (parallel line operations, not yet scoped)
+                       └──→ Phase 3 (punch-gated deployment) ← 2 of 3 beads remain
+                              │
+                              ├──→ Phase 3.5 (DSPy optimization layer) ← dspy.1 can start now
+                              │      │
+                              │      └──→ Phase 4 (self-improving plant)
+                              │
+                              └──→ Phase 5 (parallel line operations, not yet scoped)
 ```
 
 ---
@@ -286,38 +340,66 @@ Phase 0 (research) ✓
 
 ---
 
-## Quick Reference: All Active Plant Beads
+## Quick Reference: All Plant Beads (aligned with beads DB as of 2026-02-25)
 
-All plant beads are now in a single monorepo. Beads use prefix `core` for Python/plant-config work and `daemon` for the TypeScript daemon at `daemon/`.
+All plant beads are in a single monorepo. Prefix `repomap-core` for all beads.
 
-### Phase 2: Command Infrastructure + Durable Memory
-| Bead | Repo | Title | Priority | Status |
-|------|------|-------|----------|--------|
-| `core-4f0.6` | repomap-core | Ground routing matrix | P1 | ✓ Closed |
-| `core-4f0.7` | repomap-core | Build `commands.toml` | P1 | ✓ Closed |
-| `core-4f0.8` | repomap-core | Compressed workflow proof | P2 | ✓ Closed |
-| `core-4f0.9` | repomap-core | Parent-child correlation + delegation proof | P1 | ◐ Expanded |
-| `core-4f0.14a` | repomap-core | Dolt schema initialization | P1 | ○ New (split) |
-| `daemon-001` | repomap-core (`daemon/`) | Replication daemon MVP | P1 | ○ New (monorepo) |
+### Phase 2: Command Infrastructure + Durable Memory (Complete)
+| Bead | Title | Status |
+|------|-------|--------|
+| `repomap-core-4f0.6` | Ground routing matrix | ✓ Closed |
+| `repomap-core-4f0.7` | Build `commands.toml` | ✓ Closed |
+| `repomap-core-4f0.8` | Compressed workflow proof | ✓ Closed |
+| `repomap-core-4f0.9` | Parent-child task correlation in session monitor | ✓ Closed |
+| `repomap-core-4f0.14` | Dolt schema initialization | ✓ Closed |
+| `repomap-core-4f0.16` | Dependency freshness — Dolt + version floors | ✓ Closed |
+| `repomap-core-4f0.17` | Beads upgrade to v0.50+ (Dolt migration) | ✓ Closed |
+| `repomap-core-4f0.18` | Delegation proof expansion | ✓ Closed |
+| `repomap-core-4f0.19` | Composable thinking system | ✓ Closed |
 
-### Phase 3: Punch-Gated Deployment
-| Bead | Repo | Title | Priority | Status |
-|------|------|-------|----------|--------|
-| `core-4f0.5` | repomap-core | Fitter dispatch via dialect | P2 | ○ Open |
-| `core-4f0.10` | repomap-core | Cost budget enforcement (via Dolt) | P2 | ◐ Updated |
-| `core-4f0.11` | repomap-core | Punch-card-verified completion | P2 | ◐ Expanded |
-| `core-4f0.15` | repomap-core | Punch engine implementation | P2 | ○ New |
+### Phase 2.5: Governor — Session Enforcement (Complete)
+| Bead | Title | Status |
+|------|-------|--------|
+| `repomap-core-hlr` | Monorepo migration: absorb oc-daemon | ✓ Closed |
+| `repomap-core-7xo` | Governor epic (5 children) | ✓ Closed |
+| `repomap-core-4f0.15` | Punch engine implementation | ✓ Closed |
+
+### Phase 3: Punch-Gated Deployment (Active — 2 of 3 remain)
+| Bead | Title | Priority | Status |
+|------|-------|----------|--------|
+| `repomap-core-4f0.5` | Fitter dispatch patterns from plant-manager context | P2 | ○ Open |
+| `repomap-core-4f0.10` | Cost budget enforcement via session monitor | P2 | ○ Open |
+| `repomap-core-4f0.11` | Command-triggered subtask verification loop | P2 | ✓ Closed |
+
+### Phase 3.5: DSPy Optimization Layer
+| Bead | Title | Priority | Status |
+|------|-------|----------|--------|
+| `repomap-core-g6o.1` | DSPy foundation — installation, LM config, basic integration | P1 | ○ Open |
+| `repomap-core-g6o.2` | Formalize fitter dispatch as DSPy Signatures | P1 | ○ Open |
+| `repomap-core-g6o.3` | Dolt training data extractor | P1 | ○ Open |
+| `repomap-core-g6o.4` | DSPy metrics from punch card data | P1 | ○ Open |
+| `repomap-core-g6o.5` | First compilation target — fitter prompts | P2 | ○ Open |
+| `repomap-core-g6o.6` | DSPy assertions for task decomposition | P2 | ○ Open |
+| `repomap-core-g6o.7` | Diagnosis classifier as compiled DSPy module | P2 | ○ Open |
 
 ### Phase 4: Self-Healing (Stretch)
-| Bead | Repo | Title | Priority | Status |
-|------|------|-------|----------|--------|
-| `core-4f0.12` | repomap-core | Post-workflow session audit | P3 | ○ Open |
-| `core-4f0.13` | repomap-core | Plant health composite | P3 | ○ Open |
+| Bead | Title | Priority | Status |
+|------|-------|----------|--------|
+| `repomap-core-4f0.12` | Post-workflow session audit | P3 | ○ Open |
+| `repomap-core-4f0.13` | Plant health composite command | P3 | ○ Open |
 
 ### Phase 5: Parallel Line Operations (Not Yet Scoped)
-| Bead | Repo | Title | Priority | Status |
-|------|------|-------|----------|--------|
-| — | — | To be scoped after Phase 3 complete | — | ○ Not scoped |
+| Bead | Title | Priority | Status |
+|------|-------|----------|--------|
+| — | To be scoped after Phase 3 complete | — | ○ Not scoped |
+
+### Untracked (SDK Pivot stream, not in plant roadmap)
+| Bead | Title | Priority | Status |
+|------|-------|----------|--------|
+| `repomap-core-w1a` | SDK Prompt API Pivot — Headless Agent Selection | P1 | ○ Open |
+| `repomap-core-13v` | File Kilo-specific issue referencing OpenCode #6489 | P3 | ○ Open |
+| `repomap-core-2q1` | Create native opencode.json agent definitions | P3 | ○ Open |
+| `repomap-core-bvj` | Retest --auto in standalone mode | P2 | ○ Open |
 
 ---
 
@@ -347,9 +429,9 @@ All plant beads are now in a single monorepo. Beads use prefix `core` for Python
 
 ---
 
-## The Six-Axis Plant Architecture
+## The Seven-Axis Plant Architecture
 
-v3.0 introduces a sixth axis: **Verification**.
+v3.0 introduced a sixth axis: **Verification**. v3.5 adds a seventh: **Optimization**.
 
 | # | Axis | What It Does | Primitive | Source |
 |---|------|-------------|-----------|--------|
@@ -359,6 +441,7 @@ v3.0 introduces a sixth axis: **Verification**.
 | 4 | **Observability** | Proof of execution — what happened | Session JSON, self-monitoring | [kilo-session-data-as-receipts](../docs/research/kilo-session-data-as-receipts.md) |
 | 5 | **State** | Versioned memory — what the plant knows | Dolt SQL + git semantics | [dolt-versioned-state](../docs/research/dolt-versioned-state-exploration-2026-02-17.md) |
 | 6 | **Verification** | Structural exit gating — what's proven | Punch cards + delegation proof | [punch-card-integration](../docs/research/punch-card-integration-2026-02-18.md) |
+| 7 | **Optimization** | Data-driven prompt improvement — what gets better | DSPy compile loop | Phase 3.5 |
 
 **The complete loop:**
 

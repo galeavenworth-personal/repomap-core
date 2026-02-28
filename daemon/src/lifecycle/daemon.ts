@@ -36,6 +36,45 @@ export interface Daemon {
 
 type OcClient = ReturnType<typeof createOpencodeClient>;
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function pickString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function pickNumber(record: Record<string, unknown>, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function pickDate(record: Record<string, unknown>, ...keys: string[]): Date | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (value instanceof Date) return value;
+    if (typeof value === "string") {
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function pickTimestamp(record: Record<string, unknown>): number {
+  const ts = pickNumber(record, "ts", "timestamp", "time", "createdAtMs");
+  if (typeof ts === "number") return ts;
+  const created = pickDate(record, "createdAt", "updatedAt");
+  return created ? created.getTime() : Date.now();
+}
+
 /** Record child session relationships when a session completes. */
 async function recordSessionChildren(
   client: OcClient,
@@ -61,10 +100,66 @@ async function processEvent(
   writer: DoltWriter,
   event: unknown
 ): Promise<void> {
-  const punch = classifyEvent(event as RawEvent);
+  const rawEvent = event as RawEvent;
+  const punch = classifyEvent(rawEvent);
   if (!punch) return;
 
   await writer.writePunch(punch);
+
+  if (rawEvent.type === "session.created" || rawEvent.type === "session.updated") {
+    const info = asRecord(asRecord(rawEvent.properties).info);
+    const sessionId = pickString(info, "id", "sessionId", "taskId") ?? punch.taskId;
+    const tokens = asRecord(info.tokens);
+    await writer.writeSession({
+      sessionId,
+      taskId: pickString(info, "taskId", "id"),
+      mode: pickString(info, "mode"),
+      model: pickString(info, "model", "inferenceModel"),
+      status: pickString(info, "status"),
+      totalCost: pickNumber(info, "totalCost", "cost", "costUsd"),
+      tokensIn: pickNumber(info, "tokensIn") ?? pickNumber(tokens, "input"),
+      tokensOut: pickNumber(info, "tokensOut") ?? pickNumber(tokens, "output"),
+      tokensReasoning: pickNumber(info, "tokensReasoning") ?? pickNumber(tokens, "reasoning"),
+      startedAt: pickDate(info, "startedAt", "createdAt"),
+      completedAt: pickDate(info, "completedAt"),
+      outcome: pickString(info, "outcome"),
+    });
+  }
+
+  const part = asRecord(asRecord(rawEvent.properties).part);
+  const partType = pickString(part, "type");
+
+  if (punch.punchType === "message" || partType === "text") {
+    const role = pickString(part, "role") ?? pickString(asRecord(rawEvent.properties), "role") ?? "assistant";
+    const previewSource = pickString(part, "text") ?? pickString(part, "content") ?? "";
+    await writer.writeMessage({
+      sessionId: punch.taskId,
+      role,
+      contentType: partType ?? "text",
+      contentPreview: previewSource.slice(0, 512),
+      ts: pickTimestamp(part),
+      cost: pickNumber(part, "cost") ?? punch.cost,
+      tokensIn: pickNumber(asRecord(part.tokens), "input") ?? punch.tokensInput,
+      tokensOut: pickNumber(asRecord(part.tokens), "output") ?? punch.tokensOutput,
+    });
+  }
+
+  if (punch.punchType === "tool_call") {
+    const state = asRecord(part.state);
+    const status = pickString(state, "status");
+    const args = part.input;
+    await writer.writeToolCall({
+      sessionId: punch.taskId,
+      toolName: punch.punchKey,
+      argsSummary: typeof args === "string" ? args : args ? JSON.stringify(args).slice(0, 1024) : undefined,
+      status,
+      error: pickString(state, "error"),
+      durationMs: pickNumber(part, "durationMs"),
+      cost: punch.cost,
+      ts: pickTimestamp(part),
+    });
+  }
+
   if (punch.punchKey === "session_completed") {
     await recordSessionChildren(client, writer, punch.taskId);
   }

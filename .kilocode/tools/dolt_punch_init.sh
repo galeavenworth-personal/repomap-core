@@ -109,6 +109,52 @@ CREATE TABLE IF NOT EXISTS child_relationships (
     INDEX idx_child (child_task_id)
 );
 
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id   VARCHAR(128) NOT NULL PRIMARY KEY,
+    task_id      VARCHAR(50)  DEFAULT NULL,
+    mode         VARCHAR(50)  DEFAULT NULL,
+    model        VARCHAR(100) DEFAULT NULL,
+    status       VARCHAR(30)  DEFAULT 'running',
+    total_cost   DECIMAL(10,6) DEFAULT 0,
+    tokens_in    INT DEFAULT 0,
+    tokens_out   INT DEFAULT 0,
+    tokens_reasoning INT DEFAULT 0,
+    started_at   DATETIME     DEFAULT NULL,
+    completed_at DATETIME     DEFAULT NULL,
+    outcome      VARCHAR(200) DEFAULT NULL,
+    INDEX idx_task (task_id),
+    INDEX idx_status (status)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    message_id     INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    session_id     VARCHAR(128) NOT NULL,
+    role           VARCHAR(20)  NOT NULL,
+    content_type   VARCHAR(30)  DEFAULT 'text',
+    content_preview TEXT         DEFAULT NULL,
+    ts             BIGINT       NOT NULL,
+    cost           DECIMAL(10,6) DEFAULT NULL,
+    tokens_in      INT          DEFAULT NULL,
+    tokens_out     INT          DEFAULT NULL,
+    INDEX idx_session (session_id),
+    INDEX idx_ts (ts)
+);
+
+CREATE TABLE IF NOT EXISTS tool_calls (
+    call_id       INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    session_id    VARCHAR(128) NOT NULL,
+    tool_name     VARCHAR(100) NOT NULL,
+    args_summary  TEXT         DEFAULT NULL,
+    status        VARCHAR(20)  DEFAULT NULL,
+    error         TEXT         DEFAULT NULL,
+    duration_ms   INT          DEFAULT NULL,
+    cost          DECIMAL(10,6) DEFAULT NULL,
+    ts            BIGINT       NOT NULL,
+    INDEX idx_session (session_id),
+    INDEX idx_tool (tool_name),
+    INDEX idx_ts (ts)
+);
+
 CREATE OR REPLACE VIEW cost_aggregate AS
 WITH RECURSIVE task_tree AS (
     SELECT

@@ -15,7 +15,47 @@ interface Session {
 
 interface Message {
   parts?: Record<string, unknown>[];
+  role?: string;
   [key: string]: unknown;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function pickString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function pickNumber(record: Record<string, unknown>, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function pickDate(record: Record<string, unknown>, ...keys: string[]): Date | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (value instanceof Date) return value;
+    if (typeof value === "string") {
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function pickTimestamp(record: Record<string, unknown>): number {
+  const ts = pickNumber(record, "ts", "timestamp", "time", "createdAtMs");
+  if (typeof ts === "number") return ts;
+  const createdAt = pickDate(record, "createdAt", "updatedAt");
+  return createdAt ? createdAt.getTime() : Date.now();
 }
 
 /** Emit synthetic lifecycle punches for a session (created + updated). */
@@ -45,13 +85,56 @@ async function replayMessageParts(
   if (msgError || !messages) return;
 
   for (const message of messages) {
-    const parts = (message as unknown as Message).parts || [];
+    const typedMessage = message as unknown as Message;
+    const parts = typedMessage.parts || [];
+    const messageRole = typedMessage.role ?? "assistant";
     for (const part of parts) {
+      const partRecord = asRecord(part);
       const punch = classifyEvent({
         type: "message.part.updated",
-        properties: { part: { ...part, sessionID: session.id } },
+        properties: { part: { ...partRecord, sessionID: session.id } },
       });
       if (punch) await writer.writePunch(punch);
+
+      const partType = pickString(partRecord, "type");
+      if (partType === "text") {
+        const text = pickString(partRecord, "text", "content") ?? "";
+        await writer.writeMessage({
+          sessionId: session.id,
+          role: pickString(partRecord, "role") ?? messageRole,
+          contentType: "text",
+          contentPreview: text.slice(0, 512),
+          ts: pickTimestamp(partRecord),
+          cost: pickNumber(partRecord, "cost") ?? punch?.cost,
+          tokensIn:
+            pickNumber(asRecord(partRecord.tokens), "input") ??
+            punch?.tokensInput,
+          tokensOut:
+            pickNumber(asRecord(partRecord.tokens), "output") ??
+            punch?.tokensOutput,
+        });
+      }
+
+      if (partType === "tool") {
+        const state = asRecord(partRecord.state);
+        const args = partRecord.input;
+        const toolName = pickString(partRecord, "tool") ?? punch?.punchKey ?? "unknown_tool";
+        await writer.writeToolCall({
+          sessionId: session.id,
+          toolName,
+          argsSummary:
+            typeof args === "string"
+              ? args
+              : args
+                ? JSON.stringify(args).slice(0, 1024)
+                : undefined,
+          status: pickString(state, "status"),
+          error: pickString(state, "error"),
+          durationMs: pickNumber(partRecord, "durationMs"),
+          cost: pickNumber(partRecord, "cost") ?? punch?.cost,
+          ts: pickTimestamp(partRecord),
+        });
+      }
     }
   }
 }
@@ -74,6 +157,13 @@ async function replayChildren(
 
 /** Process a single session during catch-up. */
 async function catchUpSession(client: Client, session: Session, writer: DoltWriter): Promise<void> {
+  await writer.writeSession({
+    sessionId: session.id,
+    taskId: session.id,
+    status: session.status,
+    startedAt: pickDate(session, "createdAt"),
+    completedAt: session.status === "completed" ? pickDate(session, "updatedAt") : undefined,
+  });
   await replayLifecycleEvents(session, writer);
   await replayMessageParts(client, session, writer);
   await replayChildren(client, session, writer);
@@ -99,6 +189,9 @@ export async function runCatchUp(client: Client, writer: DoltWriter) {
     for (const session of recentSessions) {
       await catchUpSession(client, session, writer);
     }
+
+    const inserted = await writer.syncChildRelsFromPunches();
+    console.log(`[oc-daemon] Synced ${inserted} child_rels rows from child_spawn punches.`);
 
     console.log("[oc-daemon] Catch-up complete.");
   } catch (err) {
