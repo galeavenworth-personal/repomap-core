@@ -12,6 +12,7 @@
 
 import { heartbeat, log } from "@temporalio/activity";
 
+import { createPromptDriver } from "../prompt-driver/index.js";
 import type { DoltConfig } from "../writer/index.js";
 
 export interface KiloConfig {
@@ -144,9 +145,9 @@ export async function abortSession(
 }
 
 /**
- * Send a prompt to a kilo serve session (async dispatch).
- * Uses prompt_async endpoint so it returns immediately — the agent
- * processes in the background while pollUntilDone monitors progress.
+ * Send a prompt to a kilo serve session.
+ * Uses the same sync prompt path as the web UI/PromptDriver so
+ * inference is guaranteed to start before returning.
  */
 export async function sendPrompt(
   config: KiloConfig,
@@ -154,21 +155,13 @@ export async function sendPrompt(
   prompt: string,
   agent?: string
 ): Promise<void> {
-  const url = `http://${config.kiloHost}:${config.kiloPort}/session/${sessionId}/prompt_async`;
-  const body = JSON.stringify({
-    parts: [{ type: "text", text: prompt }],
-    ...(agent ? { agent } : {}),
+  const driver = createPromptDriver({
+    kiloHost: config.kiloHost,
+    kiloPort: config.kiloPort,
   });
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body,
-  });
-  if (!res.ok && res.status !== 204) {
-    const text = await res.text();
-    throw new Error(`Prompt dispatch failed (HTTP ${res.status}): ${text}`);
-  }
-  log.info(`Prompt dispatched async to session ${sessionId} (${prompt.length} chars)`);
+
+  await driver.sendPrompt(sessionId, prompt, { agent });
+  log.info(`Prompt dispatched to session ${sessionId} (${prompt.length} chars)`);
 }
 
 /**

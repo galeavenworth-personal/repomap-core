@@ -119,15 +119,16 @@ require_cmd python3
 
 log "$(timestamp) Checking kilo serve at ${BASE_URL}..."
 
-HEALTH=$(curl -sf "${BASE_URL}/global/health" 2>/dev/null || true)
+# GET /session returns the session list (JSON array) — verified working in kilo serve v7.x
+HEALTH=$(curl -sf "${BASE_URL}/session" 2>/dev/null || true)
 if [[ -z "$HEALTH" ]]; then
     echo "ERROR: kilo serve not reachable at ${BASE_URL}" >&2
-    echo "Start the stack first: cd daemon && npm run stack" >&2
+    echo "Start the stack first: .kilocode/tools/start-stack.sh" >&2
     exit 2
 fi
 
-VERSION=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','?'))" 2>/dev/null || echo "?")
-log "$(timestamp) Connected to kilo serve v${VERSION}"
+SESSION_COUNT=$(echo "$HEALTH" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
+log "$(timestamp) Connected to kilo serve (${SESSION_COUNT} existing sessions)"
 
 # ─── Phase 2: Build prompt payload ───────────────────────────────────────────
 
@@ -197,12 +198,14 @@ log "$(timestamp) Title: ${TITLE}"
 
 # ─── Phase 4: Dispatch prompt ────────────────────────────────────────────────
 
+# Use sync prompt endpoint (POST /session/{id}/message) — same as the SDK.
+# The async endpoint (prompt_async) silently drops prompts in kilo serve v7.x.
 HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
-    -X POST "${BASE_URL}/session/${SESSION_ID}/prompt_async" \
+    -X POST "${BASE_URL}/session/${SESSION_ID}/message" \
     -H 'Content-Type: application/json' \
     -d @"$PROMPT_FILE" 2>/dev/null || echo "000")
 
-if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "202" && "$HTTP_CODE" != "204" ]]; then
+if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" && "$HTTP_CODE" != "204" ]]; then
     echo "ERROR: Prompt dispatch failed (HTTP ${HTTP_CODE})" >&2
     exit 4
 fi
@@ -234,15 +237,6 @@ while [[ $ELAPSED -lt $MAX_WAIT ]]; do
     sleep "$POLL_INTERVAL"
     ELAPSED=$((ELAPSED + POLL_INTERVAL))
 
-    # Check if any sessions are busy
-    BUSY=$(curl -sf "${BASE_URL}/session/status" 2>/dev/null \
-        | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-busy = sum(1 for s in data.values() if s.get('type') == 'busy')
-print(busy)
-" 2>/dev/null || echo "-1")
-
     # Count children
     CHILDREN=$(curl -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null \
         | python3 -c "
@@ -256,13 +250,67 @@ print(len(children))
         LAST_CHILDREN="$CHILDREN"
     fi
 
-    if [[ "$BUSY" == "0" ]]; then
-        log "$(timestamp) All sessions idle — completed in ${ELAPSED}s"
-        break
-    elif [[ "$BUSY" == "-1" ]]; then
+    # Check session messages to determine if processing is complete.
+    # A session is done when it has assistant content with a step-finish part
+    # and no running tools.
+    DONE=$(curl -sf "${BASE_URL}/session/${SESSION_ID}/message" 2>/dev/null \
+        | python3 -c "
+import sys, json
+messages = json.load(sys.stdin)
+has_assistant = False
+has_running_tools = False
+for msg in messages:
+    info = msg.get('info', {})
+    if info.get('role') == 'assistant':
+        has_assistant = True
+    for part in msg.get('parts', []):
+        if part.get('type') == 'tool':
+            state = part.get('state', {})
+            if state.get('status') in ('running', 'pending'):
+                has_running_tools = True
+        if part.get('type') == 'step-finish':
+            has_assistant = True
+if has_assistant and not has_running_tools:
+    print('yes')
+else:
+    print('no')
+" 2>/dev/null || echo "error")
+
+    if [[ "$DONE" == "yes" ]]; then
+        # Also verify all children are done (no running tools)
+        ALL_CHILDREN_DONE=true
+        if [[ "$CHILDREN" -gt 0 ]]; then
+            CHILD_IDS=$(curl -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null \
+                | python3 -c "import sys,json; [print(c['id']) for c in json.load(sys.stdin)]" 2>/dev/null)
+            while IFS= read -r cid; do
+                [[ -z "$cid" ]] && continue
+                CHILD_DONE=$(curl -sf "${BASE_URL}/session/${cid}/message" 2>/dev/null \
+                    | python3 -c "
+import sys, json
+msgs = json.load(sys.stdin)
+running = any(
+    p.get('state',{}).get('status') in ('running','pending')
+    for m in msgs for p in m.get('parts',[]) if p.get('type')=='tool'
+)
+print('no' if running else 'yes')
+" 2>/dev/null || echo "no")
+                if [[ "$CHILD_DONE" != "yes" ]]; then
+                    ALL_CHILDREN_DONE=false
+                    break
+                fi
+            done <<< "$CHILD_IDS"
+        fi
+
+        if [[ "$ALL_CHILDREN_DONE" == true ]]; then
+            log "$(timestamp) All sessions idle — completed in ${ELAPSED}s"
+            break
+        fi
+    fi
+
+    if [[ "$DONE" == "error" ]]; then
         log "$(timestamp) [${ELAPSED}s] Warning: status check failed, retrying..."
     else
-        log "$(timestamp) [${ELAPSED}s] Busy sessions: ${BUSY}, children: ${CHILDREN}"
+        log "$(timestamp) [${ELAPSED}s] Parent done: ${DONE}, children: ${CHILDREN}"
     fi
 done
 
