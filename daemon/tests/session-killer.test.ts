@@ -52,9 +52,13 @@ function makeMockWriter(): DoltWriter & {
     async writePunch(punch) {
       writePunchCalls.push(punch as unknown as Record<string, unknown>);
     },
+    async writeSession() {},
+    async writeMessage() {},
+    async writeToolCall() {},
     async writeChildRelation(parentId, childId) {
       writeChildCalls.push([parentId, childId]);
     },
+    async syncChildRelsFromPunches() { return 0; },
     async disconnect() {},
   };
 }
@@ -177,7 +181,11 @@ describe("killSession — kill confirmation", () => {
       async writePunch() {
         throw new Error("Dolt connection lost");
       },
+      async writeSession() {},
+      async writeMessage() {},
+      async writeToolCall() {},
       async writeChildRelation() {},
+      async syncChildRelsFromPunches() { return 0; },
       async disconnect() {},
     };
 

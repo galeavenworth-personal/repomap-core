@@ -61,7 +61,11 @@ function makeMockWriter(): DoltWriter & {
     async writePunch(punch) {
       writePunchCalls.push(punch as unknown as Record<string, unknown>);
     },
+    async writeSession() {},
+    async writeMessage() {},
+    async writeToolCall() {},
     async writeChildRelation() {},
+    async syncChildRelsFromPunches() { return 0; },
     async disconnect() {},
   };
 }
