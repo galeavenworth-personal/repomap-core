@@ -115,20 +115,76 @@ require_cmd() {
 require_cmd curl
 require_cmd python3
 
-# ─── Phase 1: Health check ───────────────────────────────────────────────────
+# ─── Phase 1: Full stack pre-flight check ────────────────────────────────────
+# ALL 5 components must be running. No exceptions. No partial stacks.
+# This prevents unrecorded sessions and wasted spend.
 
-log "$(timestamp) Checking kilo serve at ${BASE_URL}..."
+DOLT_PORT="${DOLT_PORT:-3307}"
+PREFLIGHT_OK=true
+PREFLIGHT_MISSING=""
 
-# GET /session returns the session list (JSON array) — verified working in kilo serve v7.x
+log "$(timestamp) Pre-flight: checking all 5 stack components..."
+
+# 1. kilo serve
 HEALTH=$(curl -sf "${BASE_URL}/session" 2>/dev/null || true)
 if [[ -z "$HEALTH" ]]; then
-    echo "ERROR: kilo serve not reachable at ${BASE_URL}" >&2
-    echo "Start the stack first: .kilocode/tools/start-stack.sh" >&2
+    PREFLIGHT_OK=false
+    PREFLIGHT_MISSING="${PREFLIGHT_MISSING}  ❌ kilo serve: NOT reachable at ${BASE_URL}\n"
+else
+    SESSION_COUNT=$(echo "$HEALTH" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
+    log "$(timestamp)   ✅ kilo serve (${SESSION_COUNT} sessions)"
+fi
+
+# 2. Dolt server
+if ss -tlnp 2>/dev/null | grep -q ":${DOLT_PORT} "; then
+    log "$(timestamp)   ✅ Dolt server (port ${DOLT_PORT})"
+else
+    PREFLIGHT_OK=false
+    PREFLIGHT_MISSING="${PREFLIGHT_MISSING}  ❌ Dolt server: NOT listening on port ${DOLT_PORT}\n"
+fi
+
+# 3. oc-daemon (flight recorder)
+if pgrep -f "tsx.*oc-daemon/src/index.ts" >/dev/null 2>&1 || \
+   pgrep -f "node.*oc-daemon/build/index.js" >/dev/null 2>&1; then
+    log "$(timestamp)   ✅ oc-daemon (SSE → Dolt)"
+else
+    PREFLIGHT_OK=false
+    PREFLIGHT_MISSING="${PREFLIGHT_MISSING}  ❌ oc-daemon: NOT running (no flight recorder — sessions will be unrecorded!)\n"
+fi
+
+# 4. Temporal server
+TEMPORAL_PORT="${TEMPORAL_PORT:-7233}"
+if ss -tlnp 2>/dev/null | grep -q ":${TEMPORAL_PORT} "; then
+    log "$(timestamp)   ✅ Temporal server (port ${TEMPORAL_PORT})"
+else
+    PREFLIGHT_OK=false
+    PREFLIGHT_MISSING="${PREFLIGHT_MISSING}  ❌ Temporal server: NOT listening on port ${TEMPORAL_PORT}\n"
+fi
+
+# 5. Temporal worker
+if pgrep -f "tsx.*src/temporal/worker.ts" >/dev/null 2>&1; then
+    log "$(timestamp)   ✅ Temporal worker"
+else
+    PREFLIGHT_OK=false
+    PREFLIGHT_MISSING="${PREFLIGHT_MISSING}  ❌ Temporal worker: NOT running\n"
+fi
+
+if [[ "$PREFLIGHT_OK" != true ]]; then
+    echo "" >&2
+    echo "═══════════════════════════════════════════════════════════" >&2
+    echo " DISPATCH BLOCKED — Stack is incomplete" >&2
+    echo "═══════════════════════════════════════════════════════════" >&2
+    echo -e "$PREFLIGHT_MISSING" >&2
+    echo "Start the full stack first:" >&2
+    echo "  .kilocode/tools/start-stack.sh" >&2
+    echo "" >&2
+    echo "Or check status with:" >&2
+    echo "  .kilocode/tools/start-stack.sh --check" >&2
+    echo "═══════════════════════════════════════════════════════════" >&2
     exit 2
 fi
 
-SESSION_COUNT=$(echo "$HEALTH" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
-log "$(timestamp) Connected to kilo serve (${SESSION_COUNT} existing sessions)"
+log "$(timestamp) Pre-flight passed (5/5 components healthy)"
 
 # ─── Phase 2: Build prompt payload ───────────────────────────────────────────
 
@@ -198,10 +254,12 @@ log "$(timestamp) Title: ${TITLE}"
 
 # ─── Phase 4: Dispatch prompt ────────────────────────────────────────────────
 
-# Use sync prompt endpoint (POST /session/{id}/message) — same as the SDK.
-# The async endpoint (prompt_async) silently drops prompts in kilo serve v7.x.
+# Use async prompt endpoint (POST /session/{id}/prompt_async) so that the
+# curl returns immediately and the monitoring loop can track progress.
+# The sync endpoint (POST /session/{id}/message) blocks until the agent
+# finishes — which defeats the purpose of the polling loop.
 HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
-    -X POST "${BASE_URL}/session/${SESSION_ID}/message" \
+    -X POST "${BASE_URL}/session/${SESSION_ID}/prompt_async" \
     -H 'Content-Type: application/json' \
     -d @"$PROMPT_FILE" 2>/dev/null || echo "000")
 
