@@ -8,13 +8,22 @@ from typing import Any
 
 from artifacts.models.artifacts.refs import RefEvidence, RefRecord, SourceSpan
 from artifacts.utils import _get_output_dir_name, _load_jsonl, _write_jsonl
-from contract.artifacts import CALLS_RAW_JSONL, MODULES_JSONL, REFS_JSONL, SYMBOLS_JSONL
+from contract.artifacts import (
+    CALLS_RAW_JSONL,
+    MODULES_JSONL,
+    REFS_JSONL,
+    SYMBOLS_JSONL,
+    build_ref_id,
+    normalize_expr,
+)
 from parse.ast_imports import extract_imports
 from parse.name_resolution import (
+    SymbolsIndex,
     build_modules_index,
     build_name_table,
     build_symbols_index,
     resolve_call,
+    resolve_call_class_context,
 )
 from scan.files import find_python_files
 
@@ -141,6 +150,7 @@ def _refs_for_file_calls(
     name_table: dict[str, Any],
     modules_index: dict[str, str],
     symbols_by_span: dict[tuple[str, int, int], str],
+    symbols_index: SymbolsIndex | None = None,
 ) -> list[RefRecord]:
     refs: list[RefRecord] = []
     for call_record in calls_for_path:
@@ -153,11 +163,16 @@ def _refs_for_file_calls(
         if not isinstance(callee_expr_obj, str):
             continue
 
-        callee_expr = callee_expr_obj.strip()
+        callee_expr = normalize_expr(callee_expr_obj)
         if not callee_expr:
             continue
 
         src_span = SourceSpan(**src_span_obj)
+
+        enclosing_symbol_id = _canonicalize_enclosing_id(
+            raw_enclosing_obj if isinstance(raw_enclosing_obj, str) else None,
+            symbols_by_span,
+        )
 
         (
             resolved_to,
@@ -167,18 +182,32 @@ def _refs_for_file_calls(
             confidence,
         ) = resolve_call(callee_expr, name_table, modules_index)
 
-        enclosing_symbol_id = _canonicalize_enclosing_id(
-            raw_enclosing_obj if isinstance(raw_enclosing_obj, str) else None,
-            symbols_by_span,
-        )
+        # Tier 2: try class-context resolution when Tier 1 doesn't fully resolve
+        if resolved_to is None and symbols_index is not None:
+            class_result = resolve_call_class_context(
+                callee_expr,
+                enclosing_symbol_id,
+                name_table,
+                modules_index,
+                symbols_index,
+            )
+            if class_result is not None:
+                (
+                    resolved_to,
+                    resolved_base_to,
+                    member,
+                    strategy,
+                    confidence,
+                ) = class_result
 
         refs.append(
             RefRecord(
-                ref_id=(
-                    f"ref:{src_span.path}"
-                    f"@L{src_span.start_line}"
-                    f":C{src_span.start_col}"
-                    f":call:{callee_expr}"
+                ref_id=build_ref_id(
+                    path=src_span.path,
+                    start_line=src_span.start_line,
+                    start_col=src_span.start_col,
+                    ref_kind="call",
+                    expr=callee_expr,
                 ),
                 ref_kind="call",
                 src_span=src_span,
@@ -260,6 +289,7 @@ class RefsGenerator:
                     name_table=name_table,
                     modules_index=modules_index,
                     symbols_by_span=symbols_by_span,
+                    symbols_index=symbols_index,
                 )
             )
 

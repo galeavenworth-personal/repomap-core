@@ -23,6 +23,7 @@ class SymbolInfo:
     name: str
     kind: str
     path: str
+    base_classes: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,10 @@ _STRATEGY_CONFIDENCE: dict[str, int] = {
     "module_import_from": 80,
     "module_import_module": 75,
     "module_alias_assignment": 60,
+    "class_self_method": 70,
+    "class_cls_method": 70,
+    "class_super_method": 65,
+    "class_static_method": 75,
 }
 
 
@@ -196,12 +201,20 @@ def build_symbols_index(
         if not isinstance(kind_obj, str):
             continue
 
+        base_classes_raw = record.get("base_classes")
+        base_classes: tuple[str, ...] | None = None
+        if isinstance(base_classes_raw, list):
+            base_classes = (
+                tuple(b for b in base_classes_raw if isinstance(b, str)) or None
+            )
+
         symbol = SymbolInfo(
             symbol_id=symbol_id_obj,
             qualified_name=qualified_name_obj,
             name=name_obj,
             kind=kind_obj,
             path=path,
+            base_classes=base_classes,
         )
         index.setdefault(module_name, []).append(symbol)
 
@@ -464,7 +477,367 @@ def resolve_call(
     )
 
 
+@dataclass(frozen=True)
+class ClassContext:
+    """Enclosing class context for Tier 2 class-method resolution."""
+
+    class_qualified_name: str
+    class_symbol_id: str
+    class_path: str
+    class_module: str
+
+
+def _find_enclosing_class(
+    enclosing_symbol_id: str | None,
+    symbols_index: SymbolsIndex,
+) -> ClassContext | None:
+    """Determine the enclosing class from an enclosing_symbol_id.
+
+    Walks the symbols index to find a class symbol whose qualified_name
+    is a prefix of the enclosing method's qualified_name.
+    """
+    if not enclosing_symbol_id:
+        return None
+
+    # enclosing_symbol_id is like "sym:path::module.Class.method@L...:C..."
+    # Extract the qualified_name portion
+    if not enclosing_symbol_id.startswith("sym:"):
+        return None
+
+    # Format: sym:{path}::{qualified_name}@L{line}:C{col}
+    after_sym = enclosing_symbol_id[4:]  # strip "sym:"
+    double_colon_pos = after_sym.find("::")
+    if double_colon_pos < 0:
+        return None
+    qname_and_loc = after_sym[double_colon_pos + 2 :]
+    at_pos = qname_and_loc.find("@")
+    if at_pos < 0:
+        return None
+    enclosing_qname = qname_and_loc[:at_pos]
+
+    # Walk up qualified name parts to find a class
+    parts = enclosing_qname.rsplit(".", 1)
+    if len(parts) < 2:
+        return None
+
+    # The enclosing class qualified_name would be the parent
+    candidate_class_qname = parts[0]
+
+    for _module_name, symbols in symbols_index.items():
+        for symbol in symbols:
+            if (
+                symbol.qualified_name == candidate_class_qname
+                and symbol.kind == "class"
+            ):
+                module_name = _module_name
+                return ClassContext(
+                    class_qualified_name=symbol.qualified_name,
+                    class_symbol_id=symbol.symbol_id,
+                    class_path=symbol.path,
+                    class_module=module_name,
+                )
+
+    return None
+
+
+def _find_method_in_class(
+    class_qname: str,
+    method_name: str,
+    symbols_index: SymbolsIndex,
+) -> SymbolInfo | None:
+    """Find a method symbol within a class by qualified name prefix."""
+    target_qname = f"{class_qname}.{method_name}"
+    for symbols in symbols_index.values():
+        for symbol in symbols:
+            if symbol.qualified_name == target_qname and symbol.kind == "method":
+                return symbol
+    return None
+
+
+def _find_class_by_qname(
+    class_qname: str,
+    symbols_index: SymbolsIndex,
+) -> SymbolInfo | None:
+    """Find a class symbol by its qualified name."""
+    for symbols in symbols_index.values():
+        for symbol in symbols:
+            if symbol.qualified_name == class_qname and symbol.kind == "class":
+                return symbol
+    return None
+
+
+def _resolve_base_class_qname(
+    base_name: str,
+    class_module: str,
+    name_table: NameTable,
+    symbols_index: SymbolsIndex,
+) -> str | None:
+    """Resolve a base class name to a qualified name.
+
+    The base_name is as written in source (e.g., 'Base', 'pkg.Base').
+    First tries the name table (handles imports), then tries module-local lookup.
+    """
+    binding = name_table.get(base_name)
+    if binding is not None:
+        return binding.qualified_name
+
+    # Try as a simple name in the same module
+    candidate = f"{class_module}.{base_name}"
+    for symbols in symbols_index.values():
+        for symbol in symbols:
+            if symbol.qualified_name == candidate and symbol.kind == "class":
+                return candidate
+
+    return None
+
+
+def resolve_call_class_context(
+    callee_expr: str,
+    enclosing_symbol_id: str | None,
+    name_table: NameTable,
+    modules_index: ModulesIndex,
+    symbols_index: SymbolsIndex,
+) -> tuple[ResolvedTo | None, ResolvedTo | None, str | None, str, int] | None:
+    """Tier 2: resolve class-context call patterns.
+
+    Handles:
+    - self.method() → enclosing class method (virtual/overridable)
+    - cls.method() → enclosing class method (classmethod context)
+    - super().method() → base class method (when single base is identifiable)
+    - ClassName.method() → class method when ClassName resolves to a known class
+
+    Returns (resolved_to, resolved_base_to, member, strategy, confidence) or
+    None if this function does not handle the expression.
+    """
+    expr = callee_expr.strip()
+    if not expr:
+        return None
+
+    parts = expr.split(".")
+    if len(parts) < 2:
+        # Check for ClassName.method() via name_table — ClassName must resolve
+        # to a class. But single-part exprs are not class-context patterns.
+        return None
+
+    receiver = parts[0]
+
+    # --- self.method() ---
+    if receiver == "self" and len(parts) == 2:
+        method_name = parts[1]
+        class_ctx = _find_enclosing_class(enclosing_symbol_id, symbols_index)
+        if class_ctx is None:
+            return None
+
+        method_symbol = _find_method_in_class(
+            class_ctx.class_qualified_name, method_name, symbols_index
+        )
+        if method_symbol is not None:
+            strategy = "class_self_method"
+            confidence = _STRATEGY_CONFIDENCE[strategy]
+            return (
+                ResolvedTo(
+                    symbol_id=method_symbol.symbol_id,
+                    qualified_name=method_symbol.qualified_name,
+                    resolution="method",
+                    confidence=confidence,
+                    path=method_symbol.path,
+                    dst_module=modules_index.get(method_symbol.path),
+                ),
+                None,
+                None,
+                strategy,
+                confidence,
+            )
+
+        # Method not found on class — partial resolution to the class
+        strategy = "class_self_method"
+        confidence = _STRATEGY_CONFIDENCE[strategy]
+        class_symbol = _find_class_by_qname(
+            class_ctx.class_qualified_name, symbols_index
+        )
+        if class_symbol is not None:
+            return (
+                None,
+                ResolvedTo(
+                    symbol_id=class_symbol.symbol_id,
+                    qualified_name=class_symbol.qualified_name,
+                    resolution="class",
+                    confidence=confidence,
+                    path=class_symbol.path,
+                    dst_module=modules_index.get(class_symbol.path),
+                ),
+                method_name,
+                strategy,
+                confidence,
+            )
+
+        return None
+
+    # --- cls.method() ---
+    if receiver == "cls" and len(parts) == 2:
+        method_name = parts[1]
+        class_ctx = _find_enclosing_class(enclosing_symbol_id, symbols_index)
+        if class_ctx is None:
+            return None
+
+        method_symbol = _find_method_in_class(
+            class_ctx.class_qualified_name, method_name, symbols_index
+        )
+        if method_symbol is not None:
+            strategy = "class_cls_method"
+            confidence = _STRATEGY_CONFIDENCE[strategy]
+            return (
+                ResolvedTo(
+                    symbol_id=method_symbol.symbol_id,
+                    qualified_name=method_symbol.qualified_name,
+                    resolution="method",
+                    confidence=confidence,
+                    path=method_symbol.path,
+                    dst_module=modules_index.get(method_symbol.path),
+                ),
+                None,
+                None,
+                strategy,
+                confidence,
+            )
+
+        # Partial resolution
+        strategy = "class_cls_method"
+        confidence = _STRATEGY_CONFIDENCE[strategy]
+        class_symbol = _find_class_by_qname(
+            class_ctx.class_qualified_name, symbols_index
+        )
+        if class_symbol is not None:
+            return (
+                None,
+                ResolvedTo(
+                    symbol_id=class_symbol.symbol_id,
+                    qualified_name=class_symbol.qualified_name,
+                    resolution="class",
+                    confidence=confidence,
+                    path=class_symbol.path,
+                    dst_module=modules_index.get(class_symbol.path),
+                ),
+                method_name,
+                strategy,
+                confidence,
+            )
+
+        return None
+
+    # --- super().method() ---
+    if receiver == "super()" and len(parts) == 2:
+        method_name = parts[1]
+        class_ctx = _find_enclosing_class(enclosing_symbol_id, symbols_index)
+        if class_ctx is None:
+            return None
+
+        # Find the class to get base_classes
+        class_symbol = _find_class_by_qname(
+            class_ctx.class_qualified_name, symbols_index
+        )
+        if class_symbol is None or not class_symbol.base_classes:
+            return None
+
+        # Only resolve when there is exactly one base class
+        # (multiple inheritance makes super() MRO-dependent)
+        if len(class_symbol.base_classes) != 1:
+            return None
+
+        base_name = class_symbol.base_classes[0]
+        base_qname = _resolve_base_class_qname(
+            base_name,
+            class_ctx.class_module,
+            name_table,
+            symbols_index,
+        )
+        if base_qname is None:
+            return None
+
+        base_method = _find_method_in_class(base_qname, method_name, symbols_index)
+        if base_method is not None:
+            strategy = "class_super_method"
+            confidence = _STRATEGY_CONFIDENCE[strategy]
+            return (
+                ResolvedTo(
+                    symbol_id=base_method.symbol_id,
+                    qualified_name=base_method.qualified_name,
+                    resolution="method",
+                    confidence=confidence,
+                    path=base_method.path,
+                    dst_module=modules_index.get(base_method.path),
+                ),
+                None,
+                None,
+                strategy,
+                confidence,
+            )
+
+        # Partial resolution to the base class
+        base_class_symbol = _find_class_by_qname(base_qname, symbols_index)
+        if base_class_symbol is not None:
+            strategy = "class_super_method"
+            confidence = _STRATEGY_CONFIDENCE[strategy]
+            return (
+                None,
+                ResolvedTo(
+                    symbol_id=base_class_symbol.symbol_id,
+                    qualified_name=base_class_symbol.qualified_name,
+                    resolution="class",
+                    confidence=confidence,
+                    path=base_class_symbol.path,
+                    dst_module=modules_index.get(base_class_symbol.path),
+                ),
+                method_name,
+                strategy,
+                confidence,
+            )
+
+        return None
+
+    # --- ClassName.method() ---
+    # Check if the receiver resolves to a class via the name table
+    binding = name_table.get(receiver)
+    if binding is not None and binding.resolution == "class" and len(parts) == 2:
+        method_name = parts[1]
+        class_qname = binding.qualified_name
+
+        method_symbol = _find_method_in_class(class_qname, method_name, symbols_index)
+        if method_symbol is not None:
+            strategy = "class_static_method"
+            confidence = _STRATEGY_CONFIDENCE[strategy]
+            return (
+                ResolvedTo(
+                    symbol_id=method_symbol.symbol_id,
+                    qualified_name=method_symbol.qualified_name,
+                    resolution="method",
+                    confidence=confidence,
+                    path=method_symbol.path,
+                    dst_module=modules_index.get(method_symbol.path),
+                ),
+                None,
+                None,
+                strategy,
+                confidence,
+            )
+
+        # Partial: class resolves but method doesn't
+        if binding.target_symbol_id:
+            strategy = "class_static_method"
+            confidence = _STRATEGY_CONFIDENCE[strategy]
+            return (
+                None,
+                _binding_to_resolved(binding, modules_index),
+                method_name,
+                strategy,
+                confidence,
+            )
+
+    return None
+
+
 __all__ = [
+    "ClassContext",
     "ModulesIndex",
     "NameBinding",
     "NameTable",
@@ -474,4 +847,5 @@ __all__ = [
     "build_name_table",
     "build_symbols_index",
     "resolve_call",
+    "resolve_call_class_context",
 ]

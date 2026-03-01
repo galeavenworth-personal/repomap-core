@@ -22,6 +22,16 @@ def _decode_node_text(source_bytes: bytes, node: Node) -> str:
     return source_bytes[node.start_byte : node.end_byte].decode("utf8", errors="ignore")
 
 
+def _is_super_call(source_bytes: bytes, node: Node) -> bool:
+    """Check if a call node is ``super()`` (zero-arg form)."""
+    if node.type != "call":
+        return False
+    func_node = node.child_by_field_name("function")
+    if func_node is None or func_node.type != "identifier":
+        return False
+    return _decode_node_text(source_bytes, func_node).strip() == "super"
+
+
 def _normalize_callee_expr(source_bytes: bytes, callee_node: Node | None) -> str:
     if callee_node is None:
         return "<complex_expr>"
@@ -32,6 +42,16 @@ def _normalize_callee_expr(source_bytes: bytes, callee_node: Node | None) -> str
     if callee_node.type == "attribute":
         object_node = callee_node.child_by_field_name("object")
         attribute_node = callee_node.child_by_field_name("attribute")
+
+        # Special-case: super().method() → "super().method"
+        if (
+            object_node is not None
+            and _is_super_call(source_bytes, object_node)
+            and attribute_node is not None
+            and attribute_node.type == "identifier"
+        ):
+            attr_name = _decode_node_text(source_bytes, attribute_node).strip()
+            return f"super().{attr_name}"
 
         normalized_object = _normalize_callee_expr(source_bytes, object_node)
         if attribute_node is None or attribute_node.type != "identifier":

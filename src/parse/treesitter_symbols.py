@@ -53,6 +53,38 @@ def _build_qualified_name(
     return f"{module_name}.{name}"
 
 
+def _extract_base_classes(node: Node) -> list[str] | None:
+    """Extract base class names from a class definition node.
+
+    Returns a list of base class name strings as written in source,
+    or None if the class has no base classes.
+    """
+    superclasses = node.child_by_field_name("superclasses")
+    if superclasses is None:
+        return None
+
+    bases: list[str] = []
+    for child in superclasses.children:
+        if child.type in ("(", ")", ","):
+            continue
+        if child.type == "identifier" and child.text:
+            bases.append(child.text.decode("utf8"))
+        elif child.type == "attribute" and child.text:
+            bases.append(child.text.decode("utf8"))
+        elif child.type == "call":
+            # e.g. metaclass=ABCMeta or Generic[T] — skip non-simple bases
+            func_node = child.child_by_field_name("function")
+            if func_node and func_node.text:
+                bases.append(func_node.text.decode("utf8"))
+        elif child.type == "subscript":
+            # e.g. Generic[T] — extract the base name
+            value_node = child.child_by_field_name("value")
+            if value_node and value_node.text:
+                bases.append(value_node.text.decode("utf8"))
+
+    return bases if bases else None
+
+
 def _create_symbol_record(
     node: Node,
     relative_path: str,
@@ -63,6 +95,11 @@ def _create_symbol_record(
     """Create a SymbolRecord from a tree-sitter node."""
     start_line = node.start_point[0] + 1
     start_col = node.start_point[1] + 1
+
+    base_classes: list[str] | None = None
+    if kind == "class":
+        base_classes = _extract_base_classes(node)
+
     return SymbolRecord(
         path=relative_path,
         kind=kind,
@@ -75,6 +112,7 @@ def _create_symbol_record(
         end_line=node.end_point[0] + 1,
         end_col=node.end_point[1] + 1,
         docstring_present=_has_docstring(node),
+        base_classes=base_classes,
     )
 
 

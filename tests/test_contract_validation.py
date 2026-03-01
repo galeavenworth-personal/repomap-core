@@ -16,6 +16,8 @@ from contract.artifacts import (
     MODULES_JSONL,
     SYMBOLS_JSONL,
     TIER1_ARTIFACT_SPECS,
+    build_ref_id,
+    normalize_expr,
 )
 from contract.validation import (
     ValidationMessage,
@@ -663,3 +665,102 @@ def test_calls_raw_schema_validation_failure_reported(tmp_path: Path) -> None:
         m.artifact == "calls_raw" and "Schema validation failed" in m.message
         for m in result.errors
     )
+
+
+# Group 8: normalize_expr contract
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # Leading/trailing whitespace stripped
+        ("  foo  ", "foo"),
+        ("\tfoo\t", "foo"),
+        ("\n foo \n", "foo"),
+        # Internal whitespace runs collapsed
+        ("a .  b . c", "a . b . c"),
+        # Dotted names preserved
+        ("a.b.c", "a.b.c"),
+        ("obj.method", "obj.method"),
+        ("os.path.join", "os.path.join"),
+        # Dynamic placeholders pass through
+        ("<complex_expr>", "<complex_expr>"),
+        ("<subscript>", "<subscript>"),
+        ("<call>", "<call>"),
+        ("<lambda>", "<lambda>"),
+        ("<attribute>", "<attribute>"),
+        # Simple identifiers
+        ("foo", "foo"),
+        ("MyClass", "MyClass"),
+        # Empty input
+        ("", ""),
+        ("   ", ""),
+    ],
+)
+def test_normalize_expr(raw: str, expected: str) -> None:
+    """normalize_expr applies all normalization rules from the contract."""
+    assert normalize_expr(raw) == expected
+
+
+# Group 9: build_ref_id contract
+
+
+def test_build_ref_id_canonical_format() -> None:
+    """build_ref_id produces the expected ref:{path}@L{line}:C{col}:{kind}:{expr} format."""
+    ref_id = build_ref_id(
+        path="pkg/mod.py",
+        start_line=10,
+        start_col=4,
+        ref_kind="call",
+        expr="foo.bar",
+    )
+    assert ref_id == "ref:pkg/mod.py@L10:C4:call:foo.bar"
+
+
+def test_build_ref_id_normalizes_expr() -> None:
+    """build_ref_id applies normalize_expr to the expression."""
+    ref_id = build_ref_id(
+        path="pkg/mod.py",
+        start_line=1,
+        start_col=0,
+        ref_kind="call",
+        expr="  foo  ",
+    )
+    assert ref_id == "ref:pkg/mod.py@L1:C0:call:foo"
+
+
+def test_build_ref_id_preserves_dotted_names() -> None:
+    """build_ref_id preserves dotted attribute chains in the expression."""
+    ref_id = build_ref_id(
+        path="src/main.py",
+        start_line=42,
+        start_col=8,
+        ref_kind="call",
+        expr="os.path.join",
+    )
+    assert ref_id == "ref:src/main.py@L42:C8:call:os.path.join"
+
+
+def test_build_ref_id_dynamic_placeholder() -> None:
+    """build_ref_id correctly embeds dynamic placeholders."""
+    ref_id = build_ref_id(
+        path="mod.py",
+        start_line=5,
+        start_col=0,
+        ref_kind="call",
+        expr="<subscript>",
+    )
+    assert ref_id == "ref:mod.py@L5:C0:call:<subscript>"
+
+
+def test_build_ref_id_no_filesystem_prefix() -> None:
+    """ref_id must not contain absolute filesystem prefixes."""
+    ref_id = build_ref_id(
+        path="pkg/mod.py",
+        start_line=1,
+        start_col=0,
+        ref_kind="call",
+        expr="foo",
+    )
+    assert not ref_id.startswith("ref:/")
+    assert "C:\\" not in ref_id

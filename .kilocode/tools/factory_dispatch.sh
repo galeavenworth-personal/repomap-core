@@ -115,6 +115,43 @@ require_cmd() {
 require_cmd curl
 require_cmd python3
 
+# ─── Phase 0: Restart kilo serve to pick up .kilocodemodes changes ────────────
+# kilo serve caches mode definitions at startup. In dev, we always restart
+# to ensure the latest .kilocodemodes is loaded.
+
+KILO_PORT="${KILO_PORT:-4096}"
+
+# Find ALL kilo serve processes (binary, node wrapper, op run wrapper)
+KILO_PIDS=$(pgrep -f "kilo serve" 2>/dev/null | grep -v "$$" || true)
+
+if [[ -n "$KILO_PIDS" ]]; then
+    log "$(timestamp) Killing kilo serve to pick up .kilocodemodes changes..."
+    echo "$KILO_PIDS" | xargs kill 2>/dev/null || true
+    # Wait for port to be free (up to 5s)
+    for i in $(seq 1 10); do
+        ss -tlnp 2>/dev/null | grep -q ":${KILO_PORT} " || break
+        sleep 0.5
+    done
+    sleep 1  # extra settle time
+    # Start fresh — KILO_API_KEY is inherited from op run wrapping this script
+    nohup kilo serve --port "$KILO_PORT" > /tmp/kilo-serve.log 2>&1 &
+    log "$(timestamp) kilo serve restarting (PID $!), waiting for health..."
+    # Wait for it to be ready (up to 20s)
+    for i in $(seq 1 40); do
+        if curl -sf "http://127.0.0.1:${KILO_PORT}/session" >/dev/null 2>&1; then
+            log "$(timestamp) kilo serve healthy after ~$((i / 2))s"
+            break
+        fi
+        if [[ $i -eq 40 ]]; then
+            echo "ERROR: kilo serve failed to start after 20s. Check /tmp/kilo-serve.log" >&2
+            exit 1
+        fi
+        sleep 0.5
+    done
+else
+    log "$(timestamp) kilo serve not found — skipping restart"
+fi
+
 # ─── Phase 1: Full stack pre-flight check ────────────────────────────────────
 # ALL 5 components must be running. No exceptions. No partial stacks.
 # This prevents unrecorded sessions and wasted spend.
@@ -144,8 +181,8 @@ else
 fi
 
 # 3. oc-daemon (flight recorder)
-if pgrep -f "tsx.*oc-daemon/src/index.ts" >/dev/null 2>&1 || \
-   pgrep -f "node.*oc-daemon/build/index.js" >/dev/null 2>&1; then
+if pgrep -f "oc-daemon.*src/index.ts" >/dev/null 2>&1 || \
+   pgrep -f "oc-daemon.*build/index.js" >/dev/null 2>&1; then
     log "$(timestamp)   ✅ oc-daemon (SSE → Dolt)"
 else
     PREFLIGHT_OK=false
@@ -290,6 +327,7 @@ log "$(timestamp) Monitoring session (poll=${POLL_INTERVAL}s, timeout=${MAX_WAIT
 
 ELAPSED=0
 LAST_CHILDREN=0
+IDLE_COUNT=0
 
 while [[ $ELAPSED -lt $MAX_WAIT ]]; do
     sleep "$POLL_INTERVAL"
@@ -309,33 +347,44 @@ print(len(children))
     fi
 
     # Check session messages to determine if processing is complete.
-    # A session is done when it has assistant content with a step-finish part
-    # and no running tools.
+    # A session is done when it has a terminal step-finish (end_turn/stop, not tool-calls)
+    # and no running/pending tools. We require IDLE_CONFIRM consecutive idle polls
+    # to avoid the race where we poll between steps.
+    IDLE_CONFIRM=${IDLE_CONFIRM:-3}
     DONE=$(curl -sf "${BASE_URL}/session/${SESSION_ID}/message" 2>/dev/null \
         | python3 -c "
 import sys, json
 messages = json.load(sys.stdin)
-has_assistant = False
+has_terminal_finish = False
 has_running_tools = False
 for msg in messages:
-    info = msg.get('info', {})
-    if info.get('role') == 'assistant':
-        has_assistant = True
     for part in msg.get('parts', []):
         if part.get('type') == 'tool':
             state = part.get('state', {})
             if state.get('status') in ('running', 'pending'):
                 has_running_tools = True
         if part.get('type') == 'step-finish':
-            has_assistant = True
-if has_assistant and not has_running_tools:
+            reason = part.get('reason', '')
+            # tool-calls means the model is about to process tool results — NOT done
+            if reason in ('end_turn', 'stop', 'max_tokens', ''):
+                has_terminal_finish = True
+            elif reason == 'tool-calls':
+                has_terminal_finish = False  # reset — more work coming
+if has_terminal_finish and not has_running_tools:
     print('yes')
 else:
     print('no')
 " 2>/dev/null || echo "error")
 
     if [[ "$DONE" == "yes" ]]; then
-        # Also verify all children are done (no running tools)
+        IDLE_COUNT=$((IDLE_COUNT + 1))
+        if [[ $IDLE_COUNT -lt $IDLE_CONFIRM ]]; then
+            log "$(timestamp) [${ELAPSED}s] Idle check ${IDLE_COUNT}/${IDLE_CONFIRM}, confirming..."
+            sleep "$POLL_INTERVAL"
+            continue
+        fi
+
+        # Confirmed idle — also verify all children are done
         ALL_CHILDREN_DONE=true
         if [[ "$CHILDREN" -gt 0 ]]; then
             CHILD_IDS=$(curl -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null \
@@ -360,15 +409,19 @@ print('no' if running else 'yes')
         fi
 
         if [[ "$ALL_CHILDREN_DONE" == true ]]; then
-            log "$(timestamp) All sessions idle — completed in ${ELAPSED}s"
+            log "$(timestamp) All sessions idle (${IDLE_COUNT}/${IDLE_CONFIRM} confirmations) — completed in ${ELAPSED}s"
             break
+        else
+            IDLE_COUNT=0  # children still running, reset
         fi
+    else
+        IDLE_COUNT=0  # not idle, reset counter
     fi
 
     if [[ "$DONE" == "error" ]]; then
         log "$(timestamp) [${ELAPSED}s] Warning: status check failed, retrying..."
     else
-        log "$(timestamp) [${ELAPSED}s] Parent done: ${DONE}, children: ${CHILDREN}"
+        log "$(timestamp) [${ELAPSED}s] Parent done: ${DONE}, children: ${CHILDREN}, idle: ${IDLE_COUNT}/${IDLE_CONFIRM}"
     fi
 done
 

@@ -32,6 +32,10 @@ class SymbolRecord(BaseModel):
     end_line: int
     end_col: int
     docstring_present: bool
+    base_classes: list[str] | None = Field(
+        default=None,
+        description="Base class names for class symbols (as written in source)",
+    )
     layer: str | None = Field(
         default=None, description="Architectural layer (if configured)"
     )

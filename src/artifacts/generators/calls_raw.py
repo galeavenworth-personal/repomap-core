@@ -7,7 +7,7 @@ from typing import Any
 
 from artifacts.models.artifacts.calls_raw import CallEvidence, CallRawRecord
 from artifacts.utils import _get_output_dir_name, _write_jsonl
-from contract.artifacts import CALLS_RAW_JSONL
+from contract.artifacts import CALLS_RAW_JSONL, build_ref_id, normalize_expr
 from parse.treesitter_calls import extract_calls_treesitter
 from scan.files import find_python_files
 
@@ -46,14 +46,15 @@ class CallsRawGenerator:
             call_sites = extract_calls_treesitter(str(file_path), str(root))
             for call_site in call_sites:
                 src_span = call_site["src_span"]
-                callee_expr = str(call_site["callee_expr"]).strip()
+                callee_expr = normalize_expr(str(call_site["callee_expr"]))
                 records.append(
                     CallRawRecord(
-                        ref_id=(
-                            f"ref:{src_span['path']}"
-                            f"@L{src_span['start_line']}"
-                            f":C{src_span['start_col']}"
-                            f":call:{callee_expr}"
+                        ref_id=build_ref_id(
+                            path=src_span["path"],
+                            start_line=src_span["start_line"],
+                            start_col=src_span["start_col"],
+                            ref_kind="call",
+                            expr=callee_expr,
                         ),
                         src_span=call_site["src_span"],
                         callee_expr=callee_expr,
