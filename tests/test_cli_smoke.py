@@ -1,12 +1,41 @@
 from __future__ import annotations
 
+import importlib.util
 import shutil
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
 from cli import main
 from rules.config import ConfigError, load_config, resolve_output_dir
+
+_PUNCH_ENGINE_PATH = (
+    Path(__file__).parent.parent / ".kilocode" / "tools" / "punch_engine.py"
+)
+
+
+def _load_punch_engine() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "kilocode_punch_engine", _PUNCH_ENGINE_PATH
+    )
+    if spec is None:
+        raise RuntimeError(
+            f"Unable to create import spec for punch_engine at {_PUNCH_ENGINE_PATH}"
+        )
+    if spec.loader is None:
+        raise RuntimeError(
+            f"Import spec for punch_engine has no loader at {_PUNCH_ENGINE_PATH}"
+        )
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def punch_engine() -> ModuleType:
+    return _load_punch_engine()
 
 
 def _write_minimal_repo(root: Path) -> None:
@@ -130,3 +159,32 @@ def test_resolve_output_dir_rejects_escape(tmp_path: Path) -> None:
     repo_root.mkdir()
     with pytest.raises(ConfigError, match="escapes the repository root"):
         resolve_output_dir(repo_root, "../outside")
+
+
+def test_punch_resolve_task_id_passthrough_uuid(punch_engine: ModuleType) -> None:
+    task_id = "123e4567-e89b-12d3-a456-426614174000"
+    assert punch_engine.resolve_task_id(task_id) == task_id
+
+
+def test_punch_resolve_task_id_auto_uses_vscode_dirs(
+    monkeypatch: pytest.MonkeyPatch,
+    punch_engine: ModuleType,
+) -> None:
+    task_id = "123e4567-e89b-12d3-a456-426614174000"
+    monkeypatch.setattr(punch_engine, "get_current_task_id", lambda: task_id)
+
+    assert punch_engine.resolve_task_id("auto") == task_id
+
+
+def test_punch_resolve_task_id_auto_errors_when_no_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    punch_engine: ModuleType,
+) -> None:
+    monkeypatch.setattr(punch_engine, "get_current_task_id", lambda: None)
+
+    with pytest.raises(SystemExit) as exc_info:
+        punch_engine.resolve_task_id("auto")
+
+    assert exc_info.value.code == 1
+    assert "task_id 'auto' requested but discovery failed" in capsys.readouterr().err
