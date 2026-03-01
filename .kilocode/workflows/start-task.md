@@ -189,6 +189,8 @@ Respect layer boundaries defined in [`repomap.toml`](../../repomap.toml).
 > Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} start-task-orchestrate`
 > **receipt_required = true** — this is a hard gate.
 >
+> **task_id fallback:** Orchestrators should inject an explicit session/task UUID. If unavailable, pass `auto` so punch-engine discovery falls back to VS Code task-directory discovery.
+>
 > **Note:** Plant tooling (`.kilocode/tools/`) uses system `python3`, not `.venv/bin/python`. The virtual environment mandate applies to product code (`src/`) and quality gates only.
 
 **Checkpoint verifies:**

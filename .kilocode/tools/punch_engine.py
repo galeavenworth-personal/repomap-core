@@ -10,6 +10,7 @@ import json
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 KILO_STORAGE = Path.home() / ".config/Code/User/globalStorage/kilocode.kilo-code"
@@ -61,6 +62,54 @@ def dolt_sql(query: str) -> str | None:
     return result.stdout
 
 
+def get_current_task_id() -> str | None:
+    """Get the most recently modified task directory (likely the current task).
+
+    Uses filesystem mtime heuristic — same approach as kilo_session_monitor.py.
+    """
+    if not TASKS_DIR.exists():
+        return None
+    task_dirs = sorted(
+        TASKS_DIR.iterdir(),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return task_dirs[0].name if task_dirs else None
+
+
+def _is_uuid(value: str) -> bool:
+    """Return True when value parses as an RFC4122 UUID string."""
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+def resolve_task_id(raw_task_id: str) -> str:
+    """Resolve 'auto' sentinel to the current task UUID, or pass through as-is.
+
+    Raises SystemExit with a clear message if auto-discovery fails.
+    """
+    if _is_uuid(raw_task_id):
+        return raw_task_id
+
+    if raw_task_id.lower() == "auto":
+        discovered = get_current_task_id()
+        if discovered is not None:
+            print(f"Auto-discovered task_id from VS Code tasks dir: {discovered}")
+            return discovered
+
+        print(
+            "ERROR: task_id 'auto' requested but discovery failed. "
+            f"No task directories found in {TASKS_DIR}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    return raw_task_id
+
+
 def load_ui_messages(task_id: str) -> list[dict]:
     """Load ui_messages.json for a given task."""
     path = TASKS_DIR / task_id / "ui_messages.json"
@@ -70,6 +119,19 @@ def load_ui_messages(task_id: str) -> list[dict]:
         print(f"WARNING: task_id traversal blocked: {task_id}", file=sys.stderr)
         return []
     if not path.exists():
+        task_dir = TASKS_DIR / task_id
+        if not task_dir.exists():
+            print(
+                f"WARNING: task directory not found: {task_dir} — "
+                "is this a valid Kilo Code task UUID? "
+                "(hint: use 'auto' as task_id for auto-discovery)",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"WARNING: ui_messages.json not found in {task_dir}",
+                file=sys.stderr,
+            )
         return []
     try:
         return json.loads(path.read_text())
@@ -592,7 +654,10 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     mint_p = sub.add_parser("mint", help="Mint punches from task events")
-    mint_p.add_argument("task_id")
+    mint_p.add_argument(
+        "task_id",
+        help="Kilo Code task UUID, or 'auto' to discover the current task",
+    )
     mint_p.add_argument(
         "--bead-id",
         default=None,
@@ -600,26 +665,35 @@ def main() -> int:
     )
 
     eval_p = sub.add_parser("evaluate", help="Evaluate a punch card for a task")
-    eval_p.add_argument("task_id")
+    eval_p.add_argument(
+        "task_id",
+        help="Kilo Code task UUID, or 'auto' to discover the current task",
+    )
     eval_p.add_argument("card_id")
 
     cp_p = sub.add_parser(
         "checkpoint",
         help="Create a checkpoint from evaluation",
     )
-    cp_p.add_argument("task_id")
+    cp_p.add_argument(
+        "task_id",
+        help="Kilo Code task UUID, or 'auto' to discover the current task",
+    )
     cp_p.add_argument("card_id")
 
     args = parser.parse_args()
 
+    # Resolve 'auto' sentinel to the actual current task UUID
+    task_id = resolve_task_id(args.task_id)
+
     if args.command == "mint":
-        cmd_mint(args.task_id, bead_id=args.bead_id)
+        cmd_mint(task_id, bead_id=args.bead_id)
         return 0
     elif args.command == "evaluate":
-        status, _missing, _violations = cmd_evaluate(args.task_id, args.card_id)
+        status, _missing, _violations = cmd_evaluate(task_id, args.card_id)
         return 0 if status == "pass" else 1
     elif args.command == "checkpoint":
-        _cp_id, _hash, status = cmd_checkpoint(args.task_id, args.card_id)
+        _cp_id, _hash, status = cmd_checkpoint(task_id, args.card_id)
         return 0 if status == "pass" else 1
     return 2
 

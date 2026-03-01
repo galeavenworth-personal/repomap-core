@@ -43,7 +43,7 @@ export interface SessionMetrics {
 export interface GovernorThresholds {
   /** Maximum step count before step_overflow (default: 100). */
   maxSteps: number;
-  /** Maximum cost in USD before cost_overflow (default: 2.00). */
+  /** Maximum cost in USD before cost_overflow (default: 10.00). */
   maxCostUsd: number;
   /** Minimum cycle length to check for tool_cycle (default: 2). */
   minCycleLength: number;
@@ -59,7 +59,7 @@ export interface GovernorThresholds {
 
 export const DEFAULT_THRESHOLDS: GovernorThresholds = {
   maxSteps: 100,
-  maxCostUsd: 2.0,
+  maxCostUsd: 10.0,
   minCycleLength: 2,
   maxCycleLength: 6,
   cycleRepetitions: 3,
