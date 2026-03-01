@@ -377,6 +377,24 @@ customModes:
       specialist subtasks (discover/explore/prepare/execute/gate/land) with
       deterministic contracts, bounded retries, and explicit line-fault routing.
     customInstructions: |
+      ## Task Tool Usage (CRITICAL)
+
+      When delegating to specialist agents, use the `task` tool with these parameters:
+      - subagent_type: the agent slug from the Phase-to-Mode Routing table (e.g. "architect", "code", "fitter")
+      - description: a short 3-5 word label (e.g. "Discover scope for ywk.8")
+      - prompt: the full handoff packet with phase objective, acceptance checks, and evidence pointers
+
+      Example:
+      <task>
+      <subagent_type>architect</subagent_type>
+      <description>Explore codebase context</description>
+      <prompt>
+      Phase: explore
+      Objective: Gather codebase context for bead repomap-core-ywk.8
+      ...
+      </prompt>
+      </task>
+
       ## Beads Integration Protocol (commands.toml routes)
 
       Session start: `sync remote`    → commands.sync_remote
@@ -508,7 +526,7 @@ customModes:
         - Export path
         - Runtime attestation requirement
         - Results from prior phases (context baton pass)
-      - Use `new_task(mode=<routing-table-mode>, message=<constructed-message>)`
+      - Use `task(subagent_type=<routing-table-agent>, description=<short-label>, prompt=<constructed-message>)`
 
       ## Quality Rules
 
@@ -532,13 +550,14 @@ customModes:
       ## Your ONLY action (repeat for each bead)
 
       Call the `task` tool with:
-      - mode: "process-orchestrator"
-      - message: a handoff packet (format below)
+      - subagent_type: "process-orchestrator"
+      - description: a short 3-5 word label (e.g. "Process bead ywk.8")
+      - prompt: a handoff packet (format below)
 
       Then wait for the child to return. Then call `task` for the next bead.
       When all children complete, call `attempt_completion` to report results.
 
-      ## Handoff packet (the `message` parameter of the `task` tool)
+      ## Handoff packet (the `prompt` parameter of the `task` tool)
 
       Process bead <BEAD_ID>.
       Run: .kilocode/tools/bd show <BEAD_ID>
@@ -566,18 +585,20 @@ customModes:
     customInstructions: |
       IMPORTANT: Your ONLY allowed tool calls are `task` and `attempt_completion`.
 
-      The tool is called `task` (NOT "new_task"). It takes two parameters:
-      - mode: the slug of the child mode (e.g. "process-orchestrator")
-      - message: the handoff instructions for the child
+      The tool is called `task` (NOT "new_task"). It takes three parameters:
+      - subagent_type: the slug of the child agent (e.g. "process-orchestrator")
+      - description: a short 3-5 word label (e.g. "Process bead ywk.8")
+      - prompt: the handoff instructions for the child
 
       Example of a correct tool call:
       <task>
-      <mode>process-orchestrator</mode>
-      <message>
+      <subagent_type>process-orchestrator</subagent_type>
+      <description>Process bead ywk.8</description>
+      <prompt>
       Process bead repomap-core-ywk.8.
       Run: .kilocode/tools/bd show repomap-core-ywk.8
       Then follow the full lifecycle: discover, explore, plan, implement, gate, land.
-      </message>
+      </prompt>
       </task>
 
       DO NOT call bash. DO NOT call read. DO NOT call glob. DO NOT call grep.
