@@ -9,17 +9,21 @@ import pytest
 
 from contract.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
+    CALLS_JSONL,
     CALLS_RAW_JSONL,
     DEPS_EDGELIST,
     DEPS_SUMMARY_JSON,
     INTEGRATIONS_STATIC_JSONL,
     MODULES_JSONL,
+    REFS_JSONL,
+    REFS_SUMMARY_JSON,
     SYMBOLS_JSONL,
     TIER1_ARTIFACT_SPECS,
 )
 from contract.validation import (
     ValidationMessage,
     ValidationResult,
+    _json_model_for_artifact,
     _jsonl_model_for_artifact,
     validate_artifacts,
 )
@@ -128,6 +132,19 @@ def _write_valid_artifacts(d: Path) -> None:
     (d / DEPS_SUMMARY_JSON).write_text(json.dumps(deps_summary), encoding="utf-8")
 
     (d / DEPS_EDGELIST).write_text("pkg.mod -> requests\n", encoding="utf-8")
+
+    refs_summary = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "total_refs": 1,
+        "total_calls": 1,
+        "refs_resolved": 0,
+        "refs_unresolved": 1,
+        "calls_resolved": 0,
+        "calls_unresolved": 1,
+        "resolution_rate_refs": 0.0,
+        "resolution_rate_calls": 0.0,
+    }
+    (d / REFS_SUMMARY_JSON).write_text(json.dumps(refs_summary), encoding="utf-8")
 
 
 def _messages_contain(messages: list[ValidationMessage], needle: str) -> bool:
@@ -661,5 +678,332 @@ def test_calls_raw_schema_validation_failure_reported(tmp_path: Path) -> None:
     assert result.ok is False
     assert any(
         m.artifact == "calls_raw" and "Schema validation failed" in m.message
+        for m in result.errors
+    )
+
+
+# Group 8: refs_summary.json validation
+
+
+def test_refs_summary_valid(tmp_path: Path) -> None:
+    """A valid refs_summary.json passes validation."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is True
+    assert not any(m.artifact == "refs_summary" for m in result.errors)
+
+
+def test_refs_summary_invalid_json(tmp_path: Path) -> None:
+    """Invalid refs_summary JSON is reported as an error."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+    (artifacts_dir / REFS_SUMMARY_JSON).write_text("{", encoding="utf-8")
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is False
+    assert any(
+        m.artifact == "refs_summary" and "Invalid JSON" in m.message
+        for m in result.errors
+    )
+
+
+def test_refs_summary_non_dict(tmp_path: Path) -> None:
+    """A non-object refs_summary payload is rejected."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+    (artifacts_dir / REFS_SUMMARY_JSON).write_text("[]", encoding="utf-8")
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is False
+    assert any(
+        m.artifact == "refs_summary" and "Expected JSON object" in m.message
+        for m in result.errors
+    )
+
+
+def test_refs_summary_pydantic_failure(tmp_path: Path) -> None:
+    """Schema-invalid refs_summary payload produces validation error."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+    bad_summary = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "total_refs": "not_an_int",
+    }
+    (artifacts_dir / REFS_SUMMARY_JSON).write_text(
+        json.dumps(bad_summary), encoding="utf-8"
+    )
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is False
+    assert any(
+        m.artifact == "refs_summary" and "Schema validation failed" in m.message
+        for m in result.errors
+    )
+
+
+def test_refs_summary_missing_reports_error(tmp_path: Path) -> None:
+    """Missing refs_summary.json is reported as a required artifact error."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+    (artifacts_dir / REFS_SUMMARY_JSON).unlink()
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is False
+    assert any(
+        m.artifact == "refs_summary"
+        and "Required artifact file is missing" in m.message
+        for m in result.errors
+    )
+
+
+def test_json_model_for_artifact_refs_summary() -> None:
+    """refs_summary JSON artifact resolves to RefsSummary model."""
+    model = _json_model_for_artifact("refs_summary")
+    assert model.__name__ == "RefsSummary"
+
+
+def test_json_model_for_artifact_deps_summary() -> None:
+    """deps_summary JSON artifact resolves to DepsSummary model."""
+    model = _json_model_for_artifact("deps_summary")
+    assert model.__name__ == "DepsSummary"
+
+
+def test_json_model_for_artifact_unknown() -> None:
+    """Unknown JSON artifact names raise ValueError."""
+    with pytest.raises(ValueError, match="Unknown json artifact"):
+        _json_model_for_artifact("nonexistent")
+
+
+# Group 9: Cross-artifact invariants
+
+
+def test_cross_artifact_resolved_to_symbol_id_valid(tmp_path: Path) -> None:
+    """resolved_to.symbol_id referencing a known symbol passes validation."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+
+    # Write a ref that resolves to the symbol in the fixture.
+    refs_record = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "ref_id": "ref:pkg/mod.py@L5:C0:name:f",
+        "ref_kind": "name",
+        "src_span": {
+            "path": "pkg/mod.py",
+            "start_line": 5,
+            "start_col": 0,
+            "end_line": 5,
+            "end_col": 1,
+        },
+        "module": "pkg.mod",
+        "expr": "f",
+        "resolved_to": {
+            "symbol_id": "sym:pkg/mod.py::pkg.mod.f@L1:C0",
+            "qualified_name": "pkg.mod.f",
+            "resolution": "local",
+            "confidence": 100,
+        },
+        "evidence": {"strategy": "scope_analysis", "confidence": 100},
+    }
+    (artifacts_dir / REFS_JSONL).write_text(
+        json.dumps(refs_record) + "\n", encoding="utf-8"
+    )
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is True
+    assert not any(m.artifact == "cross_artifact" for m in result.errors)
+
+
+def test_cross_artifact_resolved_to_unknown_symbol_id(tmp_path: Path) -> None:
+    """resolved_to.symbol_id referencing an unknown symbol produces an error."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+
+    refs_record = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "ref_id": "ref:pkg/mod.py@L5:C0:name:g",
+        "ref_kind": "name",
+        "src_span": {
+            "path": "pkg/mod.py",
+            "start_line": 5,
+            "start_col": 0,
+            "end_line": 5,
+            "end_col": 1,
+        },
+        "module": "pkg.mod",
+        "expr": "g",
+        "resolved_to": {
+            "symbol_id": "sym:pkg/mod.py::pkg.mod.NONEXISTENT@L99:C0",
+            "qualified_name": "pkg.mod.NONEXISTENT",
+            "resolution": "local",
+            "confidence": 50,
+        },
+        "evidence": {"strategy": "scope_analysis", "confidence": 50},
+    }
+    (artifacts_dir / REFS_JSONL).write_text(
+        json.dumps(refs_record) + "\n", encoding="utf-8"
+    )
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is False
+    assert any(
+        m.artifact == "cross_artifact"
+        and "resolved_to.symbol_id references unknown symbol" in m.message
+        for m in result.errors
+    )
+
+
+def test_cross_artifact_module_field_unknown_module(tmp_path: Path) -> None:
+    """module field in refs/calls referencing unknown module produces an error."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+
+    refs_record = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "ref_id": "ref:other/x.py@L1:C0:name:z",
+        "ref_kind": "name",
+        "src_span": {
+            "path": "other/x.py",
+            "start_line": 1,
+            "start_col": 0,
+            "end_line": 1,
+            "end_col": 1,
+        },
+        "module": "other.x",
+        "expr": "z",
+        "resolved_to": None,
+        "evidence": {"strategy": "syntax_only", "confidence": 0},
+    }
+    (artifacts_dir / REFS_JSONL).write_text(
+        json.dumps(refs_record) + "\n", encoding="utf-8"
+    )
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is False
+    assert any(
+        m.artifact == "cross_artifact"
+        and "Record module references unknown module" in m.message
+        for m in result.errors
+    )
+
+
+def test_cross_artifact_dst_module_unknown(tmp_path: Path) -> None:
+    """resolved_to.dst_module referencing unknown module produces an error."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+
+    refs_record = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "ref_id": "ref:pkg/mod.py@L5:C0:name:f",
+        "ref_kind": "name",
+        "src_span": {
+            "path": "pkg/mod.py",
+            "start_line": 5,
+            "start_col": 0,
+            "end_line": 5,
+            "end_col": 1,
+        },
+        "module": "pkg.mod",
+        "expr": "f",
+        "resolved_to": {
+            "symbol_id": "sym:pkg/mod.py::pkg.mod.f@L1:C0",
+            "qualified_name": "pkg.mod.f",
+            "resolution": "local",
+            "confidence": 100,
+            "dst_module": "nonexistent.module",
+        },
+        "evidence": {"strategy": "scope_analysis", "confidence": 100},
+    }
+    (artifacts_dir / REFS_JSONL).write_text(
+        json.dumps(refs_record) + "\n", encoding="utf-8"
+    )
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is False
+    assert any(
+        m.artifact == "cross_artifact"
+        and "resolved_to.dst_module references unknown module" in m.message
+        for m in result.errors
+    )
+
+
+def test_cross_artifact_disabled(tmp_path: Path) -> None:
+    """Cross-artifact checks can be disabled via cross_artifact=False."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+
+    # Write a ref with dangling symbol_id — should pass when cross_artifact=False.
+    refs_record = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "ref_id": "ref:pkg/mod.py@L5:C0:name:g",
+        "ref_kind": "name",
+        "src_span": {
+            "path": "pkg/mod.py",
+            "start_line": 5,
+            "start_col": 0,
+            "end_line": 5,
+            "end_col": 1,
+        },
+        "module": "pkg.mod",
+        "expr": "g",
+        "resolved_to": {
+            "symbol_id": "sym:pkg/mod.py::pkg.mod.NONEXISTENT@L99:C0",
+            "qualified_name": "pkg.mod.NONEXISTENT",
+            "resolution": "local",
+            "confidence": 50,
+        },
+        "evidence": {"strategy": "scope_analysis", "confidence": 50},
+    }
+    (artifacts_dir / REFS_JSONL).write_text(
+        json.dumps(refs_record) + "\n", encoding="utf-8"
+    )
+
+    result = validate_artifacts(artifacts_dir, cross_artifact=False)
+
+    assert result.ok is True
+    assert not any(m.artifact == "cross_artifact" for m in result.errors)
+
+
+def test_cross_artifact_calls_module_unknown(tmp_path: Path) -> None:
+    """module field in calls.jsonl referencing unknown module produces an error."""
+    artifacts_dir = tmp_path / "artifacts"
+    _write_valid_artifacts(artifacts_dir)
+
+    calls_record = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "ref_id": "ref:unknown/x.py@L1:C0:call:bar",
+        "src_span": {
+            "path": "unknown/x.py",
+            "start_line": 1,
+            "start_col": 0,
+            "end_line": 1,
+            "end_col": 5,
+        },
+        "callee_expr": "bar",
+        "module": "unknown.x",
+        "resolved_to": None,
+        "evidence": {"strategy": "syntax_only", "confidence": 0},
+    }
+    (artifacts_dir / CALLS_JSONL).write_text(
+        json.dumps(calls_record) + "\n", encoding="utf-8"
+    )
+
+    result = validate_artifacts(artifacts_dir)
+
+    assert result.ok is False
+    assert any(
+        m.artifact == "cross_artifact"
+        and "Record module references unknown module" in m.message
+        and "unknown.x" in m.message
         for m in result.errors
     )
