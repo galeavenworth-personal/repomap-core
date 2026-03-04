@@ -16,7 +16,7 @@
 #   .kilocode/tools/start-stack.sh --stop    # Stop all managed components
 #
 # Prerequisites:
-#   - kilo serve must be running on port 4096 (started separately with op run)
+#   - kilo serve must be running on port 4096 (started separately; uses OAuth from auth.json)
 #   - temporal CLI installed (~/.temporalio/bin/temporal or on PATH)
 #   - daemon/node_modules installed (cd daemon && npm install)
 #   - oc-daemon/node_modules installed (cd oc-daemon && npm install)
@@ -213,8 +213,6 @@ do_start() {
         (cd "$DOLT_DATA_DIR" && "$dolt_cli" sql-server \
             --host 127.0.0.1 \
             --port "$DOLT_PORT" \
-            --user root \
-            --no-auto-commit \
             > /tmp/dolt-server.log 2>&1 &)
 
         for i in $(seq 1 10); do

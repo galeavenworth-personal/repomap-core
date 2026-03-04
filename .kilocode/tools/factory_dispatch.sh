@@ -133,7 +133,7 @@ if [[ -n "$KILO_PIDS" ]]; then
         sleep 0.5
     done
     sleep 1  # extra settle time
-    # Start fresh — KILO_API_KEY is inherited from op run wrapping this script
+    # Start fresh — kilo serve uses OAuth credentials from ~/.local/share/kilo/auth.json
     nohup kilo serve --port "$KILO_PORT" > /tmp/kilo-serve.log 2>&1 &
     log "$(timestamp) kilo serve restarting (PID $!), waiting for health..."
     # Wait for it to be ready (up to 20s)

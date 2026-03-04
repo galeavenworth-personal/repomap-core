@@ -16,6 +16,8 @@ from artifacts.models.artifacts.dependencies import DepsSummary
 from artifacts.models.artifacts.integrations import IntegrationRecord
 from artifacts.models.artifacts.refs import RefRecord
 from artifacts.models.artifacts.symbols import SymbolRecord
+from artifacts.summaries.refs_summary_builder import build_refs_summary
+from artifacts.utils import _write_json
 from contract.artifacts import (
     CALLS_JSONL,
     CALLS_RAW_JSONL,
@@ -24,6 +26,7 @@ from contract.artifacts import (
     INTEGRATIONS_STATIC_JSONL,
     MODULES_JSONL,
     REFS_JSONL,
+    REFS_SUMMARY_JSON,
     SYMBOLS_JSONL,
 )
 from rules.config import load_config, resolve_output_dir
@@ -134,6 +137,9 @@ def generate_all_artifacts(
     for d in call_dicts:
         CallRecord(**d)
 
+    refs_summary = build_refs_summary(ref_dicts, call_dicts)
+    _write_json(out_dir / REFS_SUMMARY_JSON, refs_summary)
+
     artifacts_list = [
         SYMBOLS_JSONL,
         MODULES_JSONL,
@@ -143,6 +149,7 @@ def generate_all_artifacts(
         CALLS_RAW_JSONL,
         REFS_JSONL,
         CALLS_JSONL,
+        REFS_SUMMARY_JSON,
     ]
 
     return {
@@ -152,5 +159,9 @@ def generate_all_artifacts(
         "cycle_count": len(deps_summary.cycles),
         "top_modules_count": len(deps_summary.top_modules),
         "integration_count": len(integrations),
+        "total_refs": refs_summary.total_refs,
+        "total_calls": refs_summary.total_calls,
+        "refs_resolved": refs_summary.refs_resolved,
+        "calls_resolved": refs_summary.calls_resolved,
         "artifacts": [str(out_dir / name) for name in artifacts_list],
     }

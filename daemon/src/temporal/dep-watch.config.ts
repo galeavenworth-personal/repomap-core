@@ -29,7 +29,7 @@ export const WATCHLIST: WatchedDependency[] = [
   {
     name: "kilo-cli",
     feedUrl: "https://github.com/Kilo-Org/kilocode/releases.atom",
-    pinnedVersion: "7.0.27",
+    pinnedVersion: "7.0.37",
     versionPrefix: "v",
     notes: "Forked from opencode. Model registry, serve API, auth changes.",
   },

@@ -8,7 +8,6 @@ from typing import Any
 
 from artifacts.write import generate_all_artifacts
 from contract.artifacts import (
-    ARTIFACT_SCHEMA_VERSION,
     CALLS_JSONL,
     CALLS_RAW_JSONL,
     DEPS_EDGELIST,
@@ -16,7 +15,6 @@ from contract.artifacts import (
     INTEGRATIONS_STATIC_JSONL,
     MODULES_JSONL,
     REFS_JSONL,
-    REFS_SUMMARY_JSON,
     SYMBOLS_JSONL,
 )
 from contract.validation import validate_artifacts
@@ -65,27 +63,6 @@ def test_artifact_contents_generated_from_committed_fixture(tmp_path: Path) -> N
 
     out_dir = tmp_path / "artifacts"
     generate_all_artifacts(root=repo_root, out_dir=out_dir)
-
-    # Write a stub refs_summary.json until the generation pipeline emits it
-    # (tracked by bead repomap-core-ywk.7).
-    refs = read_jsonl(out_dir / REFS_JSONL) if (out_dir / REFS_JSONL).exists() else []
-    calls = (
-        read_jsonl(out_dir / CALLS_JSONL) if (out_dir / CALLS_JSONL).exists() else []
-    )
-    refs_summary_stub = {
-        "schema_version": ARTIFACT_SCHEMA_VERSION,
-        "total_refs": len(refs),
-        "total_calls": len(calls),
-        "refs_resolved": 0,
-        "refs_unresolved": len(refs),
-        "calls_resolved": 0,
-        "calls_unresolved": len(calls),
-        "resolution_rate_refs": 0.0,
-        "resolution_rate_calls": 0.0,
-    }
-    (out_dir / REFS_SUMMARY_JSON).write_text(
-        json.dumps(refs_summary_stub), encoding="utf-8"
-    )
 
     validation = validate_artifacts(out_dir)
     assert validation.errors == [], [m.to_dict() for m in validation.errors]
