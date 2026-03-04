@@ -481,10 +481,11 @@ def _index_record(
             cross_index.record_modules.append((artifact_name, ref_id, module_val))
 
         # resolved_to.symbol_id (when internal resolution exists).
+        # Skip synthetic external IDs (ext:*) — they won't be in symbols.jsonl.
         resolved_to = getattr(record, "resolved_to", None)
         if resolved_to is not None:
             rt_symbol_id = getattr(resolved_to, "symbol_id", None)
-            if isinstance(rt_symbol_id, str):
+            if isinstance(rt_symbol_id, str) and not rt_symbol_id.startswith("ext:"):
                 cross_index.resolved_to_symbol_ids.append(
                     (artifact_name, ref_id, rt_symbol_id)
                 )
@@ -495,10 +496,11 @@ def _index_record(
                 )
 
         # Also check resolved_base_to if present.
+        # Skip synthetic external IDs (ext:*) — same as above.
         resolved_base_to = getattr(record, "resolved_base_to", None)
         if resolved_base_to is not None:
             rbt_symbol_id = getattr(resolved_base_to, "symbol_id", None)
-            if isinstance(rbt_symbol_id, str):
+            if isinstance(rbt_symbol_id, str) and not rbt_symbol_id.startswith("ext:"):
                 cross_index.resolved_to_symbol_ids.append(
                     (artifact_name, ref_id, rbt_symbol_id)
                 )

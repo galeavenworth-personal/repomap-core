@@ -24,6 +24,8 @@
  */
 
 import { Client, Connection } from "@temporalio/client";
+import { createConnection } from "net";
+import { execSync } from "child_process";
 import type { AgentTaskInput, AgentTaskResult, AgentTaskStatus } from "./workflows.js";
 
 const TASK_QUEUE = "agent-tasks";
@@ -100,7 +102,6 @@ async function main() {
   // 2. Dolt server (TCP check via fetch to MySQL port — will fail HTTP parse but connect succeeds)
   try {
     await new Promise<void>((resolve, reject) => {
-      const { createConnection } = require("net") as typeof import("net");
       const sock = createConnection({ host: "127.0.0.1", port: doltPort }, () => {
         sock.destroy();
         resolve();
@@ -115,7 +116,6 @@ async function main() {
 
   // 3. oc-daemon (check via process list — exec pgrep)
   try {
-    const { execSync } = require("child_process") as typeof import("child_process");
     execSync('pgrep -f "tsx.*oc-daemon/src/index.ts" || pgrep -f "node.*oc-daemon/build/index.js"', { stdio: "pipe" });
     checks.push({ name: "oc-daemon", ok: true, detail: "SSE → Dolt" });
   } catch {
@@ -125,7 +125,6 @@ async function main() {
   // 4. Temporal server (we'll know when we try to connect, but pre-check port)
   try {
     await new Promise<void>((resolve, reject) => {
-      const { createConnection } = require("net") as typeof import("net");
       const [host, portStr] = address.split(":");
       const sock = createConnection({ host, port: parseInt(portStr, 10) }, () => {
         sock.destroy();
@@ -141,7 +140,6 @@ async function main() {
 
   // 5. Temporal worker (check via process list)
   try {
-    const { execSync } = require("child_process") as typeof import("child_process");
     execSync('pgrep -f "tsx.*src/temporal/worker.ts"', { stdio: "pipe" });
     checks.push({ name: "Temporal worker", ok: true, detail: "polling agent-tasks" });
   } catch {

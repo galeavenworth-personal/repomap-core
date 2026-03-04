@@ -14,7 +14,7 @@
  * Run with:
  *   KILO_LIVE=1 npx vitest run tests/mode-routing-e2e.test.ts
  *
- * Requires: kilo serve running on localhost:4096 with KILO_API_KEY
+ * Requires: kilo serve running on localhost:4096 with OAuth credentials (kilo auth login)
  * Skipped by default (no KILO_LIVE env var) so it doesn't break CI.
  */
 

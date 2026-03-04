@@ -244,8 +244,8 @@ do_start() {
         fi
 
         log "Starting oc-daemon (SSE → Dolt)..."
-        KILO_HOST="$KILO_HOST" KILO_PORT="$KILO_PORT" DOLT_PORT="$DOLT_PORT" \
-            npx tsx "$OC_DAEMON_DIR/src/index.ts" > /tmp/oc-daemon.log 2>&1 &
+        (cd "$OC_DAEMON_DIR" && KILO_HOST="$KILO_HOST" KILO_PORT="$KILO_PORT" DOLT_PORT="$DOLT_PORT" \
+            npx tsx src/index.ts > /tmp/oc-daemon.log 2>&1 &)
         sleep 2
 
         if ! is_oc_daemon_running; then

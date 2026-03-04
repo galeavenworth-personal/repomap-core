@@ -119,8 +119,6 @@ require_cmd python3
 # kilo serve caches mode definitions at startup. In dev, we always restart
 # to ensure the latest .kilocodemodes is loaded.
 
-KILO_PORT="${KILO_PORT:-4096}"
-
 # Find ALL kilo serve processes (binary, node wrapper, op run wrapper)
 KILO_PIDS=$(pgrep -f "kilo serve" 2>/dev/null | grep -v "$$" || true)
 
@@ -129,16 +127,16 @@ if [[ -n "$KILO_PIDS" ]]; then
     echo "$KILO_PIDS" | xargs kill 2>/dev/null || true
     # Wait for port to be free (up to 5s)
     for i in $(seq 1 10); do
-        ss -tlnp 2>/dev/null | grep -q ":${KILO_PORT} " || break
+        ss -tlnp 2>/dev/null | grep -q ":${PORT} " || break
         sleep 0.5
     done
     sleep 1  # extra settle time
     # Start fresh — kilo serve uses OAuth credentials from ~/.local/share/kilo/auth.json
-    nohup kilo serve --port "$KILO_PORT" > /tmp/kilo-serve.log 2>&1 &
+    nohup kilo serve --port "$PORT" > /tmp/kilo-serve.log 2>&1 &
     log "$(timestamp) kilo serve restarting (PID $!), waiting for health..."
     # Wait for it to be ready (up to 20s)
     for i in $(seq 1 40); do
-        if curl -sf "http://127.0.0.1:${KILO_PORT}/session" >/dev/null 2>&1; then
+        if curl -sf "http://127.0.0.1:${PORT}/session" >/dev/null 2>&1; then
             log "$(timestamp) kilo serve healthy after ~$((i / 2))s"
             break
         fi
@@ -300,7 +298,8 @@ HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
     -H 'Content-Type: application/json' \
     -d @"$PROMPT_FILE" 2>/dev/null || echo "000")
 
-if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" && "$HTTP_CODE" != "204" ]]; then
+# Treat any 2xx status as success; fail on non-2xx (including curl failure "000").
+if [[ ! "$HTTP_CODE" =~ ^2[0-9]{2}$ ]]; then
     echo "ERROR: Prompt dispatch failed (HTTP ${HTTP_CODE})" >&2
     exit 4
 fi
