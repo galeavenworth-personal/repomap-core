@@ -458,6 +458,24 @@ def _check_schema_version(
             )
 
 
+def _index_resolution(
+    cross_index: _CrossArtifactIndex,
+    artifact_name: str,
+    ref_id: str,
+    resolution: object,
+) -> None:
+    """Index symbol_id and dst_module from a single resolution object."""
+    if resolution is None:
+        return
+    sym_id = getattr(resolution, "symbol_id", None)
+    # Skip synthetic external IDs (ext:*) — they won't be in symbols.jsonl.
+    if isinstance(sym_id, str) and not sym_id.startswith("ext:"):
+        cross_index.resolved_to_symbol_ids.append((artifact_name, ref_id, sym_id))
+    dst_mod = getattr(resolution, "dst_module", None)
+    if isinstance(dst_mod, str):
+        cross_index.resolved_to_dst_modules.append((artifact_name, ref_id, dst_mod))
+
+
 def _index_record(
     cross_index: _CrossArtifactIndex,
     artifact_name: str,
@@ -475,40 +493,34 @@ def _index_record(
     if artifact_name in ("refs", "calls"):
         ref_id = getattr(record, "ref_id", "")
 
-        # Module field should reference a module from modules.jsonl.
         module_val = getattr(record, "module", None)
         if isinstance(module_val, str):
             cross_index.record_modules.append((artifact_name, ref_id, module_val))
 
-        # resolved_to.symbol_id (when internal resolution exists).
-        # Skip synthetic external IDs (ext:*) — they won't be in symbols.jsonl.
-        resolved_to = getattr(record, "resolved_to", None)
-        if resolved_to is not None:
-            rt_symbol_id = getattr(resolved_to, "symbol_id", None)
-            if isinstance(rt_symbol_id, str) and not rt_symbol_id.startswith("ext:"):
-                cross_index.resolved_to_symbol_ids.append(
-                    (artifact_name, ref_id, rt_symbol_id)
-                )
-            rt_dst_module = getattr(resolved_to, "dst_module", None)
-            if isinstance(rt_dst_module, str):
-                cross_index.resolved_to_dst_modules.append(
-                    (artifact_name, ref_id, rt_dst_module)
-                )
+        _index_resolution(cross_index, artifact_name, ref_id, getattr(record, "resolved_to", None))
+        _index_resolution(cross_index, artifact_name, ref_id, getattr(record, "resolved_base_to", None))
 
-        # Also check resolved_base_to if present.
-        # Skip synthetic external IDs (ext:*) — same as above.
-        resolved_base_to = getattr(record, "resolved_base_to", None)
-        if resolved_base_to is not None:
-            rbt_symbol_id = getattr(resolved_base_to, "symbol_id", None)
-            if isinstance(rbt_symbol_id, str) and not rbt_symbol_id.startswith("ext:"):
-                cross_index.resolved_to_symbol_ids.append(
-                    (artifact_name, ref_id, rbt_symbol_id)
-                )
-            rbt_dst_module = getattr(resolved_base_to, "dst_module", None)
-            if isinstance(rbt_dst_module, str):
-                cross_index.resolved_to_dst_modules.append(
-                    (artifact_name, ref_id, rbt_dst_module)
-                )
+
+def _report_dangling(
+    known: set[str],
+    entries: list[tuple[str, str, str]],
+    artifacts_dir: Path,
+    result: ValidationResult,
+    msg_template: str,
+) -> None:
+    """Find values in *entries* missing from *known* and append errors."""
+    dangling: set[str] = set()
+    for _artifact, _ref, value in entries:
+        if value not in known:
+            dangling.add(value)
+    for value in sorted(dangling):
+        result.errors.append(
+            ValidationMessage(
+                artifact="cross_artifact",
+                path=artifacts_dir,
+                message=msg_template.format(value),
+            )
+        )
 
 
 def _validate_cross_artifact_invariants(
@@ -518,54 +530,28 @@ def _validate_cross_artifact_invariants(
 ) -> None:
     """Check invariants that span multiple artifact files."""
     # INV-1: resolved_to.symbol_id must exist in symbols.jsonl (when internal).
-    # We only flag when the symbol_ids set was populated (symbols.jsonl was present).
     if cross_index.symbol_ids:
-        dangling: set[str] = set()
-        for artifact_name, ref_id, symbol_id in cross_index.resolved_to_symbol_ids:
-            if symbol_id not in cross_index.symbol_ids:
-                dangling.add(symbol_id)
-        for symbol_id in sorted(dangling):
-            result.errors.append(
-                ValidationMessage(
-                    artifact="cross_artifact",
-                    path=artifacts_dir,
-                    message=(
-                        f"resolved_to.symbol_id references unknown symbol: {symbol_id}"
-                    ),
-                )
-            )
+        _report_dangling(
+            cross_index.symbol_ids, cross_index.resolved_to_symbol_ids,
+            artifacts_dir, result,
+            "resolved_to.symbol_id references unknown symbol: {}",
+        )
 
     # INV-2: module field in refs/calls must exist in modules.jsonl.
     if cross_index.module_names:
-        dangling_modules: set[str] = set()
-        for artifact_name, ref_id, module_val in cross_index.record_modules:
-            if module_val not in cross_index.module_names:
-                dangling_modules.add(module_val)
-        for module_val in sorted(dangling_modules):
-            result.errors.append(
-                ValidationMessage(
-                    artifact="cross_artifact",
-                    path=artifacts_dir,
-                    message=(f"Record module references unknown module: {module_val}"),
-                )
-            )
+        _report_dangling(
+            cross_index.module_names, cross_index.record_modules,
+            artifacts_dir, result,
+            "Record module references unknown module: {}",
+        )
 
     # INV-3: resolved_to.dst_module must exist in modules.jsonl.
     if cross_index.module_names:
-        dangling_dst: set[str] = set()
-        for artifact_name, ref_id, dst_module in cross_index.resolved_to_dst_modules:
-            if dst_module not in cross_index.module_names:
-                dangling_dst.add(dst_module)
-        for dst_module in sorted(dangling_dst):
-            result.errors.append(
-                ValidationMessage(
-                    artifact="cross_artifact",
-                    path=artifacts_dir,
-                    message=(
-                        f"resolved_to.dst_module references unknown module: {dst_module}"
-                    ),
-                )
-            )
+        _report_dangling(
+            cross_index.module_names, cross_index.resolved_to_dst_modules,
+            artifacts_dir, result,
+            "resolved_to.dst_module references unknown module: {}",
+        )
 
 
 __all__ = [

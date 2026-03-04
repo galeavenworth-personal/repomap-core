@@ -13,12 +13,28 @@
 import { describe, it, expect, beforeAll } from "vitest";
 
 const KILO_HOST = process.env.KILO_HOST ?? "127.0.0.1";
-const KILO_PORT = parseInt(process.env.KILO_PORT ?? "4096", 10);
+const KILO_PORT = Number.parseInt(process.env.KILO_PORT ?? "4096", 10);
 const BASE_URL = `http://${KILO_HOST}:${KILO_PORT}`;
 const SKIP = !process.env.KILO_LIVE;
 
 function kiloUrl(path: string): string {
   return `${BASE_URL}${path}`;
+}
+
+function isMessagesComplete(messages: Array<Record<string, unknown>>): boolean {
+  let hasStepFinish = false;
+  let hasRunningTools = false;
+  for (const msg of messages) {
+    const parts = (msg.parts as Array<Record<string, unknown>>) ?? [];
+    for (const part of parts) {
+      if (part.type === "step-finish") hasStepFinish = true;
+      const state = part.state as Record<string, unknown> | undefined;
+      if (part.type === "tool" && (state?.status === "running" || state?.status === "pending")) {
+        hasRunningTools = true;
+      }
+    }
+  }
+  return hasStepFinish && !hasRunningTools;
 }
 
 describe.skipIf(SKIP)("Temporal Pipeline — live kilo serve smoke test", () => {
@@ -112,24 +128,7 @@ describe.skipIf(SKIP)("Temporal Pipeline — live kilo serve smoke test", () => 
       }
 
       const messages = (await res.json()) as Array<Record<string, unknown>>;
-      let hasStepFinish = false;
-      let hasRunningTools = false;
-
-      for (const msg of messages) {
-        const parts = (msg.parts as Array<Record<string, unknown>>) ?? [];
-        for (const part of parts) {
-          if (part.type === "step-finish") hasStepFinish = true;
-          if (
-            part.type === "tool" &&
-            ((part.state as Record<string, unknown>)?.status === "running" ||
-              (part.state as Record<string, unknown>)?.status === "pending")
-          ) {
-            hasRunningTools = true;
-          }
-        }
-      }
-
-      if (hasStepFinish && !hasRunningTools) {
+      if (isMessagesComplete(messages)) {
         const elapsed = Math.round((Date.now() - startTime) / 1000);
         console.log(`[smoke] Session completed in ${elapsed}s`);
         return; // Success

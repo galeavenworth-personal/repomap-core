@@ -261,21 +261,18 @@ export async function pollUntilDone(
 
     // ── Determine if the active leaf is truly idle ──
     const leafIsActive =
-      leafSnap.thinking ||       // has open step (step-start without step-finish)
-      leafSnap.runningTools > 0 || // tools still running
-      !leafSnap.done;            // hasn't reached a terminal state yet
+      leafSnap.thinking || leafSnap.runningTools > 0 || !leafSnap.done;
+    const leafLabel = activeLeaf === sessionId ? "" : ` | leaf: ${activeLeaf.slice(0, 16)}`;
+    const elapsedSec = Math.round(elapsed / 1000);
 
     if (leafIsActive) {
       consecutiveIdleCount = 0;
       lastLeafParts = leafSnap.totalParts;
-
       const phase = leafSnap.thinking ? "thinking" : leafSnap.runningTools > 0 ? "tools_running" : "working";
-      const leafLabel = activeLeaf === sessionId ? "" : ` | leaf: ${activeLeaf.slice(0, 16)}`;
       log.info(
-        `[${Math.round(elapsed / 1000)}s] ${phase} | parts: ${tree.totalParts}, tools: ${tree.toolCalls} | $${tree.totalCost.toFixed(2)} | ${(tree.tokensInput + tree.tokensOutput).toLocaleString()} tok | children: ${tree.childCount}${leafLabel}`
+        `[${elapsedSec}s] ${phase} | parts: ${tree.totalParts}, tools: ${tree.toolCalls} | $${tree.totalCost.toFixed(2)} | ${(tree.tokensInput + tree.tokensOutput).toLocaleString()} tok | children: ${tree.childCount}${leafLabel}`
       );
     } else {
-      // Leaf looks idle — but reset counter if new parts appeared
       if (leafSnap.totalParts !== lastLeafParts) {
         consecutiveIdleCount = 0;
         lastLeafParts = leafSnap.totalParts;
@@ -283,24 +280,11 @@ export async function pollUntilDone(
       consecutiveIdleCount++;
 
       if (consecutiveIdleCount >= REQUIRED_IDLE_CONFIRMATIONS) {
-        log.info(
-          `Session tree completed: root ${sessionId} + ${tree.childCount} children | $${tree.totalCost.toFixed(2)} total | ${Math.round(elapsed / 1000)}s`
-        );
-        return {
-          sessionId,
-          totalParts: tree.totalParts,
-          toolCalls: tree.toolCalls,
-          durationMs: elapsed,
-          totalCost: tree.totalCost,
-          tokensInput: tree.tokensInput,
-          tokensOutput: tree.tokensOutput,
-        };
+        log.info(`Session tree completed: root ${sessionId} + ${tree.childCount} children | $${tree.totalCost.toFixed(2)} total | ${elapsedSec}s`);
+        return { sessionId, totalParts: tree.totalParts, toolCalls: tree.toolCalls, durationMs: elapsed, totalCost: tree.totalCost, tokensInput: tree.tokensInput, tokensOutput: tree.tokensOutput };
       }
 
-      const leafLabel = activeLeaf === sessionId ? "" : ` | leaf: ${activeLeaf.slice(0, 16)}`;
-      log.info(
-        `[${Math.round(elapsed / 1000)}s] idle (${consecutiveIdleCount}/${REQUIRED_IDLE_CONFIRMATIONS}) | parts: ${tree.totalParts}, tools: ${tree.toolCalls} | $${tree.totalCost.toFixed(2)}${leafLabel}`
-      );
+      log.info(`[${elapsedSec}s] idle (${consecutiveIdleCount}/${REQUIRED_IDLE_CONFIRMATIONS}) | parts: ${tree.totalParts}, tools: ${tree.toolCalls} | $${tree.totalCost.toFixed(2)}${leafLabel}`);
     }
 
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));

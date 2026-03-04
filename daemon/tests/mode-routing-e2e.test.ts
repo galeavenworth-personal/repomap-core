@@ -21,7 +21,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 
 const KILO_HOST = process.env.KILO_HOST ?? "127.0.0.1";
-const KILO_PORT = parseInt(process.env.KILO_PORT ?? "4096", 10);
+const KILO_PORT = Number.parseInt(process.env.KILO_PORT ?? "4096", 10);
 const BASE_URL = `http://${KILO_HOST}:${KILO_PORT}`;
 const SKIP = !process.env.KILO_LIVE;
 
@@ -95,6 +95,20 @@ interface ModeReport {
 const IDENTITY_PROMPT =
   "You are being tested for mode routing. Do NOT use any tools. Reply with ONLY this exact sentence: MODE_ROUTING_TEST_OK";
 
+function areMessagesComplete(messages: SessionMessage[]): boolean {
+  let hasStepFinish = false;
+  let hasRunningTools = false;
+  for (const msg of messages) {
+    for (const part of msg.parts ?? []) {
+      if (part.type === "step-finish") hasStepFinish = true;
+      if (part.type === "tool" && (part.state?.status === "running" || part.state?.status === "pending")) {
+        hasRunningTools = true;
+      }
+    }
+  }
+  return hasStepFinish && !hasRunningTools;
+}
+
 async function pollUntilDone(
   sessionId: string,
   timeoutMs: number
@@ -108,33 +122,38 @@ async function pollUntilDone(
       await new Promise((r) => setTimeout(r, interval));
       continue;
     }
-
     const messages = (await res.json()) as SessionMessage[];
-    let hasStepFinish = false;
-    let hasRunningTools = false;
-
-    for (const msg of messages) {
-      for (const part of msg.parts ?? []) {
-        if (part.type === "step-finish") hasStepFinish = true;
-        if (
-          part.type === "tool" &&
-          (part.state?.status === "running" || part.state?.status === "pending")
-        ) {
-          hasRunningTools = true;
-        }
-      }
-    }
-
-    if (hasStepFinish && !hasRunningTools) {
-      return messages;
-    }
-
+    if (areMessagesComplete(messages)) return messages;
     await new Promise((r) => setTimeout(r, interval));
   }
 
-  throw new Error(
-    `Session ${sessionId} did not complete within ${timeoutMs / 1000}s`
-  );
+  throw new Error(`Session ${sessionId} did not complete within ${timeoutMs / 1000}s`);
+}
+
+interface MessageAccum {
+  mode: string | null;
+  agent: string | null;
+  model: string | null;
+  provider: string | null;
+  cost: number;
+  tokensInput: number;
+  tokensOutput: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+function accumulateAssistantInfo(msg: SessionMessage, acc: MessageAccum): void {
+  const info = msg.info;
+  if (!info || info.role !== "assistant") return;
+  if (!acc.mode && info.mode) acc.mode = info.mode;
+  if (!acc.agent && info.agent) acc.agent = info.agent;
+  if (!acc.model && info.modelID) acc.model = info.modelID;
+  if (!acc.provider && info.providerID) acc.provider = info.providerID;
+  acc.cost += info.cost ?? 0;
+  acc.tokensInput += info.tokens?.input ?? 0;
+  acc.tokensOutput += info.tokens?.output ?? 0;
+  acc.cacheRead += info.tokens?.cache?.read ?? 0;
+  acc.cacheWrite += info.tokens?.cache?.write ?? 0;
 }
 
 function extractReport(
@@ -142,51 +161,21 @@ function extractReport(
   sessionId: string,
   messages: SessionMessage[]
 ): ModeReport {
-  let reportedMode: string | null = null;
-  let reportedAgent: string | null = null;
-  let reportedModel: string | null = null;
-  let reportedProvider: string | null = null;
-  let cost = 0;
-  let tokensInput = 0;
-  let tokensOutput = 0;
-  let cacheRead = 0;
-  let cacheWrite = 0;
+  const acc: MessageAccum = {
+    mode: null, agent: null, model: null, provider: null,
+    cost: 0, tokensInput: 0, tokensOutput: 0, cacheRead: 0, cacheWrite: 0,
+  };
+  for (const msg of messages) accumulateAssistantInfo(msg, acc);
 
-  for (const msg of messages) {
-    if (msg.info?.role === "assistant") {
-      if (!reportedMode && msg.info.mode) reportedMode = msg.info.mode;
-      if (!reportedAgent && msg.info.agent) reportedAgent = msg.info.agent;
-      if (!reportedModel && msg.info.modelID) reportedModel = msg.info.modelID;
-      if (!reportedProvider && msg.info.providerID)
-        reportedProvider = msg.info.providerID;
-
-      cost += msg.info.cost ?? 0;
-      tokensInput += msg.info.tokens?.input ?? 0;
-      tokensOutput += msg.info.tokens?.output ?? 0;
-      cacheRead += msg.info.tokens?.cache?.read ?? 0;
-      cacheWrite += msg.info.tokens?.cache?.write ?? 0;
-    }
-  }
-
-  const fullModelId =
-    reportedProvider && reportedModel
-      ? `${reportedProvider}/${reportedModel}`
-      : reportedModel;
+  const fullModelId = acc.provider && acc.model ? `${acc.provider}/${acc.model}` : acc.model;
 
   return {
-    agent,
-    sessionId,
-    reportedMode,
-    reportedAgent,
-    reportedModel,
-    reportedProvider,
-    fullModelId,
-    expectedModel: EXPECTED_ROUTING[agent],
-    cost,
-    tokensInput,
-    tokensOutput,
-    cacheRead,
-    cacheWrite,
+    agent, sessionId,
+    reportedMode: acc.mode, reportedAgent: acc.agent,
+    reportedModel: acc.model, reportedProvider: acc.provider,
+    fullModelId, expectedModel: EXPECTED_ROUTING[agent],
+    cost: acc.cost, tokensInput: acc.tokensInput, tokensOutput: acc.tokensOutput,
+    cacheRead: acc.cacheRead, cacheWrite: acc.cacheWrite,
     error: null,
   };
 }

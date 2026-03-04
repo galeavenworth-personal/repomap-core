@@ -24,8 +24,8 @@
  */
 
 import { Client, Connection } from "@temporalio/client";
-import { createConnection } from "net";
-import { execSync } from "child_process";
+import { createConnection } from "node:net";
+import { execSync } from "node:child_process";
 import type { AgentTaskInput, AgentTaskResult, AgentTaskStatus } from "./workflows.js";
 
 const TASK_QUEUE = "agent-tasks";
@@ -126,7 +126,7 @@ async function main() {
   try {
     await new Promise<void>((resolve, reject) => {
       const [host, portStr] = address.split(":");
-      const sock = createConnection({ host, port: parseInt(portStr, 10) }, () => {
+      const sock = createConnection({ host, port: Number.parseInt(portStr, 10) }, () => {
         sock.destroy();
         resolve();
       });
