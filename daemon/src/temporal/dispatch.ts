@@ -24,14 +24,62 @@
  */
 
 import { Client, Connection } from "@temporalio/client";
+import { execFileSync } from "node:child_process";
+import { accessSync, constants } from "node:fs";
+import { createConnection } from "node:net";
 import type { AgentTaskInput, AgentTaskResult, AgentTaskStatus } from "./workflows.js";
 
 const TASK_QUEUE = "agent-tasks";
 
-async function main() {
-  const args = process.argv.slice(2);
+/**
+ * Resolve a binary to its absolute path, treating it as an explicit dependency.
+ * Fails fast at startup if the binary is not found, rather than at runtime.
+ */
+function resolveBinary(name: string, fallbackPaths: string[] = []): string {
+  // Try which first (standard POSIX)
+  try {
+    const resolved = execFileSync("/usr/bin/which", [name], {
+      stdio: "pipe",
+      encoding: "utf-8",
+    }).trim();
+    if (resolved) return resolved;
+  } catch {
+    // which not found or binary not in PATH
+  }
 
-  // Parse options
+  // Try known fallback locations
+  for (const p of fallbackPaths) {
+    try {
+      accessSync(p, constants.X_OK);
+      return p;
+    } catch {
+      // not at this path
+    }
+  }
+
+  // Return the bare name as last resort — execFileSync will still search PATH
+  // but log a warning so we know the dependency wasn't pinned
+  console.warn(
+    `[dispatch] Warning: could not resolve absolute path for '${name}', falling back to PATH lookup`,
+  );
+  return name;
+}
+
+const PGREP = resolveBinary("pgrep", ["/usr/bin/pgrep", "/bin/pgrep"]);
+
+interface ParsedArgs {
+  agent: string;
+  title: string | undefined;
+  kiloHost: string;
+  kiloPort: number;
+  timeoutMs: number;
+  pollIntervalMs: number;
+  noWait: boolean;
+  workflowId: string | undefined;
+  prompt: string;
+}
+
+function parseDispatchArgs(args: string[]): ParsedArgs {
   let agent = "plant-manager";
   let title: string | undefined;
   let kiloHost = "127.0.0.1";
@@ -54,13 +102,13 @@ async function main() {
         kiloHost = args[++i];
         break;
       case "--port":
-        kiloPort = parseInt(args[++i], 10);
+        kiloPort = Number.parseInt(args[++i], 10);
         break;
       case "--timeout":
-        timeoutMs = parseInt(args[++i], 10);
+        timeoutMs = Number.parseInt(args[++i], 10);
         break;
       case "--poll":
-        pollIntervalMs = parseInt(args[++i], 10);
+        pollIntervalMs = Number.parseInt(args[++i], 10);
         break;
       case "--no-wait":
         noWait = true;
@@ -73,7 +121,116 @@ async function main() {
     }
   }
 
-  const prompt = positional.join(" ");
+  return {
+    agent,
+    title,
+    kiloHost,
+    kiloPort,
+    timeoutMs,
+    pollIntervalMs,
+    noWait,
+    workflowId,
+    prompt: positional.join(" "),
+  };
+}
+
+async function canConnectTcp(host: string, port: number): Promise<boolean> {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const sock = createConnection({ host, port }, () => {
+        sock.destroy();
+        resolve();
+      });
+      sock.on("error", reject);
+      sock.setTimeout(2000, () => {
+        sock.destroy();
+        reject(new Error("timeout"));
+      });
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runPreflightChecks(
+  kiloHost: string,
+  kiloPort: number,
+  doltPort: number,
+  address: string,
+): Promise<boolean> {
+  console.log("[dispatch] Pre-flight: checking all 5 stack components...");
+  const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
+
+  try {
+    const res = await fetch(`http://${kiloHost}:${kiloPort}/session`);
+    checks.push({ name: "kilo serve", ok: res.ok, detail: `${kiloHost}:${kiloPort}` });
+  } catch {
+    checks.push({ name: "kilo serve", ok: false, detail: `${kiloHost}:${kiloPort} unreachable` });
+  }
+
+  const doltOk = await canConnectTcp("127.0.0.1", doltPort);
+  checks.push({
+    name: "Dolt server",
+    ok: doltOk,
+    detail: doltOk ? `port ${doltPort}` : `port ${doltPort} not listening`,
+  });
+
+  let ocDaemonOk = false;
+  try {
+    execFileSync(PGREP, ["-f", "tsx.*oc-daemon/src/index.ts"], { stdio: "pipe" });
+    ocDaemonOk = true;
+  } catch {
+    try {
+      execFileSync(PGREP, ["-f", "node.*oc-daemon/build/index.js"], { stdio: "pipe" });
+      ocDaemonOk = true;
+    } catch {
+      // neither process found
+    }
+  }
+  checks.push({
+    name: "oc-daemon",
+    ok: ocDaemonOk,
+    detail: ocDaemonOk ? "SSE → Dolt" : "NOT running (no flight recorder!)",
+  });
+
+  const [host, portStr] = address.split(":");
+  const temporalOk = await canConnectTcp(host, Number.parseInt(portStr, 10));
+  checks.push({
+    name: "Temporal server",
+    ok: temporalOk,
+    detail: temporalOk ? address : `${address} not reachable`,
+  });
+
+  try {
+    execFileSync(PGREP, ["-f", "tsx.*src/temporal/worker.ts"], { stdio: "pipe" });
+    checks.push({ name: "Temporal worker", ok: true, detail: "polling agent-tasks" });
+  } catch {
+    checks.push({ name: "Temporal worker", ok: false, detail: "NOT running" });
+  }
+
+  let allOk = true;
+  for (const c of checks) {
+    const icon = c.ok ? "✅" : "❌";
+    console.log(`[dispatch]   ${icon} ${c.name}: ${c.detail}`);
+    if (!c.ok) allOk = false;
+  }
+  return allOk;
+}
+
+async function main() {
+  const parsed = parseDispatchArgs(process.argv.slice(2));
+  const {
+    agent,
+    title,
+    kiloHost,
+    kiloPort,
+    timeoutMs,
+    pollIntervalMs,
+    noWait,
+    workflowId,
+    prompt,
+  } = parsed;
   if (!prompt) {
     console.error("Usage: npx tsx src/temporal/dispatch.ts [options] <prompt>");
     console.error("  or pipe prompt via stdin");
@@ -82,6 +239,23 @@ async function main() {
 
   const address = process.env.TEMPORAL_ADDRESS ?? "localhost:7233";
   const namespace = process.env.TEMPORAL_NAMESPACE ?? "default";
+  const doltPort = Number.parseInt(process.env.DOLT_PORT ?? "3307", 10);
+
+  const allOk = await runPreflightChecks(kiloHost, kiloPort, doltPort, address);
+
+  if (!allOk) {
+    console.error("\n═══════════════════════════════════════════════════════════");
+    console.error(" DISPATCH BLOCKED — Stack is incomplete");
+    console.error("═══════════════════════════════════════════════════════════");
+    console.error("Start the full stack first:");
+    console.error("  .kilocode/tools/start-stack.sh");
+    console.error("Or check status with:");
+    console.error("  .kilocode/tools/start-stack.sh --check");
+    console.error("═══════════════════════════════════════════════════════════");
+    process.exit(2);
+  }
+
+  console.log("[dispatch] Pre-flight passed (5/5 components healthy)");
 
   console.log(`[dispatch] Connecting to Temporal at ${address}...`);
   const connection = await Connection.connect({ address });
