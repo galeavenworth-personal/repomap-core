@@ -218,7 +218,6 @@ customModes:
       - `.venv/bin/python -m ruff check .`
       - `.venv/bin/python -m mypy src`
       - `.venv/bin/python -m pytest -m 'not live'`
-  - slug: product-skeptic
 
       ## Punch Card Exit Conditions
 
@@ -234,6 +233,9 @@ customModes:
         - `child_spawn:%` — Do not delegate from specialist mode
       - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "execute-subtask"`.
       - If the check fails, continue work, mint missing punches, and re-run until PASS.
+    source: project
+
+  - slug: product-skeptic
     name: Product Skeptic
     roleDefinition: |
       Adversarial product reasoning specialist. Stress tests repomap's identity,
