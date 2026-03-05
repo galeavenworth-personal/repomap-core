@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from artifacts.models.artifacts.calls_raw import CallRawRecord
 from artifacts.models.artifacts.calls import CallRecord
 from artifacts.models.artifacts.refs import RefRecord
+from artifacts.models.artifacts.refs_summary import RefsSummary
 from contract.artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     TIER1_ARTIFACT_SPECS,
@@ -65,7 +66,10 @@ class ValidationResult:
 
 
 def validate_artifacts(
-    artifacts_dir: Path, *, strict_schema_version: bool = False
+    artifacts_dir: Path,
+    *,
+    strict_schema_version: bool = False,
+    cross_artifact: bool = True,
 ) -> ValidationResult:
     result = ValidationResult()
 
@@ -89,6 +93,9 @@ def validate_artifacts(
         )
         return result
 
+    # Cross-artifact index: populated during per-artifact validation.
+    cross_index = _CrossArtifactIndex() if cross_artifact else None
+
     for artifact_name, spec in TIER1_ARTIFACT_SPECS.items():
         path = artifacts_dir / spec.filename
         if not path.exists():
@@ -109,9 +116,10 @@ def validate_artifacts(
                 model,
                 result,
                 strict_schema_version=strict_schema_version,
+                cross_index=cross_index,
             )
         elif spec.format == "json":
-            _validate_deps_summary(
+            _validate_json_artifact(
                 artifact_name,
                 path,
                 result,
@@ -128,7 +136,27 @@ def validate_artifacts(
                 )
             )
 
+    # Cross-artifact invariant checks.
+    if cross_index is not None:
+        _validate_cross_artifact_invariants(cross_index, artifacts_dir, result)
+
     return result
+
+
+@dataclass
+class _CrossArtifactIndex:
+    """Index built during per-artifact validation for cross-artifact checks."""
+
+    # All symbol_id values from symbols.jsonl.
+    symbol_ids: set[str] = field(default_factory=set)
+    # All module names from modules.jsonl (module field → path).
+    module_names: set[str] = field(default_factory=set)
+    # (artifact_name, ref_id, symbol_id) tuples from resolved_to in refs/calls.
+    resolved_to_symbol_ids: list[tuple[str, str, str]] = field(default_factory=list)
+    # (artifact_name, ref_id, module) tuples from refs/calls module fields.
+    record_modules: list[tuple[str, str, str]] = field(default_factory=list)
+    # (artifact_name, ref_id, dst_module) tuples from resolved_to.dst_module.
+    resolved_to_dst_modules: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 def _jsonl_model_for_artifact(artifact_name: str) -> type[_SchemaModel]:
@@ -155,6 +183,7 @@ def _validate_jsonl(
     result: ValidationResult,
     *,
     strict_schema_version: bool,
+    cross_index: _CrossArtifactIndex | None = None,
 ) -> None:
     try:
         handle = path.open("rb")
@@ -212,6 +241,10 @@ def _validate_jsonl(
                     else:
                         seen_symbol_ids.add(symbol_id)
 
+            # Populate cross-artifact index.
+            if cross_index is not None:
+                _index_record(cross_index, artifact_name, record)
+
             if not schema_present:
                 if not missing_schema_emitted:
                     _check_schema_version(
@@ -241,6 +274,10 @@ def _validate_jsonl(
                 )
                 mismatch_schema_emitted = True
 
+    # Feed collected symbol_ids into the cross-artifact index.
+    if seen_symbol_ids is not None and cross_index is not None:
+        cross_index.symbol_ids.update(seen_symbol_ids)
+
     for symbol_id in sorted(duplicate_symbol_ids):
         result.errors.append(
             ValidationMessage(
@@ -251,7 +288,19 @@ def _validate_jsonl(
         )
 
 
-def _validate_deps_summary(
+def _json_model_for_artifact(
+    artifact_name: str,
+) -> type[DepsSummary] | type[RefsSummary]:
+    """Return the Pydantic model for a JSON-format artifact."""
+    if artifact_name == "deps_summary":
+        return DepsSummary
+    if artifact_name == "refs_summary":
+        return RefsSummary
+    msg = f"Unknown json artifact: {artifact_name}"
+    raise ValueError(msg)
+
+
+def _validate_json_artifact(
     artifact_name: str,
     path: Path,
     result: ValidationResult,
@@ -275,19 +324,23 @@ def _validate_deps_summary(
             ValidationMessage(
                 artifact=artifact_name,
                 path=path,
-                message="Expected JSON object for deps_summary.json.",
+                message=f"Expected JSON object for {TIER1_ARTIFACT_SPECS[artifact_name].filename}.",
             )
         )
         return
 
     data = dict(raw)
-    if "cycles" not in data and "strongly_connected_components" in data:
-        data["cycles"] = data.get("strongly_connected_components")
-        data.pop("strongly_connected_components", None)
 
+    # Legacy compat for deps_summary.
+    if artifact_name == "deps_summary":
+        if "cycles" not in data and "strongly_connected_components" in data:
+            data["cycles"] = data.get("strongly_connected_components")
+            data.pop("strongly_connected_components", None)
+
+    model = _json_model_for_artifact(artifact_name)
     schema_present = "schema_version" in data
     try:
-        summary = DepsSummary.model_validate(data)
+        record = model.model_validate(data)
     except ValidationError as exc:
         result.errors.append(
             ValidationMessage(
@@ -303,7 +356,7 @@ def _validate_deps_summary(
         path,
         None,
         schema_present,
-        summary.schema_version,
+        record.schema_version,
         result,
         strict_schema_version=strict_schema_version,
     )
@@ -403,6 +456,115 @@ def _check_schema_version(
                     message=message,
                 )
             )
+
+
+def _index_resolution(
+    cross_index: _CrossArtifactIndex,
+    artifact_name: str,
+    ref_id: str,
+    resolution: object,
+) -> None:
+    """Index symbol_id and dst_module from a single resolution object."""
+    if resolution is None:
+        return
+    sym_id = getattr(resolution, "symbol_id", None)
+    # Skip synthetic external IDs (ext:*) — they won't be in symbols.jsonl.
+    if isinstance(sym_id, str) and not sym_id.startswith("ext:"):
+        cross_index.resolved_to_symbol_ids.append((artifact_name, ref_id, sym_id))
+    dst_mod = getattr(resolution, "dst_module", None)
+    if isinstance(dst_mod, str):
+        cross_index.resolved_to_dst_modules.append((artifact_name, ref_id, dst_mod))
+
+
+def _index_record(
+    cross_index: _CrossArtifactIndex,
+    artifact_name: str,
+    record: _SchemaModel,
+) -> None:
+    """Populate the cross-artifact index from a validated record."""
+    # Collect module names from modules.jsonl.
+    if artifact_name == "modules":
+        module_name = getattr(record, "module", None)
+        if isinstance(module_name, str):
+            cross_index.module_names.add(module_name)
+        return
+
+    # For refs / calls: collect module, resolved_to.symbol_id, resolved_to.dst_module.
+    if artifact_name in ("refs", "calls"):
+        ref_id = getattr(record, "ref_id", "")
+
+        module_val = getattr(record, "module", None)
+        if isinstance(module_val, str):
+            cross_index.record_modules.append((artifact_name, ref_id, module_val))
+
+        _index_resolution(
+            cross_index, artifact_name, ref_id, getattr(record, "resolved_to", None)
+        )
+        _index_resolution(
+            cross_index,
+            artifact_name,
+            ref_id,
+            getattr(record, "resolved_base_to", None),
+        )
+
+
+def _report_dangling(
+    known: set[str],
+    entries: list[tuple[str, str, str]],
+    artifacts_dir: Path,
+    result: ValidationResult,
+    msg_template: str,
+) -> None:
+    """Find values in *entries* missing from *known* and append errors."""
+    dangling: set[str] = set()
+    for _artifact, _ref, value in entries:
+        if value not in known:
+            dangling.add(value)
+    for value in sorted(dangling):
+        result.errors.append(
+            ValidationMessage(
+                artifact="cross_artifact",
+                path=artifacts_dir,
+                message=msg_template.format(value),
+            )
+        )
+
+
+def _validate_cross_artifact_invariants(
+    cross_index: _CrossArtifactIndex,
+    artifacts_dir: Path,
+    result: ValidationResult,
+) -> None:
+    """Check invariants that span multiple artifact files."""
+    # INV-1: resolved_to.symbol_id must exist in symbols.jsonl (when internal).
+    if cross_index.symbol_ids:
+        _report_dangling(
+            cross_index.symbol_ids,
+            cross_index.resolved_to_symbol_ids,
+            artifacts_dir,
+            result,
+            "resolved_to.symbol_id references unknown symbol: {}",
+        )
+
+    # INV-2: module field in refs/calls must exist in modules.jsonl.
+    if cross_index.module_names:
+        _report_dangling(
+            cross_index.module_names,
+            cross_index.record_modules,
+            artifacts_dir,
+            result,
+            "Record module references unknown module: {}",
+        )
+
+    # INV-3: resolved_to.dst_module must exist in modules.jsonl.
+    if cross_index.module_names:
+        _report_dangling(
+            cross_index.module_names,
+            cross_index.resolved_to_dst_modules,
+            artifacts_dir,
+            result,
+            "resolved_to.dst_module references unknown module: {}",
+        )
 
 
 __all__ = [

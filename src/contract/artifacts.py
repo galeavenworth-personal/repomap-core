@@ -19,6 +19,7 @@ INTEGRATIONS_STATIC_JSONL = "integrations_static.jsonl"
 CALLS_RAW_JSONL = "calls_raw.jsonl"
 REFS_JSONL = "refs.jsonl"
 CALLS_JSONL = "calls.jsonl"
+REFS_SUMMARY_JSON = "refs_summary.json"
 
 
 @dataclass(frozen=True)
@@ -73,5 +74,10 @@ TIER1_ARTIFACT_SPECS: dict[str, Tier1ArtifactSpec] = {
         filename=CALLS_JSONL,
         format="jsonl",
         required_fields_note="CallRecord fields required by contract.",
+    ),
+    "refs_summary": Tier1ArtifactSpec(
+        filename=REFS_SUMMARY_JSON,
+        format="json",
+        required_fields_note="RefsSummary fields required by contract.",
     ),
 }

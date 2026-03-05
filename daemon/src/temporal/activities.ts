@@ -31,6 +31,7 @@ export interface ProgressSnapshot {
   runningTools: number;
   lastToolName: string | null;
   done: boolean;
+  thinking: boolean;
   totalCost: number;
   tokensInput: number;
   tokensOutput: number;
@@ -72,26 +73,15 @@ export async function createSession(
   const res = await fetch(kiloUrl(config, "/session"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({}),
+    body: JSON.stringify(title ? { title } : {}),
   });
   if (!res.ok) {
     throw new Error(`Failed to create session: HTTP ${res.status}`);
   }
   const data = await res.json() as Record<string, unknown>;
   const sessionId = data.id as string;
-  log.info(`Session created: ${sessionId}`);
-
-  if (title) {
-    try {
-      await fetch(kiloUrl(config, `/session/${sessionId}`), {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title }),
-      });
-    } catch {
-      log.warn(`Could not set session title: ${title}`);
-    }
-  }
+  const titleSuffix = title ? ` (${title})` : "";
+  log.info(`Session created: ${sessionId}${titleSuffix}`);
 
   return { sessionId, title };
 }
@@ -144,9 +134,11 @@ export async function abortSession(
 }
 
 /**
- * Send a prompt to a kilo serve session (async dispatch).
- * Uses prompt_async endpoint so it returns immediately — the agent
- * processes in the background while pollUntilDone monitors progress.
+ * Send a prompt to a kilo serve session.
+ * Uses the ASYNC prompt endpoint (POST /session/{id}/prompt_async) so that
+ * this activity returns immediately and pollUntilDone can monitor progress.
+ * The sync endpoint (POST /session/{id}/message) blocks until the agent
+ * finishes — which prevents pollUntilDone from ever being reached.
  */
 export async function sendPrompt(
   config: KiloConfig,
@@ -154,27 +146,119 @@ export async function sendPrompt(
   prompt: string,
   agent?: string
 ): Promise<void> {
-  const url = `http://${config.kiloHost}:${config.kiloPort}/session/${sessionId}/prompt_async`;
-  const body = JSON.stringify({
+  const body = {
     parts: [{ type: "text", text: prompt }],
     ...(agent ? { agent } : {}),
-  });
-  const res = await fetch(url, {
+  };
+
+  const res = await fetch(kiloUrl(config, `/session/${sessionId}/prompt_async`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body,
+    body: JSON.stringify(body),
   });
-  if (!res.ok && res.status !== 204) {
-    const text = await res.text();
-    throw new Error(`Prompt dispatch failed (HTTP ${res.status}): ${text}`);
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Failed to send prompt (HTTP ${res.status}): ${text}`
+    );
   }
+
   log.info(`Prompt dispatched async to session ${sessionId} (${prompt.length} chars)`);
 }
 
 /**
- * Poll a session until it completes. Heartbeats report progress to Temporal.
- * If this activity is killed/restarted, Temporal retries from scratch (the
- * session itself is durable on kilo serve's side).
+ * Find the active leaf session in a delegation tree.
+ * Agents run serially (by design), so only the deepest child is active.
+ * Walks the tree recursively: parent → children → grandchildren → ...
+ * Returns the deepest session that has children, or the leaf.
+ */
+async function findActiveLeaf(config: KiloConfig, sessionId: string): Promise<string> {
+  const children = await getChildSessionIds(config, sessionId);
+  if (children.length === 0) return sessionId;
+  // Last child is typically the most recent delegation
+  const lastChild = children.at(-1);
+  if (!lastChild) return sessionId;
+  return findActiveLeaf(config, lastChild);
+}
+
+function classifyLeafPhase(snap: ProgressSnapshot): "thinking" | "tools_running" | "working" {
+  if (snap.thinking) {
+    return "thinking";
+  }
+  if (snap.runningTools > 0) {
+    return "tools_running";
+  }
+  return "working";
+}
+
+function logActiveLeafProgress(
+  elapsedSec: number,
+  tree: {
+    totalParts: number;
+    toolCalls: number;
+    totalCost: number;
+    tokensInput: number;
+    tokensOutput: number;
+    childCount: number;
+  },
+  leafLabel: string,
+  leafSnap: ProgressSnapshot,
+): void {
+  const phase = classifyLeafPhase(leafSnap);
+  log.info(
+    `[${elapsedSec}s] ${phase} | parts: ${tree.totalParts}, tools: ${tree.toolCalls} | $${tree.totalCost.toFixed(2)} | ${(tree.tokensInput + tree.tokensOutput).toLocaleString()} tok | children: ${tree.childCount}${leafLabel}`
+  );
+}
+
+function shouldComplete(
+  consecutiveIdleCount: number,
+  requiredIdleConfirmations: number,
+): boolean {
+  return consecutiveIdleCount >= requiredIdleConfirmations;
+}
+
+/**
+ * Collect aggregate cost/token stats for an entire session tree.
+ */
+async function getTreeStats(
+  config: KiloConfig,
+  sessionId: string,
+): Promise<{ totalCost: number; tokensInput: number; tokensOutput: number; totalParts: number; toolCalls: number; childCount: number }> {
+  const snap = await getProgressSnapshot(config, sessionId);
+  const children = await getChildSessionIds(config, sessionId);
+  let totalCost = snap.totalCost;
+  let tokensInput = snap.tokensInput;
+  let tokensOutput = snap.tokensOutput;
+  let totalParts = snap.totalParts;
+  let toolCalls = snap.toolCalls;
+  let childCount = children.length;
+
+  for (const cid of children) {
+    const childStats = await getTreeStats(config, cid);
+    totalCost += childStats.totalCost;
+    tokensInput += childStats.tokensInput;
+    tokensOutput += childStats.tokensOutput;
+    totalParts += childStats.totalParts;
+    toolCalls += childStats.toolCalls;
+    childCount += childStats.childCount;
+  }
+
+  return { totalCost, tokensInput, tokensOutput, totalParts, toolCalls, childCount };
+}
+
+/**
+ * Poll a session tree until it completes. Heartbeats report progress to Temporal.
+ *
+ * Completion rules:
+ * 1. A session with children is NEVER independently "done" — children must
+ *    all be idle first. You can't orphan delegated work.
+ * 2. Only the active leaf agent is polled for tool/thinking activity.
+ *    Agents run serially, so parents naturally idle while children work.
+ * 3. An agent with an open step (step-start without step-finish) is
+ *    "thinking" and counts as active, even with no running tools.
+ * 4. 6 consecutive idle confirmations (60s at 10s intervals) on the active
+ *    leaf before declaring the whole tree done.
  */
 export async function pollUntilDone(
   config: KiloConfig,
@@ -184,6 +268,10 @@ export async function pollUntilDone(
 ): Promise<AgentResult> {
   const startTime = Date.now();
 
+  const REQUIRED_IDLE_CONFIRMATIONS = 6;
+  let consecutiveIdleCount = 0;
+  let lastLeafParts = 0;
+
   while (true) {
     const elapsed = Date.now() - startTime;
     if (elapsed > timeoutMs) {
@@ -192,58 +280,47 @@ export async function pollUntilDone(
       );
     }
 
-    // ── Snapshot parent ──
-    const snapshot = await getProgressSnapshot(config, sessionId);
-    const parentIdle = await isSessionIdle(config, sessionId);
+    // ── Walk tree to find the active leaf ──
+    const activeLeaf = await findActiveLeaf(config, sessionId);
+    const leafSnap = await getProgressSnapshot(config, activeLeaf);
 
-    // ── Discover children (for completion tracking only) ──
-    const childIds = await getChildSessionIds(config, sessionId);
-    const childIdle: boolean[] = [];
-    let childTreeCost = 0;
-    for (const cid of childIds) {
-      const cidle = await isSessionIdle(config, cid);
-      childIdle.push(cidle);
-      const csnap = await getProgressSnapshot(config, cid);
-      childTreeCost += csnap.totalCost;
-    }
-
-    const totalTreeCost = snapshot.totalCost + childTreeCost;
+    // ── Aggregate tree stats for heartbeat/reporting ──
+    const tree = await getTreeStats(config, sessionId);
 
     // Heartbeat with progress — Temporal uses this to detect liveness
     heartbeat({
       elapsed: Math.round(elapsed / 1000),
-      totalParts: snapshot.totalParts,
-      toolCalls: snapshot.toolCalls,
-      cost: snapshot.totalCost,
-      treeCost: totalTreeCost,
-      children: childIds.length,
+      totalParts: tree.totalParts,
+      toolCalls: tree.toolCalls,
+      cost: tree.totalCost,
+      children: tree.childCount,
+      activeLeaf: activeLeaf === sessionId ? "self" : activeLeaf.slice(0, 16),
     });
 
-    // ── Completion: parent done AND all children idle ──
-    const allChildrenIdle = childIdle.every((idle) => idle);
-    if (snapshot.done && parentIdle && allChildrenIdle) {
-      log.info(
-        `Session tree completed: parent ${sessionId} + ${childIds.length} children | $${totalTreeCost.toFixed(2)} total | ${Math.round(elapsed / 1000)}s`
-      );
-      return {
-        sessionId,
-        totalParts: snapshot.totalParts,
-        toolCalls: snapshot.toolCalls,
-        durationMs: elapsed,
-        totalCost: totalTreeCost,
-        tokensInput: snapshot.tokensInput,
-        tokensOutput: snapshot.tokensOutput,
-      };
-    }
+    // ── Determine if the active leaf is truly idle ──
+    const leafIsActive =
+      leafSnap.thinking || leafSnap.runningTools > 0 || !leafSnap.done;
+    const leafLabel = activeLeaf === sessionId ? "" : ` | leaf: ${activeLeaf.slice(0, 16)}`;
+    const elapsedSec = Math.round(elapsed / 1000);
 
-    // ── Logging ──
-    const tokens = snapshot.tokensInput + snapshot.tokensOutput;
-    const childSummary = childIds.length > 0
-      ? ` | children: ${childIds.length} ($${childTreeCost.toFixed(2)})`
-      : "";
-    log.info(
-      `[${Math.round(elapsed / 1000)}s] Parts: ${snapshot.totalParts}, tools: ${snapshot.toolCalls} | $${snapshot.totalCost.toFixed(2)} | ${tokens.toLocaleString()} tok | idle: ${parentIdle}${childSummary}`
-    );
+    if (leafIsActive) {
+      consecutiveIdleCount = 0;
+      lastLeafParts = leafSnap.totalParts;
+      logActiveLeafProgress(elapsedSec, tree, leafLabel, leafSnap);
+    } else {
+      if (leafSnap.totalParts !== lastLeafParts) {
+        consecutiveIdleCount = 0;
+        lastLeafParts = leafSnap.totalParts;
+      }
+      consecutiveIdleCount++;
+
+      if (shouldComplete(consecutiveIdleCount, REQUIRED_IDLE_CONFIRMATIONS)) {
+        log.info(`Session tree completed: root ${sessionId} + ${tree.childCount} children | $${tree.totalCost.toFixed(2)} total | ${elapsedSec}s`);
+        return { sessionId, totalParts: tree.totalParts, toolCalls: tree.toolCalls, durationMs: elapsed, totalCost: tree.totalCost, tokensInput: tree.tokensInput, tokensOutput: tree.tokensOutput };
+      }
+
+      log.info(`[${elapsedSec}s] idle (${consecutiveIdleCount}/${REQUIRED_IDLE_CONFIRMATIONS}) | parts: ${tree.totalParts}, tools: ${tree.toolCalls} | $${tree.totalCost.toFixed(2)}${leafLabel}`);
+    }
 
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
@@ -256,6 +333,7 @@ interface PartAccumulator {
   runningTools: number;
   lastToolName: string | null;
   lastPartType: string | null;
+  openSteps: number;
   totalCost: number;
   tokensInput: number;
   tokensOutput: number;
@@ -283,9 +361,17 @@ function accumulatePart(acc: PartAccumulator, part: Record<string, unknown>): vo
   acc.totalParts++;
   acc.lastPartType = (part.type as string) ?? null;
 
+  // Track step-start / step-finish balance to detect "thinking" phase.
+  // An open step (step-start without matching step-finish) means the agent
+  // is actively processing — reasoning, preparing tool calls, etc.
+  if (part.type === "step-start") {
+    acc.openSteps++;
+  }
+
   // step-finish parts carry cost and token data
   // Format: { cost: number, tokens: { input: number, output: number, reasoning?: number } }
   if (part.type === "step-finish") {
+    acc.openSteps = Math.max(0, acc.openSteps - 1);
     if (typeof part.cost === "number") acc.totalCost += part.cost;
     const tokens = part.tokens as Record<string, unknown> | undefined;
     if (tokens) {
@@ -319,16 +405,27 @@ function isSessionDone(acc: PartAccumulator): boolean {
 }
 
 /**
- * Check session status via kilo serve API.
- * Returns true if the session is idle (not processing).
+ * Check if a session has no running/pending tools in its messages.
+ * kilo serve v7.x has no "status" field on session objects, so we
+ * detect idleness from the message stream instead.
  */
 async function isSessionIdle(config: KiloConfig, sessionId: string): Promise<boolean> {
   try {
-    const res = await fetch(kiloUrl(config, `/session/${sessionId}`));
+    const res = await fetch(kiloUrl(config, `/session/${sessionId}/message`));
     if (!res.ok) return false;
-    const data = await res.json() as Record<string, unknown>;
-    // Session is idle when not actively processing
-    return data.status === "idle" || data.status === "completed";
+    const messages = await res.json() as Array<Record<string, unknown>>;
+    for (const msg of messages) {
+      const parts = (msg.parts as Array<Record<string, unknown>>) ?? [];
+      for (const part of parts) {
+        if (part.type === "tool") {
+          const status = (part.state as Record<string, unknown>)?.status;
+          if (status === "running" || status === "pending") {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
   } catch {
     return false;
   }
@@ -343,17 +440,18 @@ async function getProgressSnapshot(
 ): Promise<ProgressSnapshot> {
   // Raw HTTP (activities.ts was ported from SDK in ab95f6c to fix sync prompt() blocking)
   const url = `http://${config.kiloHost}:${config.kiloPort}/session/${sessionId}/message`;
+  const empty: ProgressSnapshot = { totalParts: 0, toolCalls: 0, completedTools: 0, runningTools: 0, lastToolName: null, done: false, thinking: false, totalCost: 0, tokensInput: 0, tokensOutput: 0 };
   let messages: unknown;
   try {
     const res = await fetch(url);
     if (!res.ok) {
       log.warn(`getProgressSnapshot: ${res.status} for session ${sessionId}`);
-      return { totalParts: 0, toolCalls: 0, completedTools: 0, runningTools: 0, lastToolName: null, done: false, totalCost: 0, tokensInput: 0, tokensOutput: 0 };
+      return empty;
     }
     messages = await res.json();
   } catch (err) {
     log.warn(`getProgressSnapshot fetch failed for session ${sessionId}: ${err}`);
-    return { totalParts: 0, toolCalls: 0, completedTools: 0, runningTools: 0, lastToolName: null, done: false, totalCost: 0, tokensInput: 0, tokensOutput: 0 };
+    return empty;
   }
 
   const acc: PartAccumulator = {
@@ -363,6 +461,7 @@ async function getProgressSnapshot(
     runningTools: 0,
     lastToolName: null,
     lastPartType: null,
+    openSteps: 0,
     totalCost: 0,
     tokensInput: 0,
     tokensOutput: 0,
@@ -379,6 +478,7 @@ async function getProgressSnapshot(
     runningTools: acc.runningTools,
     lastToolName: acc.lastToolName,
     done: isSessionDone(acc),
+    thinking: acc.openSteps > 0,
     totalCost: acc.totalCost,
     tokensInput: acc.tokensInput,
     tokensOutput: acc.tokensOutput,

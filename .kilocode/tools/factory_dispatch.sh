@@ -115,19 +115,111 @@ require_cmd() {
 require_cmd curl
 require_cmd python3
 
-# ─── Phase 1: Health check ───────────────────────────────────────────────────
+# ─── Phase 0: Restart kilo serve to pick up .kilocodemodes changes ────────────
+# kilo serve caches mode definitions at startup. In dev, we always restart
+# to ensure the latest .kilocodemodes is loaded.
 
-log "$(timestamp) Checking kilo serve at ${BASE_URL}..."
+# Find ALL kilo serve processes (binary, node wrapper, op run wrapper)
+KILO_PIDS=$(pgrep -f "kilo serve" 2>/dev/null | grep -v "$$" || true)
 
-HEALTH=$(curl -sf "${BASE_URL}/global/health" 2>/dev/null || true)
+if [[ -n "$KILO_PIDS" ]]; then
+    log "$(timestamp) Killing kilo serve to pick up .kilocodemodes changes..."
+    echo "$KILO_PIDS" | xargs kill 2>/dev/null || true
+    # Wait for port to be free (up to 5s)
+    for i in $(seq 1 10); do
+        ss -tlnp 2>/dev/null | grep -q ":${PORT} " || break
+        sleep 0.5
+    done
+    sleep 1  # extra settle time
+    # Start fresh — kilo serve uses OAuth credentials from ~/.local/share/kilo/auth.json
+    nohup kilo serve --port "$PORT" > /tmp/kilo-serve.log 2>&1 &
+    log "$(timestamp) kilo serve restarting (PID $!), waiting for health..."
+    # Wait for it to be ready (up to 20s)
+    for i in $(seq 1 40); do
+        if curl -sf "http://127.0.0.1:${PORT}/session" >/dev/null 2>&1; then
+            log "$(timestamp) kilo serve healthy after ~$((i / 2))s"
+            break
+        fi
+        if [[ $i -eq 40 ]]; then
+            echo "ERROR: kilo serve failed to start after 20s. Check /tmp/kilo-serve.log" >&2
+            exit 1
+        fi
+        sleep 0.5
+    done
+else
+    log "$(timestamp) kilo serve not found — skipping restart"
+fi
+
+# ─── Phase 1: Full stack pre-flight check ────────────────────────────────────
+# ALL 5 components must be running. No exceptions. No partial stacks.
+# This prevents unrecorded sessions and wasted spend.
+
+DOLT_PORT="${DOLT_PORT:-3307}"
+PREFLIGHT_OK=true
+PREFLIGHT_MISSING=""
+
+log "$(timestamp) Pre-flight: checking all 5 stack components..."
+
+# 1. kilo serve
+HEALTH=$(curl -sf "${BASE_URL}/session" 2>/dev/null || true)
 if [[ -z "$HEALTH" ]]; then
-    echo "ERROR: kilo serve not reachable at ${BASE_URL}" >&2
-    echo "Start the stack first: cd daemon && npm run stack" >&2
+    PREFLIGHT_OK=false
+    PREFLIGHT_MISSING="${PREFLIGHT_MISSING}  ❌ kilo serve: NOT reachable at ${BASE_URL}\n"
+else
+    SESSION_COUNT=$(echo "$HEALTH" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
+    log "$(timestamp)   ✅ kilo serve (${SESSION_COUNT} sessions)"
+fi
+
+# 2. Dolt server
+if ss -tlnp 2>/dev/null | grep -q ":${DOLT_PORT} "; then
+    log "$(timestamp)   ✅ Dolt server (port ${DOLT_PORT})"
+else
+    PREFLIGHT_OK=false
+    PREFLIGHT_MISSING="${PREFLIGHT_MISSING}  ❌ Dolt server: NOT listening on port ${DOLT_PORT}\n"
+fi
+
+# 3. oc-daemon (flight recorder)
+if pgrep -f "oc-daemon.*src/index.ts" >/dev/null 2>&1 || \
+   pgrep -f "oc-daemon.*build/index.js" >/dev/null 2>&1; then
+    log "$(timestamp)   ✅ oc-daemon (SSE → Dolt)"
+else
+    PREFLIGHT_OK=false
+    PREFLIGHT_MISSING="${PREFLIGHT_MISSING}  ❌ oc-daemon: NOT running (no flight recorder — sessions will be unrecorded!)\n"
+fi
+
+# 4. Temporal server
+TEMPORAL_PORT="${TEMPORAL_PORT:-7233}"
+if ss -tlnp 2>/dev/null | grep -q ":${TEMPORAL_PORT} "; then
+    log "$(timestamp)   ✅ Temporal server (port ${TEMPORAL_PORT})"
+else
+    PREFLIGHT_OK=false
+    PREFLIGHT_MISSING="${PREFLIGHT_MISSING}  ❌ Temporal server: NOT listening on port ${TEMPORAL_PORT}\n"
+fi
+
+# 5. Temporal worker
+if pgrep -f "tsx.*src/temporal/worker.ts" >/dev/null 2>&1; then
+    log "$(timestamp)   ✅ Temporal worker"
+else
+    PREFLIGHT_OK=false
+    PREFLIGHT_MISSING="${PREFLIGHT_MISSING}  ❌ Temporal worker: NOT running\n"
+fi
+
+if [[ "$PREFLIGHT_OK" != true ]]; then
+    echo "" >&2
+    echo "═══════════════════════════════════════════════════════════" >&2
+    echo " DISPATCH BLOCKED — Stack is incomplete" >&2
+    echo "═══════════════════════════════════════════════════════════" >&2
+    echo -e "$PREFLIGHT_MISSING" >&2
+    echo "Start the full stack first:" >&2
+    echo "  .kilocode/tools/start-stack.sh" >&2
+    echo "" >&2
+    echo "Or check status with:" >&2
+    echo "  .kilocode/tools/start-stack.sh --check" >&2
+    echo "═══════════════════════════════════════════════════════════" >&2
     exit 2
 fi
 
-VERSION=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','?'))" 2>/dev/null || echo "?")
-log "$(timestamp) Connected to kilo serve v${VERSION}"
+log "$(timestamp) Pre-flight passed (5/5 components healthy)"
 
 # ─── Phase 2: Build prompt payload ───────────────────────────────────────────
 
@@ -197,12 +289,17 @@ log "$(timestamp) Title: ${TITLE}"
 
 # ─── Phase 4: Dispatch prompt ────────────────────────────────────────────────
 
+# Use async prompt endpoint (POST /session/{id}/prompt_async) so that the
+# curl returns immediately and the monitoring loop can track progress.
+# The sync endpoint (POST /session/{id}/message) blocks until the agent
+# finishes — which defeats the purpose of the polling loop.
 HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
     -X POST "${BASE_URL}/session/${SESSION_ID}/prompt_async" \
     -H 'Content-Type: application/json' \
     -d @"$PROMPT_FILE" 2>/dev/null || echo "000")
 
-if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "202" && "$HTTP_CODE" != "204" ]]; then
+# Treat any 2xx status as success; fail on non-2xx (including curl failure "000").
+if [[ ! "$HTTP_CODE" =~ ^2[0-9]{2}$ ]]; then
     echo "ERROR: Prompt dispatch failed (HTTP ${HTTP_CODE})" >&2
     exit 4
 fi
@@ -229,19 +326,11 @@ log "$(timestamp) Monitoring session (poll=${POLL_INTERVAL}s, timeout=${MAX_WAIT
 
 ELAPSED=0
 LAST_CHILDREN=0
+IDLE_COUNT=0
 
 while [[ $ELAPSED -lt $MAX_WAIT ]]; do
     sleep "$POLL_INTERVAL"
     ELAPSED=$((ELAPSED + POLL_INTERVAL))
-
-    # Check if any sessions are busy
-    BUSY=$(curl -sf "${BASE_URL}/session/status" 2>/dev/null \
-        | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-busy = sum(1 for s in data.values() if s.get('type') == 'busy')
-print(busy)
-" 2>/dev/null || echo "-1")
 
     # Count children
     CHILDREN=$(curl -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null \
@@ -256,13 +345,82 @@ print(len(children))
         LAST_CHILDREN="$CHILDREN"
     fi
 
-    if [[ "$BUSY" == "0" ]]; then
-        log "$(timestamp) All sessions idle — completed in ${ELAPSED}s"
-        break
-    elif [[ "$BUSY" == "-1" ]]; then
+    # Check session messages to determine if processing is complete.
+    # A session is done when it has a terminal step-finish (end_turn/stop, not tool-calls)
+    # and no running/pending tools. We require IDLE_CONFIRM consecutive idle polls
+    # to avoid the race where we poll between steps.
+    IDLE_CONFIRM=${IDLE_CONFIRM:-3}
+    DONE=$(curl -sf "${BASE_URL}/session/${SESSION_ID}/message" 2>/dev/null \
+        | python3 -c "
+import sys, json
+messages = json.load(sys.stdin)
+has_terminal_finish = False
+has_running_tools = False
+for msg in messages:
+    for part in msg.get('parts', []):
+        if part.get('type') == 'tool':
+            state = part.get('state', {})
+            if state.get('status') in ('running', 'pending'):
+                has_running_tools = True
+        if part.get('type') == 'step-finish':
+            reason = part.get('reason', '')
+            # tool-calls means the model is about to process tool results — NOT done
+            if reason in ('end_turn', 'stop', 'max_tokens', ''):
+                has_terminal_finish = True
+            elif reason == 'tool-calls':
+                has_terminal_finish = False  # reset — more work coming
+if has_terminal_finish and not has_running_tools:
+    print('yes')
+else:
+    print('no')
+" 2>/dev/null || echo "error")
+
+    if [[ "$DONE" == "yes" ]]; then
+        IDLE_COUNT=$((IDLE_COUNT + 1))
+        if [[ $IDLE_COUNT -lt $IDLE_CONFIRM ]]; then
+            log "$(timestamp) [${ELAPSED}s] Idle check ${IDLE_COUNT}/${IDLE_CONFIRM}, confirming..."
+            sleep "$POLL_INTERVAL"
+            continue
+        fi
+
+        # Confirmed idle — also verify all children are done
+        ALL_CHILDREN_DONE=true
+        if [[ "$CHILDREN" -gt 0 ]]; then
+            CHILD_IDS=$(curl -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null \
+                | python3 -c "import sys,json; [print(c['id']) for c in json.load(sys.stdin)]" 2>/dev/null)
+            while IFS= read -r cid; do
+                [[ -z "$cid" ]] && continue
+                CHILD_DONE=$(curl -sf "${BASE_URL}/session/${cid}/message" 2>/dev/null \
+                    | python3 -c "
+import sys, json
+msgs = json.load(sys.stdin)
+running = any(
+    p.get('state',{}).get('status') in ('running','pending')
+    for m in msgs for p in m.get('parts',[]) if p.get('type')=='tool'
+)
+print('no' if running else 'yes')
+" 2>/dev/null || echo "no")
+                if [[ "$CHILD_DONE" != "yes" ]]; then
+                    ALL_CHILDREN_DONE=false
+                    break
+                fi
+            done <<< "$CHILD_IDS"
+        fi
+
+        if [[ "$ALL_CHILDREN_DONE" == true ]]; then
+            log "$(timestamp) All sessions idle (${IDLE_COUNT}/${IDLE_CONFIRM} confirmations) — completed in ${ELAPSED}s"
+            break
+        else
+            IDLE_COUNT=0  # children still running, reset
+        fi
+    else
+        IDLE_COUNT=0  # not idle, reset counter
+    fi
+
+    if [[ "$DONE" == "error" ]]; then
         log "$(timestamp) [${ELAPSED}s] Warning: status check failed, retrying..."
     else
-        log "$(timestamp) [${ELAPSED}s] Busy sessions: ${BUSY}, children: ${CHILDREN}"
+        log "$(timestamp) [${ELAPSED}s] Parent done: ${DONE}, children: ${CHILDREN}, idle: ${IDLE_COUNT}/${IDLE_CONFIRM}"
     fi
 done
 
