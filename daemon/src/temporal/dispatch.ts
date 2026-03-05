@@ -30,10 +30,19 @@ import type { AgentTaskInput, AgentTaskResult, AgentTaskStatus } from "./workflo
 
 const TASK_QUEUE = "agent-tasks";
 
-async function main() {
-  const args = process.argv.slice(2);
+interface ParsedArgs {
+  agent: string;
+  title: string | undefined;
+  kiloHost: string;
+  kiloPort: number;
+  timeoutMs: number;
+  pollIntervalMs: number;
+  noWait: boolean;
+  workflowId: string | undefined;
+  prompt: string;
+}
 
-  // Parse options
+function parseDispatchArgs(args: string[]): ParsedArgs {
   let agent = "plant-manager";
   let title: string | undefined;
   let kiloHost = "127.0.0.1";
@@ -56,13 +65,13 @@ async function main() {
         kiloHost = args[++i];
         break;
       case "--port":
-        kiloPort = parseInt(args[++i], 10);
+        kiloPort = Number.parseInt(args[++i], 10);
         break;
       case "--timeout":
-        timeoutMs = parseInt(args[++i], 10);
+        timeoutMs = Number.parseInt(args[++i], 10);
         break;
       case "--poll":
-        pollIntervalMs = parseInt(args[++i], 10);
+        pollIntervalMs = Number.parseInt(args[++i], 10);
         break;
       case "--no-wait":
         noWait = true;
@@ -75,7 +84,105 @@ async function main() {
     }
   }
 
-  const prompt = positional.join(" ");
+  return {
+    agent,
+    title,
+    kiloHost,
+    kiloPort,
+    timeoutMs,
+    pollIntervalMs,
+    noWait,
+    workflowId,
+    prompt: positional.join(" "),
+  };
+}
+
+async function canConnectTcp(host: string, port: number): Promise<boolean> {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const sock = createConnection({ host, port }, () => {
+        sock.destroy();
+        resolve();
+      });
+      sock.on("error", reject);
+      sock.setTimeout(2000, () => {
+        sock.destroy();
+        reject(new Error("timeout"));
+      });
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runPreflightChecks(
+  kiloHost: string,
+  kiloPort: number,
+  doltPort: number,
+  address: string,
+): Promise<boolean> {
+  console.log("[dispatch] Pre-flight: checking all 5 stack components...");
+  const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
+
+  try {
+    const res = await fetch(`http://${kiloHost}:${kiloPort}/session`);
+    checks.push({ name: "kilo serve", ok: res.ok, detail: `${kiloHost}:${kiloPort}` });
+  } catch {
+    checks.push({ name: "kilo serve", ok: false, detail: `${kiloHost}:${kiloPort} unreachable` });
+  }
+
+  const doltOk = await canConnectTcp("127.0.0.1", doltPort);
+  checks.push({
+    name: "Dolt server",
+    ok: doltOk,
+    detail: doltOk ? `port ${doltPort}` : `port ${doltPort} not listening`,
+  });
+
+  try {
+    execSync('pgrep -f "tsx.*oc-daemon/src/index.ts" || pgrep -f "node.*oc-daemon/build/index.js"', { stdio: "pipe" });
+    checks.push({ name: "oc-daemon", ok: true, detail: "SSE → Dolt" });
+  } catch {
+    checks.push({ name: "oc-daemon", ok: false, detail: "NOT running (no flight recorder!)" });
+  }
+
+  const [host, portStr] = address.split(":");
+  const temporalOk = await canConnectTcp(host, Number.parseInt(portStr, 10));
+  checks.push({
+    name: "Temporal server",
+    ok: temporalOk,
+    detail: temporalOk ? address : `${address} not reachable`,
+  });
+
+  try {
+    execSync('pgrep -f "tsx.*src/temporal/worker.ts"', { stdio: "pipe" });
+    checks.push({ name: "Temporal worker", ok: true, detail: "polling agent-tasks" });
+  } catch {
+    checks.push({ name: "Temporal worker", ok: false, detail: "NOT running" });
+  }
+
+  let allOk = true;
+  for (const c of checks) {
+    const icon = c.ok ? "✅" : "❌";
+    console.log(`[dispatch]   ${icon} ${c.name}: ${c.detail}`);
+    if (!c.ok) allOk = false;
+  }
+  return allOk;
+}
+
+async function main() {
+  const parsed = parseDispatchArgs(process.argv.slice(2));
+  const {
+    agent,
+    title,
+    kiloHost,
+    kiloPort,
+    timeoutMs,
+    pollIntervalMs,
+    noWait,
+    workflowId,
+    prompt,
+  } = parsed;
   if (!prompt) {
     console.error("Usage: npx tsx src/temporal/dispatch.ts [options] <prompt>");
     console.error("  or pipe prompt via stdin");
@@ -84,75 +191,9 @@ async function main() {
 
   const address = process.env.TEMPORAL_ADDRESS ?? "localhost:7233";
   const namespace = process.env.TEMPORAL_NAMESPACE ?? "default";
-  const doltPort = parseInt(process.env.DOLT_PORT ?? "3307", 10);
+  const doltPort = Number.parseInt(process.env.DOLT_PORT ?? "3307", 10);
 
-  // ── Pre-flight: ALL 5 stack components must be running ──
-  // No partial stacks. No unrecorded sessions.
-  console.log("[dispatch] Pre-flight: checking all 5 stack components...");
-  const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
-
-  // 1. kilo serve
-  try {
-    const res = await fetch(`http://${kiloHost}:${kiloPort}/session`);
-    checks.push({ name: "kilo serve", ok: res.ok, detail: `${kiloHost}:${kiloPort}` });
-  } catch {
-    checks.push({ name: "kilo serve", ok: false, detail: `${kiloHost}:${kiloPort} unreachable` });
-  }
-
-  // 2. Dolt server (TCP check via fetch to MySQL port — will fail HTTP parse but connect succeeds)
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const sock = createConnection({ host: "127.0.0.1", port: doltPort }, () => {
-        sock.destroy();
-        resolve();
-      });
-      sock.on("error", reject);
-      sock.setTimeout(2000, () => { sock.destroy(); reject(new Error("timeout")); });
-    });
-    checks.push({ name: "Dolt server", ok: true, detail: `port ${doltPort}` });
-  } catch {
-    checks.push({ name: "Dolt server", ok: false, detail: `port ${doltPort} not listening` });
-  }
-
-  // 3. oc-daemon (check via process list — exec pgrep)
-  try {
-    execSync('pgrep -f "tsx.*oc-daemon/src/index.ts" || pgrep -f "node.*oc-daemon/build/index.js"', { stdio: "pipe" });
-    checks.push({ name: "oc-daemon", ok: true, detail: "SSE → Dolt" });
-  } catch {
-    checks.push({ name: "oc-daemon", ok: false, detail: "NOT running (no flight recorder!)" });
-  }
-
-  // 4. Temporal server (we'll know when we try to connect, but pre-check port)
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const [host, portStr] = address.split(":");
-      const sock = createConnection({ host, port: Number.parseInt(portStr, 10) }, () => {
-        sock.destroy();
-        resolve();
-      });
-      sock.on("error", reject);
-      sock.setTimeout(2000, () => { sock.destroy(); reject(new Error("timeout")); });
-    });
-    checks.push({ name: "Temporal server", ok: true, detail: address });
-  } catch {
-    checks.push({ name: "Temporal server", ok: false, detail: `${address} not reachable` });
-  }
-
-  // 5. Temporal worker (check via process list)
-  try {
-    execSync('pgrep -f "tsx.*src/temporal/worker.ts"', { stdio: "pipe" });
-    checks.push({ name: "Temporal worker", ok: true, detail: "polling agent-tasks" });
-  } catch {
-    checks.push({ name: "Temporal worker", ok: false, detail: "NOT running" });
-  }
-
-  // Report and gate
-  let allOk = true;
-  for (const c of checks) {
-    const icon = c.ok ? "✅" : "❌";
-    console.log(`[dispatch]   ${icon} ${c.name}: ${c.detail}`);
-    if (!c.ok) allOk = false;
-  }
+  const allOk = await runPreflightChecks(kiloHost, kiloPort, doltPort, address);
 
   if (!allOk) {
     console.error("\n═══════════════════════════════════════════════════════════");

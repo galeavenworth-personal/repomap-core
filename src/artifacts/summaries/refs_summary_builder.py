@@ -29,8 +29,14 @@ def _is_external(resolved_to: dict[str, Any]) -> bool:
 class _Tally:
     """Accumulator for resolution statistics."""
 
-    __slots__ = ("resolved", "unresolved", "internal", "external",
-                 "confidence_sum", "confidence_count")
+    __slots__ = (
+        "resolved",
+        "unresolved",
+        "internal",
+        "external",
+        "confidence_sum",
+        "confidence_count",
+    )
 
     def __init__(self) -> None:
         self.resolved = 0
@@ -58,7 +64,11 @@ class _Tally:
 
     @property
     def avg_confidence(self) -> float:
-        return self.confidence_sum / self.confidence_count if self.confidence_count > 0 else 0.0
+        return (
+            self.confidence_sum / self.confidence_count
+            if self.confidence_count > 0
+            else 0.0
+        )
 
 
 def build_refs_summary(
@@ -95,7 +105,9 @@ def build_refs_summary(
     total_refs = len(ref_dicts)
     total_calls = len(call_dicts)
     resolution_rate_refs = ref_tally.resolved / total_refs if total_refs > 0 else 0.0
-    resolution_rate_calls = call_tally.resolved / total_calls if total_calls > 0 else 0.0
+    resolution_rate_calls = (
+        call_tally.resolved / total_calls if total_calls > 0 else 0.0
+    )
 
     by_ref_kind = {
         kind: RefKindCounts(**counts) for kind, counts in sorted(by_kind.items())

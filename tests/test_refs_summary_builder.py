@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from artifacts.models.artifacts.refs_summary import RefsSummary
 from artifacts.summaries.refs_summary_builder import build_refs_summary
 
@@ -88,14 +90,14 @@ class TestEmptyInputs:
         assert result.refs_unresolved == 0
         assert result.calls_resolved == 0
         assert result.calls_unresolved == 0
-        assert result.resolution_rate_refs == 0.0
-        assert result.resolution_rate_calls == 0.0
+        assert result.resolution_rate_refs == pytest.approx(0.0)
+        assert result.resolution_rate_calls == pytest.approx(0.0)
         assert result.by_ref_kind == {}
         assert result.resolution_counts.internal == 0
         assert result.resolution_counts.external == 0
         assert result.resolution_counts.unresolved == 0
-        assert result.avg_confidence_refs == 0.0
-        assert result.avg_confidence_calls == 0.0
+        assert result.avg_confidence_refs == pytest.approx(0.0)
+        assert result.avg_confidence_calls == pytest.approx(0.0)
 
     def test_empty_refs_with_calls(self) -> None:
         call = _make_call(resolved_to=_make_resolved_to())
@@ -122,8 +124,8 @@ class TestUnresolvedOnly:
         assert result.total_refs == 3
         assert result.refs_resolved == 0
         assert result.refs_unresolved == 3
-        assert result.resolution_rate_refs == 0.0
-        assert result.avg_confidence_refs == 0.0
+        assert result.resolution_rate_refs == pytest.approx(0.0)
+        assert result.avg_confidence_refs == pytest.approx(0.0)
         assert result.resolution_counts.unresolved == 3
 
     def test_all_calls_unresolved(self) -> None:
@@ -132,8 +134,8 @@ class TestUnresolvedOnly:
         assert result.total_calls == 2
         assert result.calls_resolved == 0
         assert result.calls_unresolved == 2
-        assert result.resolution_rate_calls == 0.0
-        assert result.avg_confidence_calls == 0.0
+        assert result.resolution_rate_calls == pytest.approx(0.0)
+        assert result.avg_confidence_calls == pytest.approx(0.0)
         assert result.resolution_counts.unresolved == 2
 
     def test_all_unresolved_combined(self) -> None:
@@ -155,10 +157,10 @@ class TestFullyResolved:
         result = build_refs_summary(refs, [])
         assert result.refs_resolved == 2
         assert result.refs_unresolved == 0
-        assert result.resolution_rate_refs == 1.0
+        assert result.resolution_rate_refs == pytest.approx(1.0)
         assert result.resolution_counts.internal == 2
         assert result.resolution_counts.external == 0
-        assert result.avg_confidence_refs == 85.0
+        assert result.avg_confidence_refs == pytest.approx(85.0)
 
     def test_all_calls_resolved_external(self) -> None:
         resolved = _make_resolved_to(resolution="external", confidence=70)
@@ -166,10 +168,10 @@ class TestFullyResolved:
         result = build_refs_summary([], calls)
         assert result.calls_resolved == 1
         assert result.calls_unresolved == 0
-        assert result.resolution_rate_calls == 1.0
+        assert result.resolution_rate_calls == pytest.approx(1.0)
         assert result.resolution_counts.external == 1
         assert result.resolution_counts.internal == 0
-        assert result.avg_confidence_calls == 70.0
+        assert result.avg_confidence_calls == pytest.approx(70.0)
 
     def test_stdlib_is_external(self) -> None:
         resolved = _make_resolved_to(resolution="stdlib", confidence=95)
@@ -204,8 +206,8 @@ class TestMixed:
         assert result.total_refs == 2
         assert result.refs_resolved == 1
         assert result.refs_unresolved == 1
-        assert result.resolution_rate_refs == 0.5
-        assert result.avg_confidence_refs == 80.0
+        assert result.resolution_rate_refs == pytest.approx(0.5)
+        assert result.avg_confidence_refs == pytest.approx(80.0)
 
     def test_mixed_resolved_and_unresolved_calls(self) -> None:
         resolved = _make_resolved_to(confidence=60)
@@ -214,8 +216,8 @@ class TestMixed:
         assert result.total_calls == 2
         assert result.calls_resolved == 1
         assert result.calls_unresolved == 1
-        assert result.resolution_rate_calls == 0.5
-        assert result.avg_confidence_calls == 60.0
+        assert result.resolution_rate_calls == pytest.approx(0.5)
+        assert result.avg_confidence_calls == pytest.approx(60.0)
 
     def test_mixed_internal_and_external(self) -> None:
         internal = _make_resolved_to(resolution="local", confidence=90)
@@ -250,7 +252,7 @@ class TestMixed:
         r2 = _make_resolved_to(confidence=100)
         refs = [_make_ref(resolved_to=r1), _make_ref(resolved_to=r2)]
         result = build_refs_summary(refs, [])
-        assert result.avg_confidence_refs == 90.0
+        assert result.avg_confidence_refs == pytest.approx(90.0)
 
     def test_avg_confidence_calls_across_multiple(self) -> None:
         c1 = _make_resolved_to(confidence=60)
@@ -262,7 +264,7 @@ class TestMixed:
             _make_call(resolved_to=c3),
         ]
         result = build_refs_summary([], calls)
-        assert result.avg_confidence_calls == 80.0
+        assert result.avg_confidence_calls == pytest.approx(80.0)
 
 
 # ── by_ref_kind breakdown ────────────────────────────────────────────
@@ -352,16 +354,16 @@ class TestDeterminism:
 class TestResolutionRateEdgeCases:
     def test_resolution_rate_with_zero_total(self) -> None:
         result = build_refs_summary([], [])
-        assert result.resolution_rate_refs == 0.0
-        assert result.resolution_rate_calls == 0.0
+        assert result.resolution_rate_refs == pytest.approx(0.0)
+        assert result.resolution_rate_calls == pytest.approx(0.0)
 
     def test_resolution_rate_all_resolved(self) -> None:
         resolved = _make_resolved_to()
         refs = [_make_ref(resolved_to=resolved)]
         calls = [_make_call(resolved_to=resolved)]
         result = build_refs_summary(refs, calls)
-        assert result.resolution_rate_refs == 1.0
-        assert result.resolution_rate_calls == 1.0
+        assert result.resolution_rate_refs == pytest.approx(1.0)
+        assert result.resolution_rate_calls == pytest.approx(1.0)
 
     def test_resolution_rate_partial(self) -> None:
         resolved = _make_resolved_to()

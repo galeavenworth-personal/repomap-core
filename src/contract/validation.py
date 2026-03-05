@@ -497,8 +497,15 @@ def _index_record(
         if isinstance(module_val, str):
             cross_index.record_modules.append((artifact_name, ref_id, module_val))
 
-        _index_resolution(cross_index, artifact_name, ref_id, getattr(record, "resolved_to", None))
-        _index_resolution(cross_index, artifact_name, ref_id, getattr(record, "resolved_base_to", None))
+        _index_resolution(
+            cross_index, artifact_name, ref_id, getattr(record, "resolved_to", None)
+        )
+        _index_resolution(
+            cross_index,
+            artifact_name,
+            ref_id,
+            getattr(record, "resolved_base_to", None),
+        )
 
 
 def _report_dangling(
@@ -532,24 +539,30 @@ def _validate_cross_artifact_invariants(
     # INV-1: resolved_to.symbol_id must exist in symbols.jsonl (when internal).
     if cross_index.symbol_ids:
         _report_dangling(
-            cross_index.symbol_ids, cross_index.resolved_to_symbol_ids,
-            artifacts_dir, result,
+            cross_index.symbol_ids,
+            cross_index.resolved_to_symbol_ids,
+            artifacts_dir,
+            result,
             "resolved_to.symbol_id references unknown symbol: {}",
         )
 
     # INV-2: module field in refs/calls must exist in modules.jsonl.
     if cross_index.module_names:
         _report_dangling(
-            cross_index.module_names, cross_index.record_modules,
-            artifacts_dir, result,
+            cross_index.module_names,
+            cross_index.record_modules,
+            artifacts_dir,
+            result,
             "Record module references unknown module: {}",
         )
 
     # INV-3: resolved_to.dst_module must exist in modules.jsonl.
     if cross_index.module_names:
         _report_dangling(
-            cross_index.module_names, cross_index.resolved_to_dst_modules,
-            artifacts_dir, result,
+            cross_index.module_names,
+            cross_index.resolved_to_dst_modules,
+            artifacts_dir,
+            result,
             "resolved_to.dst_module references unknown module: {}",
         )
 

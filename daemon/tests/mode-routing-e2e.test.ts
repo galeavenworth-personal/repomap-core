@@ -144,7 +144,7 @@ interface MessageAccum {
 
 function accumulateAssistantInfo(msg: SessionMessage, acc: MessageAccum): void {
   const info = msg.info;
-  if (!info || info.role !== "assistant") return;
+  if (info?.role !== "assistant") return;
   if (!acc.mode && info.mode) acc.mode = info.mode;
   if (!acc.agent && info.agent) acc.agent = info.agent;
   if (!acc.model && info.modelID) acc.model = info.modelID;

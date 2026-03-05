@@ -323,19 +323,37 @@ function extractMetrics(messages: Array<Record<string, unknown>>): SessionMetric
 const JSON_FENCE_RE = /```json\s*\n?([\s\S]*?)```/;
 const BARE_ATTESTATION_RE = /\{[\s\S]*"attestation"[\s\S]*\}/;
 
+function parseAttestationText(text: string): Record<string, unknown> | null {
+  const fenced = JSON_FENCE_RE.exec(text);
+  if (fenced) {
+    try {
+      return JSON.parse(fenced[1].trim()) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+
+  const bare = BARE_ATTESTATION_RE.exec(text);
+  if (bare) {
+    try {
+      return JSON.parse(bare[0]) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 /** Extract attestation JSON from text parts. */
 function extractAttestationJson(messages: Array<Record<string, unknown>>): Record<string, unknown> | null {
   for (const msg of messages) {
     const parts = (msg.parts as Array<Record<string, unknown>>) ?? [];
     for (const part of parts) {
       if (part.type !== "text" || typeof part.text !== "string") continue;
-      const fenced = JSON_FENCE_RE.exec(part.text);
-      if (fenced) {
-        try { return JSON.parse(fenced[1].trim()); } catch { /* ignore */ }
-      }
-      const bare = BARE_ATTESTATION_RE.exec(part.text);
-      if (bare) {
-        try { return JSON.parse(bare[0]); } catch { /* ignore */ }
+      const parsed = parseAttestationText(part.text);
+      if (parsed) {
+        return parsed;
       }
     }
   }

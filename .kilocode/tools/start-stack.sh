@@ -51,23 +51,28 @@ is_kilo_healthy() {
     local response
     response=$(curl -sf "http://${KILO_HOST}:${KILO_PORT}/session" 2>/dev/null) || return 1
     echo "$response" | python3 -c "import sys,json; json.load(sys.stdin)" >/dev/null 2>&1
+    return 0
 }
 
 is_temporal_running() {
     ss -tlnp 2>/dev/null | grep -q ":${TEMPORAL_PORT} "
+    return 0
 }
 
 is_worker_running() {
     pgrep -f "tsx.*src/temporal/worker.ts" >/dev/null 2>&1
+    return 0
 }
 
 is_dolt_running() {
     ss -tlnp 2>/dev/null | grep -q ":${DOLT_PORT} "
+    return 0
 }
 
 is_oc_daemon_running() {
     pgrep -f "tsx.*oc-daemon/src/index.ts" >/dev/null 2>&1 || \
     pgrep -f "node.*oc-daemon/build/index.js" >/dev/null 2>&1
+    return 0
 }
 
 find_temporal_cli() {
@@ -181,6 +186,7 @@ do_stop() {
 
     # Note: Dolt and kilo serve are NOT stopped — they may be shared
     log "Done. (Dolt and kilo serve left running — stop manually if needed.)"
+    return 0
 }
 
 do_start() {

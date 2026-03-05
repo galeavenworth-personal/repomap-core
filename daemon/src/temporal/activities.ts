@@ -80,7 +80,8 @@ export async function createSession(
   }
   const data = await res.json() as Record<string, unknown>;
   const sessionId = data.id as string;
-  log.info(`Session created: ${sessionId}${title ? ` (${title})` : ""}`);
+  const titleSuffix = title ? ` (${title})` : "";
+  log.info(`Session created: ${sessionId}${titleSuffix}`);
 
   return { sessionId, title };
 }
@@ -176,8 +177,45 @@ async function findActiveLeaf(config: KiloConfig, sessionId: string): Promise<st
   const children = await getChildSessionIds(config, sessionId);
   if (children.length === 0) return sessionId;
   // Last child is typically the most recent delegation
-  const lastChild = children[children.length - 1];
+  const lastChild = children.at(-1);
+  if (!lastChild) return sessionId;
   return findActiveLeaf(config, lastChild);
+}
+
+function classifyLeafPhase(snap: ProgressSnapshot): "thinking" | "tools_running" | "working" {
+  if (snap.thinking) {
+    return "thinking";
+  }
+  if (snap.runningTools > 0) {
+    return "tools_running";
+  }
+  return "working";
+}
+
+function logActiveLeafProgress(
+  elapsedSec: number,
+  tree: {
+    totalParts: number;
+    toolCalls: number;
+    totalCost: number;
+    tokensInput: number;
+    tokensOutput: number;
+    childCount: number;
+  },
+  leafLabel: string,
+  leafSnap: ProgressSnapshot,
+): void {
+  const phase = classifyLeafPhase(leafSnap);
+  log.info(
+    `[${elapsedSec}s] ${phase} | parts: ${tree.totalParts}, tools: ${tree.toolCalls} | $${tree.totalCost.toFixed(2)} | ${(tree.tokensInput + tree.tokensOutput).toLocaleString()} tok | children: ${tree.childCount}${leafLabel}`
+  );
+}
+
+function shouldComplete(
+  consecutiveIdleCount: number,
+  requiredIdleConfirmations: number,
+): boolean {
+  return consecutiveIdleCount >= requiredIdleConfirmations;
 }
 
 /**
@@ -268,10 +306,7 @@ export async function pollUntilDone(
     if (leafIsActive) {
       consecutiveIdleCount = 0;
       lastLeafParts = leafSnap.totalParts;
-      const phase = leafSnap.thinking ? "thinking" : leafSnap.runningTools > 0 ? "tools_running" : "working";
-      log.info(
-        `[${elapsedSec}s] ${phase} | parts: ${tree.totalParts}, tools: ${tree.toolCalls} | $${tree.totalCost.toFixed(2)} | ${(tree.tokensInput + tree.tokensOutput).toLocaleString()} tok | children: ${tree.childCount}${leafLabel}`
-      );
+      logActiveLeafProgress(elapsedSec, tree, leafLabel, leafSnap);
     } else {
       if (leafSnap.totalParts !== lastLeafParts) {
         consecutiveIdleCount = 0;
@@ -279,7 +314,7 @@ export async function pollUntilDone(
       }
       consecutiveIdleCount++;
 
-      if (consecutiveIdleCount >= REQUIRED_IDLE_CONFIRMATIONS) {
+      if (shouldComplete(consecutiveIdleCount, REQUIRED_IDLE_CONFIRMATIONS)) {
         log.info(`Session tree completed: root ${sessionId} + ${tree.childCount} children | $${tree.totalCost.toFixed(2)} total | ${elapsedSec}s`);
         return { sessionId, totalParts: tree.totalParts, toolCalls: tree.toolCalls, durationMs: elapsed, totalCost: tree.totalCost, tokensInput: tree.tokensInput, tokensOutput: tree.tokensOutput };
       }
