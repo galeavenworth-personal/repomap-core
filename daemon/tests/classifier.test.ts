@@ -1,10 +1,29 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyEvent, type RawEvent } from "../src/classifier/index.js";
+import { classifyEvent, type RawEvent, toSnakeCase } from "../src/classifier/index.js";
 
 function makeEvent(type: string, properties: Record<string, unknown> = {}): RawEvent {
   return { type, properties };
 }
+
+describe("toSnakeCase", () => {
+  it("converts camelCase to snake_case", () => {
+    expect(toSnakeCase("editFile")).toBe("edit_file");
+    expect(toSnakeCase("updateTodoList")).toBe("update_todo_list");
+  });
+
+  it("keeps already_snake_case unchanged", () => {
+    expect(toSnakeCase("already_snake")).toBe("already_snake");
+  });
+
+  it("converts PascalCase to snake_case", () => {
+    expect(toSnakeCase("ReadFile")).toBe("read_file");
+  });
+
+  it("keeps single words as lowercase single words", () => {
+    expect(toSnakeCase("read")).toBe("read");
+  });
+});
 
 describe("classifyEvent", () => {
   it("returns null for unrecognized event types", () => {
@@ -28,7 +47,7 @@ describe("classifyEvent", () => {
     expect(result).not.toBeNull();
     expect(result?.taskId).toBe("daemon-f9x");
     expect(result?.punchType).toBe("tool_call");
-    expect(result?.punchKey).toBe("readFile");
+    expect(result?.punchKey).toBe("read_file");
     expect(result?.observedAt).toBeInstanceOf(Date);
     expect(result?.sourceHash).toMatch(/^[a-f0-9]{64}$/);
   });
@@ -97,7 +116,91 @@ describe("classifyEvent", () => {
     expect(result).not.toBeNull();
     expect(result?.taskId).toBe("daemon-error");
     expect(result?.punchType).toBe("tool_call");
-    expect(result?.punchKey).toBe("editFile");
+    expect(result?.punchKey).toBe("edit_file");
+  });
+
+  it("maps task tool calls to child_spawn using subagent_type", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-child",
+          tool: "task",
+          input: { subagent_type: "process-orchestrator" },
+          state: { status: "completed" },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("child_spawn");
+    expect(result?.punchKey).toBe("process-orchestrator");
+  });
+
+  it("maps bash gate commands to gate_pass", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-gate",
+          tool: "bash",
+          input: { command: "ruff check ." },
+          state: { status: "completed" },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("gate_pass");
+    expect(result?.punchKey).toBe("ruff-check");
+  });
+
+  it("maps failed bash gate commands to gate_fail", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-gate-fail",
+          tool: "bash",
+          input: { command: "pytest -q" },
+          state: { status: "error" },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("gate_fail");
+    expect(result?.punchKey).toBe("pytest");
+  });
+
+  it("maps non-gate bash commands to command_exec", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-command",
+          tool: "bash",
+          input: { command: "ls -la" },
+          state: { status: "completed" },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("command_exec");
+    expect(result?.punchKey).toBe("bash");
+  });
+
+  it("maps MCP tools to mcp_call", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-mcp",
+          tool: "augment-context-engine_codebase-retrieval",
+          state: { status: "completed" },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("mcp_call");
+    expect(result?.punchKey).toBe("codebase___retrieval");
   });
 
   it("extracts task ID from message part sessionID or defaults unknown", () => {

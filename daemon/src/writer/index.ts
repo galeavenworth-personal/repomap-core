@@ -70,6 +70,13 @@ export interface DoltWriter {
     ts: number;
   }): Promise<void>;
   writeChildRelation(parentId: string, childId: string): Promise<void>;
+  writeCheckpoint(checkpoint: {
+    taskId: string;
+    cardId: string;
+    status: "pass" | "fail";
+    validatedAt: Date;
+    missingPunches?: string;
+  }): Promise<void>;
   syncChildRelsFromPunches(): Promise<number>;
   disconnect(): Promise<void>;
 }
@@ -321,6 +328,21 @@ export function createDoltWriter(config: DoltConfig): DoltWriter {
       await connection.execute(
         "INSERT IGNORE INTO child_rels (parent_id, child_id) VALUES (?, ?)",
         [parentId, childId]
+      );
+    },
+
+    async writeCheckpoint(checkpoint) {
+      if (!connection) throw new Error("Not connected to Dolt");
+      await connection.execute(
+        `INSERT INTO checkpoints (task_id, card_id, status, validated_at, missing_punches)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          checkpoint.taskId,
+          checkpoint.cardId,
+          checkpoint.status,
+          checkpoint.validatedAt,
+          checkpoint.missingPunches ?? null,
+        ]
       );
     },
 

@@ -16,7 +16,8 @@
     "temporal:worker": "tsx src/temporal/worker.ts",
     "temporal:dispatch": "tsx src/temporal/dispatch.ts",
     "temporal:dep-watch": "tsx src/temporal/dep-watch.cli.ts",
-    "backfill": "tsx src/backfill/kilo-store.ts"
+    "backfill": "tsx src/backfill/kilo-store.ts",
+    "test:e2e:enforcement": "KILO_LIVE=1 vitest run tests/punch-card-enforcement-e2e.test.ts --timeout 600000"
   },
   "keywords": [
     "opencode",

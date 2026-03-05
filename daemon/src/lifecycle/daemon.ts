@@ -14,8 +14,11 @@
  */
 
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 import { classifyEvent, type RawEvent } from "../classifier/index.js";
+import { PunchCardValidator } from "../governor/punch-card-validator.js";
 import { createDoltWriter, type DoltWriter } from "../writer/index.js";
 import { runCatchUp } from "./catchup.js";
 
@@ -35,6 +38,10 @@ export interface Daemon {
 }
 
 type OcClient = ReturnType<typeof createOpencodeClient>;
+type ModeCardMap = Record<string, string>;
+
+const MODE_CARD_MAP_URL = new URL("../../../.kilocode/mode-card-map.json", import.meta.url);
+let modeCardMapCache: ModeCardMap | null = null;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -91,6 +98,109 @@ function resolveMessageRole(part: Record<string, unknown>, properties: Record<st
   return "assistant";
 }
 
+async function loadModeCardMap(): Promise<ModeCardMap> {
+  if (modeCardMapCache) return modeCardMapCache;
+
+  try {
+    const raw = await readFile(MODE_CARD_MAP_URL, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object") {
+      modeCardMapCache = parsed as ModeCardMap;
+      return modeCardMapCache;
+    }
+  } catch (error) {
+    console.warn("[oc-daemon] Failed to load mode-card-map.json, using defaults:", error);
+  }
+
+  modeCardMapCache = {
+    "plant-manager": "plant-orchestrate",
+    "process-orchestrator": "process-orchestrate",
+    architect: "discover-phase",
+    code: "execute-subtask",
+    fitter: "fitter-line-health",
+    "code-simplifier": "refactor",
+    "pr-review": "respond-to-pr-review",
+    "docs-specialist": "land-plane",
+  };
+  return modeCardMapCache;
+}
+
+function pickMode(payload: Record<string, unknown>): string | undefined {
+  const direct = pickString(payload, "mode", "agent");
+  if (direct) return direct;
+
+  const info = asRecord(payload.info);
+  return pickString(info, "mode", "agent");
+}
+
+async function fetchSessionMode(config: DaemonConfig, taskId: string): Promise<string | undefined> {
+  try {
+    const response = await fetch(`http://${config.kiloHost}:${config.kiloPort}/session/${taskId}`);
+    if (!response.ok) return undefined;
+    const body = (await response.json()) as Record<string, unknown>;
+    return pickMode(body);
+  } catch {
+    return undefined;
+  }
+}
+
+async function validateSessionCheckpoint(
+  writer: DoltWriter,
+  config: DaemonConfig,
+  taskId: string,
+  mode?: string,
+): Promise<void> {
+  const resolvedMode = mode ?? (await fetchSessionMode(config, taskId));
+  if (!resolvedMode) {
+    console.warn(`[oc-daemon] No mode resolved for session ${taskId}; skipping checkpoint validation`);
+    return;
+  }
+
+  const modeCardMap = await loadModeCardMap();
+  const cardId = modeCardMap[resolvedMode];
+  if (!cardId) {
+    console.warn(`[oc-daemon] No punch card configured for mode '${resolvedMode}'; skipping validation`);
+    return;
+  }
+
+  const validator = new PunchCardValidator({
+    host: config.doltHost,
+    port: config.doltPort,
+    database: config.doltDatabase,
+    user: config.doltUser,
+    password: config.doltPassword,
+  });
+
+  try {
+    await validator.connect();
+    const result = await validator.validatePunchCard(taskId, cardId);
+    const details = {
+      missing: result.missing.map((m) => `${m.punchType}:${m.punchKeyPattern}`),
+      violations: result.violations.map((v) => `${v.punchType}:${v.punchKeyPattern} (${v.count}x)`),
+    };
+
+    await writer.writeCheckpoint({
+      taskId,
+      cardId,
+      status: result.status,
+      validatedAt: new Date(),
+      missingPunches: JSON.stringify(details),
+    });
+
+    if (result.status === "pass") {
+      console.log(`[oc-daemon] CHECKPOINT PASS: ${cardId} for ${taskId}`);
+    } else {
+      console.warn(
+        `[oc-daemon] CHECKPOINT FAIL: ${cardId} for ${taskId} missing=[${details.missing.join(", ")}] violations=[${details.violations.join(", ")}]`
+      );
+    }
+  } catch (error) {
+    console.error(`[oc-daemon] Checkpoint validation failed for ${taskId}:`, error);
+  } finally {
+    await validator.disconnect();
+  }
+}
+
 /** Record child session relationships when a session completes. */
 async function recordSessionChildren(
   client: OcClient,
@@ -104,6 +214,15 @@ async function recordSessionChildren(
     if (!children) return;
     for (const child of children) {
       await writer.writeChildRelation(taskId, child.id);
+      await writer.writePunch({
+        taskId,
+        punchType: "child_complete",
+        punchKey: "child_return",
+        observedAt: new Date(),
+        sourceHash: createHash("sha256")
+          .update(`child_complete:${taskId}:${child.id}`)
+          .digest("hex"),
+      });
     }
   } catch (e) {
     console.error("[oc-daemon] Failed to record children:", e);
@@ -114,6 +233,7 @@ async function recordSessionChildren(
 async function processEvent(
   client: OcClient,
   writer: DoltWriter,
+  config: DaemonConfig,
   event: unknown
 ): Promise<void> {
   const rawEvent = event as RawEvent;
@@ -179,6 +299,8 @@ async function processEvent(
 
   if (punch.punchKey === "session_completed") {
     await recordSessionChildren(client, writer, punch.taskId);
+    const info = asRecord(properties.info);
+    await validateSessionCheckpoint(writer, config, punch.taskId, pickString(info, "mode"));
   }
 }
 
@@ -230,7 +352,7 @@ export function createDaemon(config: DaemonConfig): Daemon {
           backoffMs = 1000;
 
           for await (const event of stream) {
-            await processEvent(client, writer, event);
+            await processEvent(client, writer, config, event);
           }
           console.log("[oc-daemon] SSE stream ended. Reconnecting...");
         } catch (error: unknown) {

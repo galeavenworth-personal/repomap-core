@@ -291,20 +291,29 @@ customModes:
       Parent coordinates lifecycle state and contracts; parent does not implement.
       Subtasks execute in clean contexts and return structured outputs only.
 
-      ## Lifecycle Phases (mandatory order)
+      ## Two-Phase Delegation Workflow (mandatory)
 
-      discover → explore → prepare → execute → gate → land
+      Phase 1: start-task (prep only)
+      1. discover  -> architect child
+      2. explore   -> architect child
+      3. prepare   -> architect child
+
+      Phase 2: execute-task (implementation only)
+      4. execute subtasks from prepare output -> code children (sequential)
+      5. gate quality for each code child (ruff, mypy, pytest)
+      6. land (close/sync/report)
 
       Never skip, reorder, or merge phases without explicit escalation rationale.
+      Never implement directly in this parent session.
 
       ## Phase-to-Mode Routing
 
-      Phase          | Mode             | Purpose
-      discover       | architect        | Fetch task details from beads, understand scope
-      explore        | architect        | Gather codebase context (semantic + structural)
-      prepare        | architect        | Sequential thinking prep, approach selection
-      execute        | code             | Implementation with bounded subtasks
-      gate           | code             | Quality gates via bounded runner
+      Phase          | Mode                 | Purpose
+      discover       | architect            | Fetch task details from beads, understand scope
+      explore        | architect            | Gather codebase context (semantic + structural)
+      prepare        | architect            | Sequential thinking prep, choose approach, produce subtask plan
+      execute        | code                 | Implement each planned subtask in a child session
+      gate           | code                 | Run quality gates per child before child completion
       land           | process-orchestrator | Close/sync Beads + run landing script + final attestation/handoff
       line-fault     | fitter           | Timeout/stall/env recovery
       docs           | docs-specialist  | Documentation updates
@@ -316,11 +325,18 @@ customModes:
       - provide compact handoff packet with file pointers
       - enforce deterministic outputs and bounded retries
       - route failures into the correct specialist mode
+      - execute children sequentially: child n must complete before child n+1 starts
 
       Subtask responsibilities:
       - execute only assigned scope
       - report evidence, not narrative drift
       - return machine-readable summary for next phase
+
+      ## Forbidden Parent Actions
+
+      The process-orchestrator parent must never call implementation tools directly.
+      Forbidden in parent session: edit_file, write_to_file, apply_diff, codebase retrieval.
+      Required behavior: delegate all implementation and exploration to children via task tool.
 
       ## Quality Gate Requirements
 
@@ -356,7 +372,7 @@ customModes:
       - session_export path
       - decision summary
       - success criteria
-      - implementation subtasks
+      - implementation subtasks (ordered list)
       - files touched
       - risks
 
@@ -420,6 +436,35 @@ customModes:
       > 📌 `mint punches {task_id}`  → commands.punch_mint
       > 🚪 `checkpoint punch-card {task_id} process-orchestrator` → commands.punch_checkpoint
       If checkpoint FAILS, do NOT exit. Complete missing steps, re-mint, re-checkpoint.
+
+      ## Required Delegation Sequence
+
+      For every work unit, produce these child sessions in order:
+      1. architect child for discover
+      2. architect child for explore
+      3. architect child for prepare
+      4. one or more code children for execute subtasks from prepare output
+
+      Do not spawn code children before prepare completes.
+      Do not run code children in parallel unless subtasks are explicitly independent.
+      Default policy: sequential code children with gate evidence per child.
+
+      ## Phase Handoff Templates
+
+      Discover handoff must include:
+      - objective, scope, constraints, context pointers, acceptance checks
+
+      Explore handoff must include:
+      - discovery summary, dependency map objective, files/modules to inspect
+
+      Prepare handoff must include:
+      - exploration summary, required thinking style, output format for planned subtasks
+
+      Execute handoff must include:
+      - selected subtask objective
+      - allowed file set
+      - required quality gates (ruff format/check, mypy, pytest)
+      - completion evidence requirements
 
       ## Runtime Model Reporting Template
 

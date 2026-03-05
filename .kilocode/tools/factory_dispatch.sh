@@ -131,8 +131,14 @@ if [[ -n "$KILO_PIDS" ]]; then
         sleep 0.5
     done
     sleep 1  # extra settle time
-    # Start fresh — kilo serve uses OAuth credentials from ~/.local/share/kilo/auth.json
-    nohup kilo serve --port "$PORT" > /tmp/kilo-serve.log 2>&1 &
+    # Start fresh — use op run for 1Password-injected env if .env.op exists
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+    if [[ -f "$REPO_ROOT/.env.op" ]]; then
+        nohup op run --env-file "$REPO_ROOT/.env.op" -- kilo serve --port "$PORT" > /tmp/kilo-serve.log 2>&1 &
+    else
+        nohup kilo serve --port "$PORT" > /tmp/kilo-serve.log 2>&1 &
+    fi
     log "$(timestamp) kilo serve restarting (PID $!), waiting for health..."
     # Wait for it to be ready (up to 20s)
     for i in $(seq 1 40); do
