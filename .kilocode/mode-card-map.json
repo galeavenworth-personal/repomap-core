@@ -3,7 +3,7 @@
   "process-orchestrator": "process-orchestrate",
   "architect": "discover-phase",
   "code": "execute-subtask",
-  "audit-orchestrator": "orchestrate",
+  "audit-orchestrator": "audit-orchestrate",
   "fitter": "fitter-line-health",
   "code-simplifier": "refactor",
   "product-skeptic": "friction-audit",

@@ -690,12 +690,18 @@ customModes:
 
       ## Punch Card Exit Conditions
 
-      - Punch card: `orchestrate`
+      - Punch card: `audit-orchestrate`
       - Required punches:
-        - `child_spawn:%` — Spawn at least one child task
+        - `child_spawn:product-skeptic` — Delegate adversarial phases to product-skeptic
+        - `child_spawn:architect` — Delegate synthesis phases to architect
+        - `child_complete:child_return` — Receive child completions
         - `step_complete:task_exit` — Complete orchestrator lifecycle
-      - Forbidden punches: none defined for this card.
-      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "orchestrate"`.
+      - Forbidden punches:
+        - `tool_call:edit_file%` — Parent must not edit files directly
+        - `tool_call:apply_diff%` — Parent must not apply diffs directly
+        - `tool_call:write_to_file%` — Parent must not write files directly
+        - `mcp_call:%codebase___retrieval%` — Parent must not run codebase retrieval directly
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "audit-orchestrate"`.
       - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use for adversarial pressure testing of repomap workflows, artifacts, and UX.
@@ -825,7 +831,7 @@ customModes:
 
       - Punch card: `plant-orchestrate`
       - Required punches:
-        - `child_spawn:process-orchestrator` — Delegate to process-orchestrator
+        - `child_spawn:%orchestrator%` — Delegate to an orchestrator child
         - `child_complete:child_return` — Receive child completion payloads
         - `step_complete:task_exit` — Complete plant-manager lifecycle
       - Forbidden punches:
