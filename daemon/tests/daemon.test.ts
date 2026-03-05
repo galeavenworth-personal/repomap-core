@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   connectMock,
@@ -7,6 +7,11 @@ const {
   writeSessionMock,
   writeMessageMock,
   writeToolCallMock,
+  writeCheckpointMock,
+  validatorConnectMock,
+  validatorValidateMock,
+  validatorDisconnectMock,
+  PunchCardValidatorMock,
   syncChildRelsFromPunchesMock,
   writeChildRelationMock,
   createDoltWriterMock,
@@ -23,6 +28,17 @@ const {
   const writeSessionMock = vi.fn();
   const writeMessageMock = vi.fn();
   const writeToolCallMock = vi.fn();
+  const writeCheckpointMock = vi.fn();
+  const validatorConnectMock = vi.fn();
+  const validatorValidateMock = vi.fn();
+  const validatorDisconnectMock = vi.fn();
+  const PunchCardValidatorMock = vi.fn(function MockPunchCardValidator() {
+    return {
+      connect: validatorConnectMock,
+      validatePunchCard: validatorValidateMock,
+      disconnect: validatorDisconnectMock,
+    };
+  });
   const syncChildRelsFromPunchesMock = vi.fn();
   const writeChildRelationMock = vi.fn();
   const createDoltWriterMock = vi.fn(() => ({
@@ -31,6 +47,7 @@ const {
     writeSession: writeSessionMock,
     writeMessage: writeMessageMock,
     writeToolCall: writeToolCallMock,
+    writeCheckpoint: writeCheckpointMock,
     writeChildRelation: writeChildRelationMock,
     syncChildRelsFromPunches: syncChildRelsFromPunchesMock,
     disconnect: disconnectMock,
@@ -55,6 +72,11 @@ const {
     writeSessionMock,
     writeMessageMock,
     writeToolCallMock,
+    writeCheckpointMock,
+    validatorConnectMock,
+    validatorValidateMock,
+    validatorDisconnectMock,
+    PunchCardValidatorMock,
     syncChildRelsFromPunchesMock,
     writeChildRelationMock,
     createDoltWriterMock,
@@ -75,6 +97,10 @@ vi.mock("../src/classifier/index.js", () => ({
   classifyEvent: classifyEventMock,
 }));
 
+vi.mock("../src/governor/punch-card-validator.js", () => ({
+  PunchCardValidator: PunchCardValidatorMock,
+}));
+
 vi.mock("@opencode-ai/sdk/client", () => ({
   createOpencodeClient: createOpencodeClientMock,
 }));
@@ -91,6 +117,8 @@ async function* mockEventStream(
 }
 
 describe("createDaemon", () => {
+  const originalFetch = global.fetch;
+
   beforeEach(() => {
     vi.clearAllMocks();
     connectMock.mockResolvedValue(undefined);
@@ -99,11 +127,29 @@ describe("createDaemon", () => {
     writeSessionMock.mockResolvedValue(undefined);
     writeMessageMock.mockResolvedValue(undefined);
     writeToolCallMock.mockResolvedValue(undefined);
+    writeCheckpointMock.mockResolvedValue(undefined);
+    validatorConnectMock.mockResolvedValue(undefined);
+    validatorValidateMock.mockResolvedValue({
+      status: "pass",
+      cardId: "plant-orchestrate",
+      taskId: "session-checkpoint",
+      missing: [],
+      violations: [],
+    });
+    validatorDisconnectMock.mockResolvedValue(undefined);
     syncChildRelsFromPunchesMock.mockResolvedValue(0);
     writeChildRelationMock.mockResolvedValue(undefined);
     sessionListMock.mockResolvedValue({ data: [] });
     sessionMessagesMock.mockResolvedValue({ data: [] });
     sessionChildrenMock.mockResolvedValue({ data: [] });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ mode: "plant-manager" }),
+    } as Response);
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
   });
 
   it("returns object with start and stop methods", () => {
@@ -286,5 +332,47 @@ describe("createDaemon", () => {
     expect(disconnectMock).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith("[oc-daemon] Shutting down...");
     expect(logSpy).toHaveBeenCalledWith("[oc-daemon] Shutdown complete.");
+  });
+
+  it("writes checkpoint after session completion when card mapping exists", async () => {
+    subscribeMock
+      .mockResolvedValueOnce({
+        stream: mockEventStream([
+          {
+            type: "session.updated",
+            properties: { info: { id: "session-checkpoint", status: "completed" } },
+          },
+        ]),
+      })
+      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+
+    classifyEventMock.mockReturnValue({
+      taskId: "session-checkpoint",
+      punchType: "step_complete",
+      punchKey: "session_completed",
+      observedAt: new Date(),
+      sourceHash: "checkpoint-hash",
+    });
+
+    const daemon = createDaemon({
+      kiloHost: "127.0.0.1",
+      kiloPort: 4096,
+      doltHost: "127.0.0.1",
+      doltPort: 3307,
+      doltDatabase: "plant",
+      doltUser: "root",
+    });
+
+    await daemon.start();
+
+    expect(PunchCardValidatorMock).toHaveBeenCalled();
+    expect(validatorValidateMock).toHaveBeenCalledWith("session-checkpoint", "plant-orchestrate");
+    expect(writeCheckpointMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: "session-checkpoint",
+        cardId: "plant-orchestrate",
+        status: "pass",
+      })
+    );
   });
 });

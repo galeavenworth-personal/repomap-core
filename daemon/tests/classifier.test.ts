@@ -100,6 +100,90 @@ describe("classifyEvent", () => {
     expect(result?.punchKey).toBe("editFile");
   });
 
+  it("maps task tool calls to child_spawn using subagent_type", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-child",
+          tool: "task",
+          input: { subagent_type: "process-orchestrator" },
+          state: { status: "completed" },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("child_spawn");
+    expect(result?.punchKey).toBe("process-orchestrator");
+  });
+
+  it("maps bash gate commands to gate_pass", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-gate",
+          tool: "bash",
+          input: { command: "ruff check ." },
+          state: { status: "completed" },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("gate_pass");
+    expect(result?.punchKey).toBe("ruff-check");
+  });
+
+  it("maps failed bash gate commands to gate_fail", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-gate-fail",
+          tool: "bash",
+          input: { command: "pytest -q" },
+          state: { status: "error" },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("gate_fail");
+    expect(result?.punchKey).toBe("pytest");
+  });
+
+  it("maps non-gate bash commands to command_exec", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-command",
+          tool: "bash",
+          input: { command: "ls -la" },
+          state: { status: "completed" },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("command_exec");
+    expect(result?.punchKey).toBe("bash");
+  });
+
+  it("maps MCP tools to mcp_call", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-mcp",
+          tool: "augment-context-engine_codebase-retrieval",
+          state: { status: "completed" },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("mcp_call");
+    expect(result?.punchKey).toBe("codebase___retrieval");
+  });
+
   it("extracts task ID from message part sessionID or defaults unknown", () => {
     const fromPartSessionID = classifyEvent(
       makeEvent("message.part.updated", {

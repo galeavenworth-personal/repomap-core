@@ -234,6 +234,11 @@ do_start() {
         log "✅ Dolt server started."
     fi
 
+    # ── Step 2.5: Ensure punch card schema is migrated ────────────────────
+    log "Applying idempotent punch card schema migration..."
+    "$REPO_ROOT/.kilocode/tools/dolt_apply_punch_card_schema.sh"
+    log "✅ Punch card schema migration complete."
+
     # ── Step 3: Start oc-daemon ──────────────────────────────────────────
     if is_oc_daemon_running; then
         log "✅ oc-daemon already running."

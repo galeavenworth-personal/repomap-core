@@ -94,6 +94,69 @@ function extractMetrics(part: Record<string, unknown>) {
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function extractBashCommand(part: Record<string, unknown>): string | null {
+  const input = part.input;
+  if (typeof input === "string") return input;
+  const inputRecord = asRecord(input);
+  if (typeof inputRecord.command === "string") return inputRecord.command;
+  if (typeof inputRecord.cmd === "string") return inputRecord.cmd;
+  return null;
+}
+
+function classifyGateFromCommand(command: string, status: string): { punchType: string; punchKey: string } | null {
+  const normalized = command.trim();
+  if (!normalized) return null;
+
+  const gateMatchers: Array<{ regex: RegExp; key: string }> = [
+    { regex: /(^|\s)ruff\s+format(\s|$)|(^|\s)ruff\s+.*--check(\s|$)/, key: "ruff-format" },
+    { regex: /(^|\s)ruff\s+check(\s|$)/, key: "ruff-check" },
+    { regex: /(^|\s)mypy(\s|$)/, key: "mypy" },
+    { regex: /(^|\s)pytest(\s|$)/, key: "pytest" },
+  ];
+
+  for (const matcher of gateMatchers) {
+    if (!matcher.regex.test(normalized)) continue;
+    return {
+      punchType: status === "error" ? "gate_fail" : "gate_pass",
+      punchKey: matcher.key,
+    };
+  }
+
+  return null;
+}
+
+function isMcpToolName(toolName: string): boolean {
+  return (
+    toolName.startsWith("augment-context-engine_") ||
+    toolName.startsWith("sequentialthinking_") ||
+    toolName.startsWith("context7_") ||
+    toolName.startsWith("sonarqube_")
+  );
+}
+
+function canonicalMcpPunchKey(toolName: string): string {
+  if (toolName.includes("codebase-retrieval") || toolName.includes("codebase_retrieval")) {
+    return "codebase___retrieval";
+  }
+  if (toolName.includes("process_thought")) return "process_thought";
+  if (toolName.includes("generate_summary")) return "generate_summary";
+  if (toolName.includes("export_session")) return "export_session";
+
+  const suffix = toolName.includes("_") ? toolName.split("_").slice(1).join("_") : toolName;
+  return suffix.replace(/-/g, "_");
+}
+
+function extractSubagentType(part: Record<string, unknown>): string {
+  const input = asRecord(part.input);
+  const subagent = input.subagent_type;
+  if (typeof subagent === "string" && subagent.length > 0) return subagent;
+  return "unknown_child";
+}
+
 /** Classify a "message.part.updated" event by its part type. */
 function classifyPartUpdated(event: RawEvent, now: Date): Punch | null {
   const part = event.properties.part as Record<string, unknown> | undefined;
@@ -136,6 +199,47 @@ function classifyToolPart(
   if (status !== "completed" && status !== "error") return null;
 
   const toolName = typeof part.tool === "string" ? part.tool : "unknown_tool";
+
+  if (toolName === "task") {
+    return {
+      ...base,
+      punchType: "child_spawn",
+      punchKey: extractSubagentType(part),
+      ...extractMetrics(part),
+    };
+  }
+
+  if (toolName === "bash") {
+    const command = extractBashCommand(part);
+    if (command) {
+      const gateClassification = classifyGateFromCommand(command, status);
+      if (gateClassification) {
+        return {
+          ...base,
+          punchType: gateClassification.punchType,
+          punchKey: gateClassification.punchKey,
+          ...extractMetrics(part),
+        };
+      }
+    }
+
+    return {
+      ...base,
+      punchType: "command_exec",
+      punchKey: "bash",
+      ...extractMetrics(part),
+    };
+  }
+
+  if (isMcpToolName(toolName)) {
+    return {
+      ...base,
+      punchType: "mcp_call",
+      punchKey: canonicalMcpPunchKey(toolName),
+      ...extractMetrics(part),
+    };
+  }
+
   return {
     ...base,
     punchType: "tool_call",
