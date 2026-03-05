@@ -138,6 +138,14 @@ function isMcpToolName(toolName: string): boolean {
   );
 }
 
+export function toSnakeCase(name: string): string {
+  if (!name) return name;
+  return name
+    .replaceAll(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replaceAll(/([A-Z])([A-Z][a-z])/g, "$1_$2")
+    .toLowerCase();
+}
+
 function canonicalMcpPunchKey(toolName: string): string {
   if (toolName.includes("codebase-retrieval") || toolName.includes("codebase_retrieval")) {
     return "codebase___retrieval";
@@ -147,7 +155,7 @@ function canonicalMcpPunchKey(toolName: string): string {
   if (toolName.includes("export_session")) return "export_session";
 
   const suffix = toolName.includes("_") ? toolName.split("_").slice(1).join("_") : toolName;
-  return suffix.replace(/-/g, "_");
+  return suffix.replaceAll("-", "_");
 }
 
 function extractSubagentType(part: Record<string, unknown>): string {
@@ -243,7 +251,7 @@ function classifyToolPart(
   return {
     ...base,
     punchType: "tool_call",
-    punchKey: toolName,
+    punchKey: toSnakeCase(toolName),
     ...extractMetrics(part),
   };
 }

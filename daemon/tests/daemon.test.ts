@@ -117,7 +117,7 @@ async function* mockEventStream(
 }
 
 describe("createDaemon", () => {
-  const originalFetch = global.fetch;
+  const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -142,14 +142,14 @@ describe("createDaemon", () => {
     sessionListMock.mockResolvedValue({ data: [] });
     sessionMessagesMock.mockResolvedValue({ data: [] });
     sessionChildrenMock.mockResolvedValue({ data: [] });
-    global.fetch = vi.fn().mockResolvedValue({
+    globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ mode: "plant-manager" }),
     } as Response);
   });
 
   afterEach(() => {
-    global.fetch = originalFetch;
+    globalThis.fetch = originalFetch;
   });
 
   it("returns object with start and stop methods", () => {

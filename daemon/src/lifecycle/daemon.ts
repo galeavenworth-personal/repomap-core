@@ -148,17 +148,18 @@ async function validateSessionCheckpoint(
   writer: DoltWriter,
   config: DaemonConfig,
   taskId: string,
+  mode?: string,
 ): Promise<void> {
-  const mode = await fetchSessionMode(config, taskId);
-  if (!mode) {
+  const resolvedMode = mode ?? (await fetchSessionMode(config, taskId));
+  if (!resolvedMode) {
     console.warn(`[oc-daemon] No mode resolved for session ${taskId}; skipping checkpoint validation`);
     return;
   }
 
   const modeCardMap = await loadModeCardMap();
-  const cardId = modeCardMap[mode];
+  const cardId = modeCardMap[resolvedMode];
   if (!cardId) {
-    console.warn(`[oc-daemon] No punch card configured for mode '${mode}'; skipping validation`);
+    console.warn(`[oc-daemon] No punch card configured for mode '${resolvedMode}'; skipping validation`);
     return;
   }
 
@@ -298,7 +299,8 @@ async function processEvent(
 
   if (punch.punchKey === "session_completed") {
     await recordSessionChildren(client, writer, punch.taskId);
-    await validateSessionCheckpoint(writer, config, punch.taskId);
+    const info = asRecord(properties.info);
+    await validateSessionCheckpoint(writer, config, punch.taskId, pickString(info, "mode"));
   }
 }
 

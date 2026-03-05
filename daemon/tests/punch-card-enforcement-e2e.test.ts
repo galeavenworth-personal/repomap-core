@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import mysql from "mysql2/promise";
 
 import { PunchCardValidator } from "../src/governor/punch-card-validator.js";
+import { isSessionTerminal } from "./helpers/session-completion.js";
 
 const KILO_HOST = process.env.KILO_HOST ?? "127.0.0.1";
 const KILO_PORT = Number.parseInt(process.env.KILO_PORT ?? "4096", 10);
@@ -22,24 +23,6 @@ function kiloUrl(path: string): string {
   return `${BASE_URL}${path}`;
 }
 
-function extractSessionDone(messages: Array<Record<string, unknown>>): boolean {
-  let hasStepFinish = false;
-  let hasRunningTool = false;
-
-  for (const message of messages) {
-    const parts = (message.parts as Array<Record<string, unknown>>) ?? [];
-    for (const part of parts) {
-      if (part.type === "step-finish") hasStepFinish = true;
-      const state = (part.state as Record<string, unknown>) ?? {};
-      if (part.type === "tool" && (state.status === "running" || state.status === "pending")) {
-        hasRunningTool = true;
-      }
-    }
-  }
-
-  return hasStepFinish && !hasRunningTool;
-}
-
 async function pollUntilComplete(sessionId: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -47,7 +30,7 @@ async function pollUntilComplete(sessionId: string, timeoutMs: number): Promise<
     const response = await fetch(kiloUrl(`/session/${sessionId}/message`));
     if (!response.ok) continue;
     const messages = (await response.json()) as Array<Record<string, unknown>>;
-    if (extractSessionDone(messages)) return;
+    if (isSessionTerminal(messages)) return;
   }
   throw new Error(`Session ${sessionId} did not complete within ${timeoutMs}ms`);
 }
