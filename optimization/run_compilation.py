@@ -1,0 +1,342 @@
+"""
+run_compilation.py — End-to-end DSPy compilation runner
+
+Closes the self-learning loop by:
+  1. Reading punch card definitions + checkpoint failures from Dolt
+  2. Building enriched training examples for card-exit compilation
+  3. Compiling card-exit prompts (one per punch card) via BootstrapFewShot
+  4. Compiling fitter-dispatch prompts (5 diagnosis categories) via BootstrapFewShot
+  5. Writing all compiled prompts to Dolt (compiled_prompts table)
+
+The daemon's prompt-injection.ts reads these at dispatch time, preferring
+compiled prompts over static .kilocodemodes fallbacks.
+
+Usage (preferred — 1Password injects OPENROUTER_API_KEY):
+  op run --env-file .env.op -- .venv/bin/python -m optimization.run_compilation
+
+Usage (fallback — plain env var):
+  OPENROUTER_API_KEY=<key> .venv/bin/python -m optimization.run_compilation
+
+Options:
+  --dry-run         Don't write to Dolt
+  --lm <model>      Override LM (default: openrouter/openai/gpt-4o-mini)
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from collections import defaultdict
+
+import dspy  # type: ignore[import-untyped]
+import pymysql
+
+from optimization import dolt_bus
+from optimization.training_data import build_training_set
+
+DOLT_HOST = "127.0.0.1"
+DOLT_PORT = 3307
+DOLT_DATABASE = "punch_cards"
+
+
+def _connect():
+    return pymysql.connect(
+        host=DOLT_HOST, port=DOLT_PORT, user="root", database=DOLT_DATABASE
+    )
+
+
+def load_punch_card_definitions() -> dict[str, dict]:
+    """Load punch card definitions from Dolt → {card_id: {required: [...], forbidden: [...]}}."""
+    conn = _connect()
+    cur = conn.cursor(pymysql.cursors.DictCursor)
+    cur.execute(
+        "SELECT card_id, punch_type, punch_key_pattern, required, forbidden, description "
+        "FROM punch_cards ORDER BY card_id"
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    cards: dict[str, dict] = {}
+    for row in rows:
+        card_id = row["card_id"]
+        if card_id not in cards:
+            cards[card_id] = {"required": [], "forbidden": [], "rules": []}
+
+        rule = f"{row['punch_type']}:{row['punch_key_pattern']}"
+        desc = row.get("description") or ""
+        if row.get("required"):
+            cards[card_id]["required"].append(rule)
+        if row.get("forbidden"):
+            cards[card_id]["forbidden"].append(rule)
+        cards[card_id]["rules"].append(
+            f"{rule} (req={row.get('required')}, forbid={row.get('forbidden')}) {desc}"
+        )
+
+    return cards
+
+
+def load_checkpoint_failures() -> dict[str, list[str]]:
+    """Load checkpoint failures from Dolt → {card_id: [missing_punches_json, ...]}."""
+    conn = _connect()
+    cur = conn.cursor(pymysql.cursors.DictCursor)
+    cur.execute(
+        "SELECT card_id, missing_punches FROM checkpoints WHERE status = 'fail'"
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    failures: dict[str, list[str]] = defaultdict(list)
+    for row in rows:
+        failures[row["card_id"]].append(str(row.get("missing_punches", "")))
+
+    return dict(failures)
+
+
+def format_card_requirements(card_def: dict) -> str:
+    """Format card rules as human-readable text."""
+    lines = []
+    if card_def["required"]:
+        lines.append("Required: " + ", ".join(card_def["required"]))
+    if card_def["forbidden"]:
+        lines.append("Forbidden: " + ", ".join(card_def["forbidden"]))
+    return "\n".join(lines) if lines else "No specific requirements defined."
+
+
+DEFAULT_LM = "openrouter/openai/gpt-4o-mini"
+
+
+def configure_lm(lm_name: str) -> dspy.LM:
+    """Configure a real LM for compilation. No mocks, no dummies.
+
+    Requires OPENROUTER_API_KEY for openrouter/* models.
+    Set via: op run --env-file .env.op -- <command>
+    """
+    import os
+
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+
+    if lm_name.startswith("openrouter/"):
+        if not api_key:
+            raise SystemExit(
+                "OPENROUTER_API_KEY not set. Run with 1Password:\n"
+                "  op run --env-file .env.op -- .venv/bin/python -m optimization.run_compilation\n"
+                "\n"
+                "Or export directly:\n"
+                "  export OPENROUTER_API_KEY=<key>\n"
+                "\n"
+                "See .env.example for details."
+            )
+        return dspy.LM(lm_name, api_key=api_key)
+
+    # Non-openrouter models (e.g. local ollama, direct openai)
+    return dspy.LM(lm_name)
+
+
+def generate_card_exit_prompt(
+    lm: dspy.LM,
+    card_id: str,
+    card_def: dict,
+    failures: list[str],
+) -> str:
+    """Use the LM directly to generate a high-quality card-exit prompt."""
+    requirements = format_card_requirements(card_def)
+    hist_text = "\n".join(failures[:5]) if failures else "No prior failures."
+
+    predictor = dspy.Predict(
+        CardExitCompileSignature,  # type: ignore[arg-type]
+    )
+    with dspy.context(lm=lm):
+        result = predictor(
+            task_description=f"Execute a task governed by the {card_id} punch card.",
+            card_id=card_id,
+            card_requirements=requirements,
+            historical_failures=hist_text,
+        )
+
+    exit_prompt = str(getattr(result, "exit_condition_prompt", "")).strip()
+    self_check = str(getattr(result, "self_check_instruction", "")).strip()
+    return f"Exit Condition:\n{exit_prompt}\n\nSelf-Check:\n{self_check}"
+
+
+class CardExitCompileSignature(dspy.Signature):  # type: ignore[misc]
+    """Generate card-specific exit conditions and self-check instructions for an agent.
+
+    The exit_condition_prompt should describe when the agent may exit, referencing
+    the specific required and forbidden actions from the punch card.
+
+    The self_check_instruction should include a concrete command to run
+    (check_punch_card.sh) with the session ID and card ID."""
+
+    task_description: str = dspy.InputField(desc="Task to complete")
+    card_id: str = dspy.InputField(desc="Punch card identifier")
+    card_requirements: str = dspy.InputField(
+        desc="Human-readable required and forbidden punches"
+    )
+    historical_failures: str = dspy.InputField(
+        desc="Prior missing/violated punch patterns"
+    )
+    exit_condition_prompt: str = dspy.OutputField(
+        desc="Prompt text describing when the agent may exit, referencing card requirements"
+    )
+    self_check_instruction: str = dspy.OutputField(
+        desc="Instruction including: .kilocode/tools/check_punch_card.sh $SESSION_ID <card_id>"
+    )
+
+
+class FitterRecoverySignature(dspy.Signature):  # type: ignore[misc]
+    """Generate a recovery prompt for an agent session that has been diagnosed
+    with a specific failure category."""
+
+    diagnosis_category: str = dspy.InputField(desc="One of: stuck_on_approval, infinite_retry, scope_creep, context_exhaustion, model_confusion")
+    session_summary: str = dspy.InputField(desc="Summary of the stuck/failing session")
+    tool_activity: str = dspy.InputField(desc="Recent tool calls from the session")
+    recovery_prompt: str = dspy.OutputField(
+        desc="A targeted recovery prompt that addresses the specific diagnosis"
+    )
+
+
+FITTER_CATEGORIES = [
+    "stuck_on_approval",
+    "infinite_retry",
+    "scope_creep",
+    "context_exhaustion",
+    "model_confusion",
+]
+
+
+def generate_fitter_prompt(
+    lm: dspy.LM,
+    category: str,
+    training_examples: list[dspy.Example],
+) -> str:
+    """Use the LM to generate a fitter-dispatch recovery prompt for a category."""
+    # Find examples matching this category
+    matching = [
+        ex for ex in training_examples
+        if getattr(ex, "diagnosis_category", "") == category
+    ]
+
+    # Build context from matching examples
+    if matching:
+        ex = matching[0]
+        summary = str(getattr(ex, "summary", "Session is stuck."))
+        tools = str(getattr(ex, "tool_activity", "No tool activity recorded."))
+    else:
+        summary = f"An agent session has been diagnosed as {category}."
+        tools = "Tool activity unavailable."
+
+    predictor = dspy.Predict(FitterRecoverySignature)  # type: ignore[arg-type]
+    with dspy.context(lm=lm):
+        result = predictor(
+            diagnosis_category=category,
+            session_summary=summary,
+            tool_activity=tools,
+        )
+
+    return str(getattr(result, "recovery_prompt", "")).strip()
+
+
+def run(lm_name: str = DEFAULT_LM, dry_run: bool = False) -> None:
+    lm = configure_lm(lm_name)
+    dspy.configure(lm=lm)
+
+    print("=" * 60)
+    print("  DSPy Compilation Pipeline — Self-Learning Factory")
+    print("=" * 60)
+    print(f"  LM: {lm_name}")
+    print(f"  Dry run: {dry_run}")
+    print()
+
+    # ── Step 1: Load data ───────────────────────────────────────
+    print("[1/4] Loading punch card definitions + failures from Dolt...")
+    card_defs = load_punch_card_definitions()
+    failures = load_checkpoint_failures()
+    total_failures = sum(len(v) for v in failures.values())
+    print(f"       {len(card_defs)} punch cards, {total_failures} historical failures")
+
+    print("[2/4] Building training set from Dolt telemetry...")
+    training_examples = build_training_set(limit=200)
+    print(f"       {len(training_examples)} training examples")
+
+    # ── Step 2: Generate card-exit prompts via LM ───────────────
+    print(f"[3/4] Generating card-exit prompts ({len(card_defs)} cards)...")
+    card_exit_count = 0
+    version = str(dspy.__version__)
+
+    for card_id in sorted(card_defs):
+        card_def = card_defs[card_id]
+        card_failures = failures.get(card_id, [])
+        try:
+            prompt_text = generate_card_exit_prompt(lm, card_id, card_def, card_failures)
+            if not dry_run:
+                dolt_bus.write_compiled_prompt(
+                    prompt_id=f"card-exit:{card_id}",
+                    module_name="card_exit",
+                    signature_name="CardExitCompileSignature",
+                    compiled_prompt=prompt_text,
+                    dspy_version=version,
+                )
+            card_exit_count += 1
+            print(f"       ✅ card-exit:{card_id} ({len(prompt_text)} chars)")
+        except Exception as e:
+            print(f"       ❌ card-exit:{card_id} — {e}")
+
+    # ── Step 3: Generate fitter-dispatch prompts via LM ─────────
+    print(f"[4/4] Generating fitter-dispatch prompts ({len(FITTER_CATEGORIES)} categories)...")
+    fitter_count = 0
+
+    for category in FITTER_CATEGORIES:
+        try:
+            prompt_text = generate_fitter_prompt(lm, category, training_examples)
+            if not dry_run:
+                dolt_bus.write_compiled_prompt(
+                    prompt_id=f"fitter-dispatch:{category}",
+                    module_name="fitter_dispatch",
+                    signature_name="FitterRecoverySignature",
+                    compiled_prompt=prompt_text,
+                    dspy_version=version,
+                )
+            fitter_count += 1
+            print(f"       ✅ fitter-dispatch:{category} ({len(prompt_text)} chars)")
+        except Exception as e:
+            print(f"       ❌ fitter-dispatch:{category} — {e}")
+
+    # ── Summary ─────────────────────────────────────────────────
+    print()
+    print("=" * 60)
+    print("  COMPILATION COMPLETE")
+    print("=" * 60)
+    print(f"  Card-exit prompts:       {card_exit_count}/{len(card_defs)}")
+    print(f"  Fitter-dispatch prompts: {fitter_count}/{len(FITTER_CATEGORIES)}")
+
+    if not dry_run:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM compiled_prompts")
+        total = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM compiled_prompts WHERE prompt_id LIKE 'card-exit:%'")
+        ce = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM compiled_prompts WHERE prompt_id LIKE 'fitter-dispatch:%'")
+        fd = cur.fetchone()[0]
+        conn.close()
+        print(f"  Dolt compiled_prompts:   {total} total ({ce} card-exit, {fd} fitter-dispatch)")
+
+    print()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="DSPy compilation pipeline")
+    parser.add_argument(
+        "--lm",
+        default=DEFAULT_LM,
+        help=f"LM identifier (default: {DEFAULT_LM}). Use 'openrouter/<model>' with OPENROUTER_API_KEY.",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Don't write to Dolt")
+    args = parser.parse_args()
+
+    run(lm_name=args.lm, dry_run=args.dry_run)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -105,29 +105,37 @@ timestamp() {
     date '+%H:%M:%S'
 }
 
-require_cmd() {
-    if ! command -v "$1" &>/dev/null; then
-        echo "ERROR: Required command not found: $1" >&2
-        exit 1
-    fi
+resolve_bin() {
+    local name="$1"; shift
+    for p in "$@"; do
+        if [[ -x "$p" ]]; then echo "$p"; return 0; fi
+    done
+    local found
+    found=$(command -v "$name" 2>/dev/null) || true
+    if [[ -n "$found" && -x "$found" ]]; then echo "$found"; return 0; fi
+    echo "FATAL: required binary '$name' not found" >&2
+    exit 1
 }
 
-require_cmd curl
-require_cmd python3
+CURL=$(resolve_bin curl /usr/bin/curl)
+PYTHON3=$(resolve_bin python3 /usr/bin/python3)
+PGREP=$(resolve_bin pgrep /usr/bin/pgrep /bin/pgrep)
+SS=$(resolve_bin ss /usr/bin/ss /usr/sbin/ss)
+GREP=$(resolve_bin grep /usr/bin/grep /bin/grep)
 
 # ─── Phase 0: Restart kilo serve to pick up .kilocodemodes changes ────────────
 # kilo serve caches mode definitions at startup. In dev, we always restart
 # to ensure the latest .kilocodemodes is loaded.
 
 # Find ALL kilo serve processes (binary, node wrapper, op run wrapper)
-KILO_PIDS=$(pgrep -f "kilo serve" 2>/dev/null | grep -v "$$" || true)
+KILO_PIDS=$("$PGREP" -f "kilo serve" 2>/dev/null | "$GREP" -v "$$" || true)
 
 if [[ -n "$KILO_PIDS" ]]; then
     log "$(timestamp) Killing kilo serve to pick up .kilocodemodes changes..."
     echo "$KILO_PIDS" | xargs kill 2>/dev/null || true
     # Wait for port to be free (up to 5s)
     for i in $(seq 1 10); do
-        ss -tlnp 2>/dev/null | grep -q ":${PORT} " || break
+        "$SS" -tlnp 2>/dev/null | "$GREP" -q ":${PORT} " || break
         sleep 0.5
     done
     sleep 1  # extra settle time
@@ -142,7 +150,7 @@ if [[ -n "$KILO_PIDS" ]]; then
     log "$(timestamp) kilo serve restarting (PID $!), waiting for health..."
     # Wait for it to be ready (up to 20s)
     for i in $(seq 1 40); do
-        if curl -sf "http://127.0.0.1:${PORT}/session" >/dev/null 2>&1; then
+        if "$CURL" -sf "http://127.0.0.1:${PORT}/session" >/dev/null 2>&1; then
             log "$(timestamp) kilo serve healthy after ~$((i / 2))s"
             break
         fi
@@ -152,6 +160,15 @@ if [[ -n "$KILO_PIDS" ]]; then
         fi
         sleep 0.5
     done
+    # Kilo restart may have killed oc-daemon SSE connection. Re-run start-stack
+    # to revive any dead components before the preflight check.
+    SCRIPT_DIR_="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+    if [[ -x "$SCRIPT_DIR_/start-stack.sh" ]]; then
+        log "$(timestamp) Re-running start-stack.sh to revive components after kilo restart..."
+        "$SCRIPT_DIR_/start-stack.sh" 2>&1 | while IFS= read -r line; do
+            log "  $line"
+        done || true
+    fi
 else
     log "$(timestamp) kilo serve not found — skipping restart"
 fi
@@ -167,17 +184,17 @@ PREFLIGHT_MISSING=""
 log "$(timestamp) Pre-flight: checking all 5 stack components..."
 
 # 1. kilo serve
-HEALTH=$(curl -sf "${BASE_URL}/session" 2>/dev/null || true)
+HEALTH=$("$CURL" -sf "${BASE_URL}/session" 2>/dev/null || true)
 if [[ -z "$HEALTH" ]]; then
     PREFLIGHT_OK=false
     PREFLIGHT_MISSING="${PREFLIGHT_MISSING}  ❌ kilo serve: NOT reachable at ${BASE_URL}\n"
 else
-    SESSION_COUNT=$(echo "$HEALTH" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
+    SESSION_COUNT=$(echo "$HEALTH" | "$PYTHON3" -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
     log "$(timestamp)   ✅ kilo serve (${SESSION_COUNT} sessions)"
 fi
 
 # 2. Dolt server
-if ss -tlnp 2>/dev/null | grep -q ":${DOLT_PORT} "; then
+if "$SS" -tlnp 2>/dev/null | "$GREP" -q ":${DOLT_PORT} "; then
     log "$(timestamp)   ✅ Dolt server (port ${DOLT_PORT})"
 else
     PREFLIGHT_OK=false
@@ -185,8 +202,8 @@ else
 fi
 
 # 3. oc-daemon (flight recorder)
-if pgrep -f "oc-daemon.*src/index.ts" >/dev/null 2>&1 || \
-   pgrep -f "oc-daemon.*build/index.js" >/dev/null 2>&1; then
+if "$PGREP" -f "oc-daemon.*src/index.ts" >/dev/null 2>&1 || \
+   "$PGREP" -f "oc-daemon.*build/index.js" >/dev/null 2>&1; then
     log "$(timestamp)   ✅ oc-daemon (SSE → Dolt)"
 else
     PREFLIGHT_OK=false
@@ -195,7 +212,7 @@ fi
 
 # 4. Temporal server
 TEMPORAL_PORT="${TEMPORAL_PORT:-7233}"
-if ss -tlnp 2>/dev/null | grep -q ":${TEMPORAL_PORT} "; then
+if "$SS" -tlnp 2>/dev/null | "$GREP" -q ":${TEMPORAL_PORT} "; then
     log "$(timestamp)   ✅ Temporal server (port ${TEMPORAL_PORT})"
 else
     PREFLIGHT_OK=false
@@ -203,7 +220,7 @@ else
 fi
 
 # 5. Temporal worker
-if pgrep -f "tsx.*src/temporal/worker.ts" >/dev/null 2>&1; then
+if "$PGREP" -f "tsx.*src/temporal/worker.ts" >/dev/null 2>&1; then
     log "$(timestamp)   ✅ Temporal worker"
 else
     PREFLIGHT_OK=false
@@ -234,7 +251,7 @@ trap 'rm -f "$PROMPT_FILE"' EXIT
 
 if [[ "$PROMPT_ARG" == *.json ]] && [[ -f "$PROMPT_ARG" ]]; then
     # JSON file — read it, inject agent if not present
-    HAS_AGENT=$(python3 - "$PROMPT_ARG" <<'PYEOF'
+    HAS_AGENT=$("$PYTHON3" - "$PROMPT_ARG" <<'PYEOF'
 import json, sys
 data = json.load(open(sys.argv[1]))
 print('yes' if 'agent' in data else 'no')
@@ -244,7 +261,7 @@ PYEOF
     if [[ "$HAS_AGENT" == "yes" ]]; then
         cp "$PROMPT_ARG" "$PROMPT_FILE"
     else
-        python3 - "$PROMPT_ARG" "$MODE" "$PROMPT_FILE" <<'PYEOF'
+        "$PYTHON3" - "$PROMPT_ARG" "$MODE" "$PROMPT_FILE" <<'PYEOF'
 import json, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
@@ -256,7 +273,7 @@ PYEOF
     log "$(timestamp) Loaded prompt from: $PROMPT_ARG"
 else
     # Plain text string — wrap it
-    python3 - "$MODE" "$PROMPT_ARG" "$PROMPT_FILE" <<'PYEOF'
+    "$PYTHON3" - "$MODE" "$PROMPT_ARG" "$PROMPT_FILE" <<'PYEOF'
 import json, sys
 payload = {
     'agent': sys.argv[1],
@@ -274,16 +291,16 @@ if [[ -z "$TITLE" ]]; then
     TITLE="factory: ${MODE} @ $(date '+%Y-%m-%d %H:%M')"
 fi
 
-SESSION_BODY=$(python3 - "$TITLE" <<'PYEOF'
+SESSION_BODY=$("$PYTHON3" - "$TITLE" <<'PYEOF'
 import json, sys
 print(json.dumps({"title": sys.argv[1]}))
 PYEOF
 )
 
-SESSION_ID=$(curl -sf -X POST "${BASE_URL}/session" \
+SESSION_ID=$("$CURL" -sf -X POST "${BASE_URL}/session" \
     -H 'Content-Type: application/json' \
     -d "$SESSION_BODY" \
-    | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+    | "$PYTHON3" -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
 
 if [[ -z "$SESSION_ID" ]]; then
     echo "ERROR: Failed to create session" >&2
@@ -293,7 +310,7 @@ fi
 log "$(timestamp) Session created: ${SESSION_ID}"
 log "$(timestamp) Title: ${TITLE}"
 
-python3 - "$PROMPT_FILE" "$SESSION_ID" <<'PYEOF'
+"$PYTHON3" - "$PROMPT_FILE" "$SESSION_ID" <<'PYEOF'
 import json, sys
 
 path = sys.argv[1]
@@ -343,7 +360,7 @@ PYEOF
 # curl returns immediately and the monitoring loop can track progress.
 # The sync endpoint (POST /session/{id}/message) blocks until the agent
 # finishes — which defeats the purpose of the polling loop.
-HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
+HTTP_CODE=$("$CURL" -sf -o /dev/null -w "%{http_code}" \
     -X POST "${BASE_URL}/session/${SESSION_ID}/prompt_async" \
     -H 'Content-Type: application/json' \
     -d @"$PROMPT_FILE" 2>/dev/null || echo "000")
@@ -360,7 +377,7 @@ log "$(timestamp) Prompt dispatched to mode: ${MODE}"
 
 if [[ "$NO_MONITOR" == true ]]; then
     if [[ "$JSON_OUTPUT" == true ]]; then
-        python3 - "$SESSION_ID" "$MODE" "$TITLE" <<'PYEOF'
+        "$PYTHON3" - "$SESSION_ID" "$MODE" "$TITLE" <<'PYEOF'
 import json, sys
 print(json.dumps({"session_id": sys.argv[1], "mode": sys.argv[2], "title": sys.argv[3]}))
 PYEOF
@@ -383,8 +400,8 @@ while [[ $ELAPSED -lt $MAX_WAIT ]]; do
     ELAPSED=$((ELAPSED + POLL_INTERVAL))
 
     # Count children
-    CHILDREN=$(curl -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null \
-        | python3 -c "
+    CHILDREN=$("$CURL" -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null \
+        | "$PYTHON3" -c "
 import sys, json
 children = json.load(sys.stdin)
 print(len(children))
@@ -400,8 +417,8 @@ print(len(children))
     # and no running/pending tools. We require IDLE_CONFIRM consecutive idle polls
     # to avoid the race where we poll between steps.
     IDLE_CONFIRM=${IDLE_CONFIRM:-3}
-    DONE=$(curl -sf "${BASE_URL}/session/${SESSION_ID}/message" 2>/dev/null \
-        | python3 -c "
+    DONE=$("$CURL" -sf "${BASE_URL}/session/${SESSION_ID}/message" 2>/dev/null \
+        | "$PYTHON3" -c "
 import sys, json
 messages = json.load(sys.stdin)
 has_terminal_finish = False
@@ -436,12 +453,12 @@ else:
         # Confirmed idle — also verify all children are done
         ALL_CHILDREN_DONE=true
         if [[ "$CHILDREN" -gt 0 ]]; then
-            CHILD_IDS=$(curl -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null \
-                | python3 -c "import sys,json; [print(c['id']) for c in json.load(sys.stdin)]" 2>/dev/null)
+            CHILD_IDS=$("$CURL" -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null \
+                | "$PYTHON3" -c "import sys,json; [print(c['id']) for c in json.load(sys.stdin)]" 2>/dev/null)
             while IFS= read -r cid; do
                 [[ -z "$cid" ]] && continue
-                CHILD_DONE=$(curl -sf "${BASE_URL}/session/${cid}/message" 2>/dev/null \
-                    | python3 -c "
+                CHILD_DONE=$("$CURL" -sf "${BASE_URL}/session/${cid}/message" 2>/dev/null \
+                    | "$PYTHON3" -c "
 import sys, json
 msgs = json.load(sys.stdin)
 running = any(
@@ -481,8 +498,8 @@ fi
 
 # ─── Phase 7: Extract result ─────────────────────────────────────────────────
 
-RESULT=$(curl -sf "${BASE_URL}/session/${SESSION_ID}/message" 2>/dev/null \
-    | python3 -c "
+RESULT=$("$CURL" -sf "${BASE_URL}/session/${SESSION_ID}/message" 2>/dev/null \
+    | "$PYTHON3" -c "
 import sys, json
 
 messages = json.load(sys.stdin)
@@ -518,7 +535,7 @@ fi
 # ─── Phase 8: Output ─────────────────────────────────────────────────────────
 
 if [[ "$JSON_OUTPUT" == true ]]; then
-    python3 - "$SESSION_ID" "$MODE" "$TITLE" "$LAST_CHILDREN" "$ELAPSED" "$RESULT" <<'PYEOF'
+    "$PYTHON3" - "$SESSION_ID" "$MODE" "$TITLE" "$LAST_CHILDREN" "$ELAPSED" "$RESULT" <<'PYEOF'
 import json, sys
 result = {
     'session_id': sys.argv[1],
