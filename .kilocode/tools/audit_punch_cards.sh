@@ -4,7 +4,7 @@ set -euo pipefail
 
 DOLT_HOST="${DOLT_HOST:-127.0.0.1}"
 DOLT_PORT="${DOLT_PORT:-3307}"
-DOLT_DATABASE="${DOLT_DATABASE:-plant}"
+DOLT_DATABASE="${DOLT_DATABASE:-beads_repomap-core}"
 LIMIT="${1:-50}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,7 +48,7 @@ run_sql() {
   fi
 
   dolt --host "$DOLT_HOST" --port "$DOLT_PORT" --no-tls sql \
-    --query "USE ${DOLT_DATABASE}; ${query}" \
+    --query "USE \`${DOLT_DATABASE}\`; ${query}" \
     --result-format csv
 }
 
@@ -128,7 +128,7 @@ for row in "${TASK_ROWS[@]}"; do
   fi
 done
 
-echo "Summary: pass=${PASS_COUNT} fail=${FAIL_COUNT} error=${ERROR_COUNT}"
+echo "Summary: pass=${PASS_COUNT} fail=${FAIL_COUNT} error=${ERROR_COUNT}" >&2
 
 if [[ $FAIL_COUNT -gt 0 || $ERROR_COUNT -gt 0 ]]; then
   exit 1

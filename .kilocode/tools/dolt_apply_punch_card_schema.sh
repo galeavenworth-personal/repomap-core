@@ -9,7 +9,7 @@ SCHEMA_FILE="$REPO_ROOT/.kilocode/schema/punch-card-schema-migration.sql"
 DOLT_BIN="${DOLT_BIN:-$(command -v dolt)}"
 DOLT_HOST="${DOLT_HOST:-127.0.0.1}"
 DOLT_PORT="${DOLT_PORT:-3307}"
-DOLT_DATABASE="${DOLT_DATABASE:-plant}"
+DOLT_DATABASE="${DOLT_DATABASE:-beads_repomap-core}"
 
 if [[ ! -x "$DOLT_BIN" ]]; then
   echo "ERROR: dolt CLI not found" >&2

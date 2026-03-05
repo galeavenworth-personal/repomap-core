@@ -72,7 +72,19 @@ export function extractStaticCardExitSection(
     .map((line) => line.replace(/^\s{6}/, ""))
     .join("\n")
     .trim();
-  return normalized.length > 0 ? normalized : null;
+  if (normalized.length === 0) return null;
+
+  // Trim trailing lines that look like YAML metadata keys (e.g. source:, whenToUse:, groups:).
+  // These can leak into the extracted section when Punch Card Exit Conditions is the last
+  // section in customInstructions and the next YAML key follows without a ## header boundary.
+  const YAML_META_KEYS = /^(source|whenToUse|groups|fileRegex|slug|name|roleDefinition|customInstructions)\s*:/;
+  const lines = normalized.split("\n");
+  let end = lines.length;
+  while (end > 0 && (YAML_META_KEYS.test(lines[end - 1].trim()) || lines[end - 1].trim() === "")) {
+    end--;
+  }
+  const trimmed = lines.slice(0, end).join("\n").trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export interface CardExitPromptResolution {

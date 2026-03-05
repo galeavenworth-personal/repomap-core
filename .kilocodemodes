@@ -265,17 +265,12 @@ customModes:
 
       ## Punch Card Exit Conditions
 
-      - Punch card: `execute-subtask`
+      - Punch card: `friction-audit`
       - Required punches:
-        - `mcp_call:%codebase___retrieval%` — Gather context before editing
-        - `gate_pass:ruff-format` — Ruff format check must pass
-        - `gate_pass:ruff-check` — Ruff lint check must pass
-        - `gate_pass:mypy` — Mypy type check must pass
-        - `gate_pass:pytest` — Pytest test suite must pass
-        - `step_complete:task_exit` — Complete the subtask before exit
-      - Forbidden punches:
-        - `child_spawn:%` — Do not delegate from specialist mode
-      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "execute-subtask"`.
+        - `mcp_call:process_thought` — Sequential thinking required for audit
+        - `step_complete:task_exit` — Audit must complete
+      - Forbidden punches: none defined for this card.
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "friction-audit"`.
       - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use for adversarial review, friction audits, and identity pressure testing
@@ -373,7 +368,7 @@ customModes:
         - `gate_pass:mypy` — Mypy type check must pass
         - `gate_pass:pytest` — Pytest test suite must pass
         - `step_complete:task_exit` — Task must reach completion
-        - `tool_call:updateTodoList` — At least one todo update required
+        - `tool_call:update_todo_list` — At least one todo update required
       - Forbidden punches: none defined for this card.
       - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "land-plane"`.
       - If the check fails, continue work, mint missing punches, and re-run until PASS.

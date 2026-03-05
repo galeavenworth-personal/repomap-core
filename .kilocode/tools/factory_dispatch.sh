@@ -142,9 +142,12 @@ if [[ -n "$KILO_PIDS" ]]; then
     # Start fresh — use op run for 1Password-injected env if .env.op exists
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-    if [[ -f "$REPO_ROOT/.env.op" ]]; then
+    if [[ -f "$REPO_ROOT/.env.op" && -x "$(command -v op 2>/dev/null || true)" ]]; then
         nohup op run --env-file "$REPO_ROOT/.env.op" -- kilo serve --port "$PORT" > /tmp/kilo-serve.log 2>&1 &
     else
+        if [[ -f "$REPO_ROOT/.env.op" ]]; then
+            log "$(timestamp) 1Password CLI 'op' not found; starting kilo serve without .env.op"
+        fi
         nohup kilo serve --port "$PORT" > /tmp/kilo-serve.log 2>&1 &
     fi
     log "$(timestamp) kilo serve restarting (PID $!), waiting for health..."

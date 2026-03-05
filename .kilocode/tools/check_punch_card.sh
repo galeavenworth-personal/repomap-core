@@ -4,10 +4,11 @@ set -euo pipefail
 
 DOLT_HOST="${DOLT_HOST:-127.0.0.1}"
 DOLT_PORT="${DOLT_PORT:-3307}"
-DOLT_DATABASE="${DOLT_DATABASE:-plant}"
+DOLT_DATABASE="${DOLT_DATABASE:-beads_repomap-core}"
 
 usage() {
   echo "Usage: $0 <session_id> <card_id>" >&2
+  return 0
 }
 
 die() {
@@ -44,6 +45,7 @@ fi
 sql_escape() {
   local value="$1"
   printf "%s" "${value//\'/\'\'}"
+  return 0
 }
 
 run_sql() {
@@ -64,7 +66,7 @@ run_sql() {
   fi
 
   local wrapped_query
-  wrapped_query="USE ${DOLT_DATABASE}; ${query}"
+  wrapped_query="USE \`${DOLT_DATABASE}\`; ${query}"
   dolt \
     --host "$DOLT_HOST" \
     --port "$DOLT_PORT" \
@@ -104,6 +106,7 @@ normalize_bool() {
     1|true|t|yes|y) echo "1" ;;
     *) echo "0" ;;
   esac
+  return 0
 }
 
 SESSION_SQL="$(sql_escape "$SESSION_ID")"
