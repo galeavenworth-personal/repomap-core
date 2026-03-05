@@ -24,8 +24,8 @@
  */
 
 import { Client, Connection } from "@temporalio/client";
+import { execFileSync } from "node:child_process";
 import { createConnection } from "node:net";
-import { execSync } from "node:child_process";
 import type { AgentTaskInput, AgentTaskResult, AgentTaskStatus } from "./workflows.js";
 
 const TASK_QUEUE = "agent-tasks";
@@ -139,12 +139,23 @@ async function runPreflightChecks(
     detail: doltOk ? `port ${doltPort}` : `port ${doltPort} not listening`,
   });
 
+  let ocDaemonOk = false;
   try {
-    execSync('pgrep -f "tsx.*oc-daemon/src/index.ts" || pgrep -f "node.*oc-daemon/build/index.js"', { stdio: "pipe" });
-    checks.push({ name: "oc-daemon", ok: true, detail: "SSE → Dolt" });
+    execFileSync("pgrep", ["-f", "tsx.*oc-daemon/src/index.ts"], { stdio: "pipe" });
+    ocDaemonOk = true;
   } catch {
-    checks.push({ name: "oc-daemon", ok: false, detail: "NOT running (no flight recorder!)" });
+    try {
+      execFileSync("pgrep", ["-f", "node.*oc-daemon/build/index.js"], { stdio: "pipe" });
+      ocDaemonOk = true;
+    } catch {
+      // neither process found
+    }
   }
+  checks.push({
+    name: "oc-daemon",
+    ok: ocDaemonOk,
+    detail: ocDaemonOk ? "SSE → Dolt" : "NOT running (no flight recorder!)",
+  });
 
   const [host, portStr] = address.split(":");
   const temporalOk = await canConnectTcp(host, Number.parseInt(portStr, 10));
@@ -155,7 +166,7 @@ async function runPreflightChecks(
   });
 
   try {
-    execSync('pgrep -f "tsx.*src/temporal/worker.ts"', { stdio: "pipe" });
+    execFileSync("pgrep", ["-f", "tsx.*src/temporal/worker.ts"], { stdio: "pipe" });
     checks.push({ name: "Temporal worker", ok: true, detail: "polling agent-tasks" });
   } catch {
     checks.push({ name: "Temporal worker", ok: false, detail: "NOT running" });
