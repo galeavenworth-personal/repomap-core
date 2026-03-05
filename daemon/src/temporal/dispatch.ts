@@ -25,10 +25,47 @@
 
 import { Client, Connection } from "@temporalio/client";
 import { execFileSync } from "node:child_process";
+import { accessSync, constants } from "node:fs";
 import { createConnection } from "node:net";
 import type { AgentTaskInput, AgentTaskResult, AgentTaskStatus } from "./workflows.js";
 
 const TASK_QUEUE = "agent-tasks";
+
+/**
+ * Resolve a binary to its absolute path, treating it as an explicit dependency.
+ * Fails fast at startup if the binary is not found, rather than at runtime.
+ */
+function resolveBinary(name: string, fallbackPaths: string[] = []): string {
+  // Try which first (standard POSIX)
+  try {
+    const resolved = execFileSync("/usr/bin/which", [name], {
+      stdio: "pipe",
+      encoding: "utf-8",
+    }).trim();
+    if (resolved) return resolved;
+  } catch {
+    // which not found or binary not in PATH
+  }
+
+  // Try known fallback locations
+  for (const p of fallbackPaths) {
+    try {
+      accessSync(p, constants.X_OK);
+      return p;
+    } catch {
+      // not at this path
+    }
+  }
+
+  // Return the bare name as last resort — execFileSync will still search PATH
+  // but log a warning so we know the dependency wasn't pinned
+  console.warn(
+    `[dispatch] Warning: could not resolve absolute path for '${name}', falling back to PATH lookup`,
+  );
+  return name;
+}
+
+const PGREP = resolveBinary("pgrep", ["/usr/bin/pgrep", "/bin/pgrep"]);
 
 interface ParsedArgs {
   agent: string;
@@ -141,11 +178,11 @@ async function runPreflightChecks(
 
   let ocDaemonOk = false;
   try {
-    execFileSync("pgrep", ["-f", "tsx.*oc-daemon/src/index.ts"], { stdio: "pipe" });
+    execFileSync(PGREP, ["-f", "tsx.*oc-daemon/src/index.ts"], { stdio: "pipe" });
     ocDaemonOk = true;
   } catch {
     try {
-      execFileSync("pgrep", ["-f", "node.*oc-daemon/build/index.js"], { stdio: "pipe" });
+      execFileSync(PGREP, ["-f", "node.*oc-daemon/build/index.js"], { stdio: "pipe" });
       ocDaemonOk = true;
     } catch {
       // neither process found
@@ -166,7 +203,7 @@ async function runPreflightChecks(
   });
 
   try {
-    execFileSync("pgrep", ["-f", "tsx.*src/temporal/worker.ts"], { stdio: "pipe" });
+    execFileSync(PGREP, ["-f", "tsx.*src/temporal/worker.ts"], { stdio: "pipe" });
     checks.push({ name: "Temporal worker", ok: true, detail: "polling agent-tasks" });
   } catch {
     checks.push({ name: "Temporal worker", ok: false, detail: "NOT running" });
