@@ -12,6 +12,10 @@
 
 import { heartbeat, log } from "@temporalio/activity";
 
+import {
+  injectCardExitPrompt,
+  resolveCardExitPrompt,
+} from "../optimization/prompt-injection.js";
 import type { DoltConfig } from "../writer/index.js";
 
 export interface KiloConfig {
@@ -146,10 +150,12 @@ export async function sendPrompt(
   prompt: string,
   agent?: string
 ): Promise<void> {
+  const exitResolution = await resolveCardExitPrompt(agent);
+
   const sessionContext =
     `Dispatch context:\n- SESSION_ID: ${sessionId}\n` +
     "Use this exact SESSION_ID when running punch card self-check commands.";
-  let promptWithSessionId = prompt
+  let promptWithSessionId = injectCardExitPrompt(prompt, exitResolution.prompt)
     .replaceAll("{{SESSION_ID}}", sessionId)
     .replaceAll("${SESSION_ID}", sessionId)
     .replaceAll("$SESSION_ID", sessionId);
@@ -176,7 +182,7 @@ export async function sendPrompt(
   }
 
   log.info(
-    `Prompt dispatched async to session ${sessionId} (${promptWithSessionId.length} chars)`
+    `Prompt dispatched async to session ${sessionId} (${promptWithSessionId.length} chars, card_source=${exitResolution.source}, card_id=${exitResolution.cardId ?? "none"})`
   );
 }
 

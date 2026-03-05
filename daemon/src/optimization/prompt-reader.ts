@@ -54,3 +54,13 @@ export async function listCompiledPrompts(): Promise<CompiledPromptRow[]> {
     await connection.end();
   }
 }
+
+export async function readCardExitPrompt(cardId: string): Promise<string | null> {
+  const promptId = `card-exit:${cardId}`;
+  const row = await readCompiledPrompt(promptId);
+  if (!row) {
+    return null;
+  }
+  const prompt = String(row.compiled_prompt ?? "").trim();
+  return prompt.length > 0 ? prompt : null;
+}
