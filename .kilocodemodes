@@ -390,7 +390,7 @@ customModes:
       Phase 1: start-task (prep only)
       1. discover  -> architect child
       2. explore   -> architect child
-      3. prepare   -> architect child
+      3. prepare   -> thinker-* child (select thinking mode based on problem type)
 
       Phase 2: execute-task (implementation only)
       4. execute subtasks from prepare output -> code children (sequential)
@@ -405,12 +405,25 @@ customModes:
       Phase          | Mode                 | Purpose
       discover       | architect            | Fetch task details from beads, understand scope
       explore        | architect            | Gather codebase context (semantic + structural)
-      prepare        | architect            | Sequential thinking prep, choose approach, produce subtask plan
+      prepare        | thinker-*            | Sequential thinking prep, choose approach, produce subtask plan
       execute        | code                 | Implement each planned subtask in a child session
       gate           | code                 | Run quality gates per child before child completion
+      refactor       | code-simplifier      | Refactoring when simplification is the primary goal
       land           | process-orchestrator | Close/sync Beads + run landing script + final attestation/handoff
-      line-fault     | fitter           | Timeout/stall/env recovery
-      docs           | docs-specialist  | Documentation updates
+      line-fault     | fitter               | Timeout/stall/env recovery
+      docs           | docs-specialist      | Documentation updates
+
+      ## Thinker Mode Selection (for prepare phase)
+
+      Pick the thinker mode that matches the current problem state:
+      thinker-abstract      | Problem type is unclear — generate competing frames before converging
+      thinker-adversarial   | A plan exists — enumerate failure modes, risks, and mitigations
+      thinker-systems       | Understanding dynamics — find feedback loops and bottlenecks
+      thinker-concrete      | Ready to plan — collapse ambiguity into executable steps with checks
+      thinker-epistemic     | Uncertainty is high — separate know/believe/guess, plan measurement
+
+      Default for most implementation tasks: thinker-concrete.
+      When in doubt about problem framing: thinker-abstract first, then thinker-concrete.
 
       ## Parent vs Subtask Contract
 
@@ -490,17 +503,42 @@ customModes:
       ## Task Tool Usage (CRITICAL)
 
       When delegating to specialist agents, use the `task` tool with these parameters:
-      - subagent_type: the agent slug from the Phase-to-Mode Routing table (e.g. "architect", "code", "fitter")
+      - subagent_type: the agent slug from the Phase-to-Mode Routing table (e.g. "architect", "code", "thinker-concrete", "fitter")
       - description: a short 3-5 word label (e.g. "Discover scope for ywk.8")
       - prompt: the full handoff packet with phase objective, acceptance checks, and evidence pointers
 
-      Example:
+      Example (explore phase → architect):
       <task>
       <subagent_type>architect</subagent_type>
       <description>Explore codebase context</description>
       <prompt>
       Phase: explore
       Objective: Gather codebase context for bead repomap-core-ywk.8
+      ...
+      </prompt>
+      </task>
+
+      Example (prepare phase → thinker):
+      <task>
+      <subagent_type>thinker-concrete</subagent_type>
+      <description>Plan subtasks for ywk.8</description>
+      <prompt>
+      Phase: prepare
+      Objective: Produce executable subtask plan for bead repomap-core-ywk.8
+      Exploration summary: [from explore child output]
+      Required thinking style: concrete (collapse ambiguity into steps)
+      Export path: .kilocode/thinking/task-ywk.8-prep-2026-03-05.json
+      ...
+      </prompt>
+      </task>
+
+      Example (refactor phase → code-simplifier):
+      <task>
+      <subagent_type>code-simplifier</subagent_type>
+      <description>Refactor parser module</description>
+      <prompt>
+      Phase: refactor
+      Objective: Simplify src/parse/ast_imports.py without changing public API
       ...
       </prompt>
       </task>
@@ -536,10 +574,11 @@ customModes:
       For every work unit, produce these child sessions in order:
       1. architect child for discover
       2. architect child for explore
-      3. architect child for prepare
+      3. thinker-* child for prepare (select mode based on problem type; default: thinker-concrete)
       4. one or more code children for execute subtasks from prepare output
+         (or code-simplifier children if the task is primarily refactoring)
 
-      Do not spawn code children before prepare completes.
+      Do not spawn code/code-simplifier children before prepare completes.
       Do not run code children in parallel unless subtasks are explicitly independent.
       Default policy: sequential code children with gate evidence per child.
 
@@ -552,7 +591,10 @@ customModes:
       - discovery summary, dependency map objective, files/modules to inspect
 
       Prepare handoff must include:
-      - exploration summary, required thinking style, output format for planned subtasks
+      - exploration summary
+      - selected thinker mode and rationale (e.g. "thinker-concrete: ready to plan steps")
+      - export path for thinking session artifact
+      - output format for planned subtasks
 
       Execute handoff must include:
       - selected subtask objective

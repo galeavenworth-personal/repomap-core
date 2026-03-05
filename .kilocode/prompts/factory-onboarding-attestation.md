@@ -61,13 +61,13 @@ Then answer each section. Be concise — bullet points, not paragraphs.
 - Which modes are dispatched directly (not via orchestrator)?
 - What is the key behavioral rule for orchestrators?
 
-## 8. Routing Gaps (prove you can spot problems)
+## 8. Routing Correctness (prove you understand the delegation flow)
 
-- The process-orchestrator's `.kilocodemodes` routing table currently sends the
-  `prepare` phase to `architect`. Why is this wrong? What should it use instead?
-- `code-simplifier` has no routing entry in the process-orchestrator. When should
-  it be dispatched?
-- What is the consequence of routing prepare→architect instead of prepare→thinker?
+- The process-orchestrator's prepare phase routes to `thinker-*`. Why not `architect`?
+  What is the default thinker mode for implementation tasks?
+- When does process-orchestrator dispatch to `code-simplifier` instead of `code`?
+- If you were dispatching a task where the problem type is unclear, which thinker
+  mode would you use first? What would you follow it with?
 
 ---
 
