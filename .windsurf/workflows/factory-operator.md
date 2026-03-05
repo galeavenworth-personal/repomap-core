@@ -301,24 +301,73 @@ npx --prefix daemon pm2 restart all
 
 ---
 
-## 9. Agent Roster
+## 9. Agent Roster (15 modes)
 
-| Agent | Tier | Model | Role |
-|---|---|---|---|
-| plant-manager | 1 (strategic) | kilo/anthropic/claude-opus-4.6 | Epic dispatch, high-level decisions |
-| process-orchestrator | 2 (tactical) | kilo/anthropic/claude-opus-4.6 | Task decomposition, child dispatch |
-| audit-orchestrator | 2 | kilo/anthropic/claude-opus-4.6 | Quality audits |
-| architect | specialist | kilo/anthropic/claude-opus-4.6 | Design, analysis |
-| product-skeptic | specialist | kilo/anthropic/claude-opus-4.6 | Adversarial review |
-| code | specialist | openai/gpt-5.3-codex | Implementation ($0 via ChatGPT sub) |
-| code-simplifier | specialist | openai/gpt-5.3-codex | Refactoring ($0 via ChatGPT sub) |
-| fitter | specialist | openai/gpt-5.3-codex | Gate fixes ($0 via ChatGPT sub) |
-| pr-review | specialist | kilo/anthropic/claude-sonnet-4 | PR reviews |
-| docs-specialist | specialist | kilo/anthropic/claude-sonnet-4 | Documentation |
-| thinker-* (5 modes) | specialist | openai/gpt-5.2 | Abstract, adversarial, systems, concrete, epistemic |
+### Complete Mode Table
 
-**Three-tier delegation:** plant-manager → process-orchestrator → specialists.
+| # | Slug | Name | Tier | Model | Punch Card |
+|---|---|---|---|---|---|
+| 1 | `plant-manager` | Plant Manager | 1 (strategic) | kilo/anthropic/claude-opus-4.6 | `plant-orchestrate` |
+| 2 | `process-orchestrator` | Process Orchestrator | 2 (tactical) | kilo/anthropic/claude-opus-4.6 | `process-orchestrate` |
+| 3 | `audit-orchestrator` | Audit Orchestrator | 2 (tactical) | kilo/anthropic/claude-opus-4.6 | `audit-orchestrate` |
+| 4 | `architect` | Software Architect | specialist | kilo/anthropic/claude-opus-4.6 | `discover-phase` |
+| 5 | `code` | Code Fabricator | specialist | openai/gpt-5.3-codex ($0) | `execute-subtask` |
+| 6 | `code-simplifier` | Code Simplifier | specialist | openai/gpt-5.3-codex ($0) | `refactor` |
+| 7 | `fitter` | Fitter (Line Health) | specialist | openai/gpt-5.3-codex ($0) | `fitter-line-health` |
+| 8 | `pr-review` | PR Reviewer | specialist | kilo/anthropic/claude-sonnet-4 | `respond-to-pr-review` |
+| 9 | `docs-specialist` | Documentation Specialist | specialist | kilo/anthropic/claude-sonnet-4 | `land-plane` |
+| 10 | `product-skeptic` | Product Skeptic | specialist | kilo/anthropic/claude-opus-4.6 | `execute-subtask` |
+| 11 | `thinker-abstract` | Thinker: Abstract (Map-Making) | specialist | openai/gpt-5.2 | `prepare-phase` |
+| 12 | `thinker-adversarial` | Thinker: Adversarial (Red Team) | specialist | openai/gpt-5.2 | `prepare-phase` |
+| 13 | `thinker-systems` | Thinker: Systems (Dynamics) | specialist | openai/gpt-5.2 | `prepare-phase` |
+| 14 | `thinker-concrete` | Thinker: Concrete (Implementation) | specialist | openai/gpt-5.2 | `prepare-phase` |
+| 15 | `thinker-epistemic` | Thinker: Epistemic (Hygiene) | specialist | openai/gpt-5.2 | `prepare-phase` |
+
+### Dispatch Routing
+
+**Three-tier delegation:** plant-manager → orchestrators → specialists.
 Orchestrators delegate; they do not use implementation tools directly.
+
+**process-orchestrator phase routing:**
+
+| Phase | Mode | Purpose |
+|---|---|---|
+| discover | `architect` | Fetch task details from beads, understand scope |
+| explore | `architect` | Gather codebase context (semantic + structural) |
+| prepare | `thinker-*` | Sequential thinking prep, choose approach, produce subtask plan |
+| execute | `code` | Implement each planned subtask |
+| gate | `code` | Run quality gates per child |
+| refactor | `code-simplifier` | Refactoring when simplification is the goal |
+| land | `process-orchestrator` | Close/sync beads, final attestation |
+| line-fault | `fitter` | Timeout/stall/env recovery |
+| docs | `docs-specialist` | Documentation updates |
+
+**audit-orchestrator phase routing:**
+
+| Phase | Mode | Purpose |
+|---|---|---|
+| identity-attack | `product-skeptic` | Test identity claims under adversarial pressure |
+| friction-audit | `product-skeptic` | Map cognitive friction and UX dead ends |
+| surface-minimization | `product-skeptic` | Identify removable surface area |
+| leverage-hunt | `architect` | Find highest-leverage improvement |
+| synthesis | `architect` | Compile findings into recommendations |
+
+**Thinker mode selection (for prepare phase):**
+
+| Thinker | When to use |
+|---|---|
+| `thinker-abstract` | When the problem type is unclear — generate competing frames |
+| `thinker-adversarial` | When a plan exists — enumerate failure modes and risks |
+| `thinker-systems` | When understanding dynamics — find feedback loops and bottlenecks |
+| `thinker-concrete` | When ready to plan — collapse ambiguity into executable steps |
+| `thinker-epistemic` | When uncertainty is high — separate know/believe/guess |
+
+**Direct dispatch (not via orchestrator):**
+
+| Mode | Dispatched by | When |
+|---|---|---|
+| `pr-review` | Cascade (you) or user | PR review requests |
+| `plant-manager` | Cascade (you) or user | Epic/batch work |
 
 **Model routing:**
 - `kilo/*` prefix → Kilo Gateway (OAuth, prompt caching ~95% cost reduction on Anthropic)

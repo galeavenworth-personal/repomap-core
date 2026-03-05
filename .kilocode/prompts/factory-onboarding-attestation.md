@@ -51,20 +51,31 @@ Then answer each section. Be concise — bullet points, not paragraphs.
 - How do you sync, claim, and close a bead?
 - What is the Dolt database name for beads vs punch cards?
 
-## 7. Agent Roster (prove you know who does what)
+## 7. Agent Roster — 15 Modes (prove you know who does what)
 
-- Name the 3 Anthropic-powered orchestrators and their tier.
-- Name the 3 OpenAI-powered specialists that cost $0.
-- Which model do the thinker modes use?
+- List ALL 15 mode slugs, grouped by tier (1 strategic, 2 tactical, 12 specialist).
+- For process-orchestrator: name the mode dispatched for each phase
+  (discover, explore, prepare, execute, gate, refactor, land, line-fault, docs).
+- For the prepare phase: which 5 thinker modes exist, and when do you pick each one?
+- For audit-orchestrator: name the mode dispatched for each of its 5 phases.
+- Which modes are dispatched directly (not via orchestrator)?
 - What is the key behavioral rule for orchestrators?
+
+## 8. Routing Gaps (prove you can spot problems)
+
+- The process-orchestrator's `.kilocodemodes` routing table currently sends the
+  `prepare` phase to `architect`. Why is this wrong? What should it use instead?
+- `code-simplifier` has no routing entry in the process-orchestrator. When should
+  it be dispatched?
+- What is the consequence of routing prepare→architect instead of prepare→thinker?
 
 ---
 
 ## Scoring
 
 After answering, self-assess:
-- **7/7 sections correct** → PASS — ready to operate
-- **5-6/7** → PARTIAL — re-read the workflow, note gaps
-- **<5/7** → FAIL — read the workflow thoroughly before proceeding
+- **8/8 sections correct** → PASS — ready to operate
+- **6-7/8** → PARTIAL — re-read the workflow, note gaps
+- **<6/8** → FAIL — read the workflow thoroughly before proceeding
 
 State your score and any gaps. I will verify.
