@@ -79,6 +79,12 @@ interface ParsedArgs {
   prompt: string;
 }
 
+function withSessionContext(prompt: string): string {
+  const context =
+    "Dispatch context:\n- SESSION_ID: {{SESSION_ID}}\nUse this exact SESSION_ID when running punch card self-check commands.";
+  return `${context}\n\n${prompt}`;
+}
+
 function parseDispatchArgs(args: string[]): ParsedArgs {
   let agent = "plant-manager";
   let title: string | undefined;
@@ -264,7 +270,7 @@ async function main() {
   const wfId = workflowId ?? `agent-task-${Date.now()}`;
 
   const input: AgentTaskInput = {
-    prompt,
+    prompt: withSessionContext(prompt),
     agent,
     title: title ?? `${agent}: ${prompt.slice(0, 60)}...`,
     kiloHost,

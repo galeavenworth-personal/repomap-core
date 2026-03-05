@@ -117,10 +117,17 @@ async function loadModeCardMap(): Promise<ModeCardMap> {
     "process-orchestrator": "process-orchestrate",
     architect: "discover-phase",
     code: "execute-subtask",
+    "audit-orchestrator": "orchestrate",
     fitter: "fitter-line-health",
     "code-simplifier": "refactor",
+    "product-skeptic": "friction-audit",
     "pr-review": "respond-to-pr-review",
     "docs-specialist": "land-plane",
+    "thinker-abstract": "prepare-phase",
+    "thinker-adversarial": "prepare-phase",
+    "thinker-systems": "prepare-phase",
+    "thinker-concrete": "prepare-phase",
+    "thinker-epistemic": "prepare-phase",
   };
   return modeCardMapCache;
 }

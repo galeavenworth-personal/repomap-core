@@ -146,8 +146,19 @@ export async function sendPrompt(
   prompt: string,
   agent?: string
 ): Promise<void> {
+  const sessionContext =
+    `Dispatch context:\n- SESSION_ID: ${sessionId}\n` +
+    "Use this exact SESSION_ID when running punch card self-check commands.";
+  let promptWithSessionId = prompt
+    .replaceAll("{{SESSION_ID}}", sessionId)
+    .replaceAll("${SESSION_ID}", sessionId)
+    .replaceAll("$SESSION_ID", sessionId);
+  if (!promptWithSessionId.includes("SESSION_ID:")) {
+    promptWithSessionId = `${sessionContext}\n\n${promptWithSessionId}`;
+  }
+
   const body = {
-    parts: [{ type: "text", text: prompt }],
+    parts: [{ type: "text", text: promptWithSessionId }],
     ...(agent ? { agent } : {}),
   };
 
@@ -164,7 +175,9 @@ export async function sendPrompt(
     );
   }
 
-  log.info(`Prompt dispatched async to session ${sessionId} (${prompt.length} chars)`);
+  log.info(
+    `Prompt dispatched async to session ${sessionId} (${promptWithSessionId.length} chars)`
+  );
 }
 
 /**

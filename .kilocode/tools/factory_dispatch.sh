@@ -293,6 +293,50 @@ fi
 log "$(timestamp) Session created: ${SESSION_ID}"
 log "$(timestamp) Title: ${TITLE}"
 
+python3 - "$PROMPT_FILE" "$SESSION_ID" <<'PYEOF'
+import json, sys
+
+path = sys.argv[1]
+session_id = sys.argv[2]
+
+with open(path) as f:
+    payload = json.load(f)
+
+parts = payload.get("parts")
+if not isinstance(parts, list):
+    parts = []
+
+session_context = (
+    f"Dispatch context:\n- SESSION_ID: {session_id}\n"
+    "Use this exact SESSION_ID when running punch card self-check commands."
+)
+
+injected = False
+for part in parts:
+    if not isinstance(part, dict):
+        continue
+    if part.get("type") != "text":
+        continue
+    text = part.get("text")
+    if not isinstance(text, str):
+        continue
+    text = text.replace("$SESSION_ID", session_id)
+    text = text.replace("${SESSION_ID}", session_id)
+    text = text.replace("{{SESSION_ID}}", session_id)
+    if not injected:
+        text = f"{session_context}\n\n{text}"
+        injected = True
+    part["text"] = text
+
+if not injected:
+    parts.insert(0, {"type": "text", "text": session_context})
+
+payload["parts"] = parts
+
+with open(path, "w") as f:
+    json.dump(payload, f)
+PYEOF
+
 # ─── Phase 4: Dispatch prompt ────────────────────────────────────────────────
 
 # Use async prompt endpoint (POST /session/{id}/prompt_async) so that the

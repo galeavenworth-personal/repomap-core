@@ -26,6 +26,18 @@ customModes:
       - Documentation is updated
       - No backwards compatibility breaks (or explicitly documented)
       - Quality gates pass (ruff, mypy, pytest)
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `respond-to-pr-review`
+      - Required punches:
+        - `gate_pass:ruff-format` — Ruff format check must pass
+        - `gate_pass:ruff-check` — Ruff lint check must pass
+        - `gate_pass:mypy` — Mypy type check must pass
+        - `gate_pass:pytest` — Pytest test suite must pass
+      - Forbidden punches: none defined for this card.
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "respond-to-pr-review"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use when reviewing pull requests, analyzing diffs, or providing code feedback.
       Automatically invoked when user mentions "review", "PR", or "pull request".
@@ -66,6 +78,18 @@ customModes:
       - Use `sequentialthinking` for complex design decisions
       - Use `browser` for research and documentation lookup
       - Use `context7` for library documentation
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `discover-phase`
+      - Required punches:
+        - `mcp_call:%codebase___retrieval%` — Use Augment context engine for discovery
+        - `tool_call:read_file` — Read at least one file
+        - `step_complete:task_exit` — Complete the phase before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "discover-phase"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use when planning features, designing architecture, creating specifications,
       or documenting system design. Automatically invoked when user mentions
@@ -138,6 +162,20 @@ customModes:
       - Suggestions for further improvements if applicable
 
       Remember: Your goal is to make code that developers will thank you for code that is a joy to read, understand, and modify. Every refactoring should make the codebase demonstrably better.
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `refactor`
+      - Required punches:
+        - `gate_pass:ruff-format` — Ruff format check must pass
+        - `gate_pass:ruff-check` — Ruff lint check must pass
+        - `gate_pass:mypy` — Mypy type check must pass
+        - `gate_pass:pytest` — Pytest test suite must pass
+        - `mcp_call:process_thought` — Sequential thinking required
+        - `mcp_call:codebase___retrieval` — Codebase retrieval required
+      - Forbidden punches: none defined for this card.
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "refactor"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     source: project
   - slug: code
     name: Code Fabricator
@@ -181,6 +219,21 @@ customModes:
       - `.venv/bin/python -m mypy src`
       - `.venv/bin/python -m pytest -m 'not live'`
   - slug: product-skeptic
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `execute-subtask`
+      - Required punches:
+        - `mcp_call:%codebase___retrieval%` — Gather context before editing
+        - `gate_pass:ruff-format` — Ruff format check must pass
+        - `gate_pass:ruff-check` — Ruff lint check must pass
+        - `gate_pass:mypy` — Mypy type check must pass
+        - `gate_pass:pytest` — Pytest test suite must pass
+        - `step_complete:task_exit` — Complete the subtask before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "execute-subtask"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     name: Product Skeptic
     roleDefinition: |
       Adversarial product reasoning specialist. Stress tests repomap's identity,
@@ -207,6 +260,21 @@ customModes:
       - Tie critiques to specific workflows, artifacts, or commands
       - Recommend the narrowest move that increases leverage
       - Use sequential thinking for multi-step reasoning
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `execute-subtask`
+      - Required punches:
+        - `mcp_call:%codebase___retrieval%` — Gather context before editing
+        - `gate_pass:ruff-format` — Ruff format check must pass
+        - `gate_pass:ruff-check` — Ruff lint check must pass
+        - `gate_pass:mypy` — Mypy type check must pass
+        - `gate_pass:pytest` — Pytest test suite must pass
+        - `step_complete:task_exit` — Complete the subtask before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "execute-subtask"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use for adversarial review, friction audits, and identity pressure testing
       of repomap workflows, artifacts, and UX.
@@ -268,6 +336,16 @@ customModes:
       ## Workflow References
 
       - Fitter runbook: see [`fitter-line-health.md`](.kilocode/workflows/fitter-line-health.md:6)
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `fitter-line-health`
+      - Required punches:
+        - `gate_pass:workflow-gate` — Restore at least one workflow gate
+        - `step_complete:task_exit` — Complete restoration work before exit
+      - Forbidden punches: none defined for this card.
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "fitter-line-health"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use when a quality gate cannot complete deterministically (timeout, stall, env mismatch)
       or when the orchestration workflow suite needs maintenance to keep gates runnable.
@@ -283,6 +361,20 @@ customModes:
     fileRegex: \.(md|mdx|txt|rst|adoc)$|README$|CHANGELOG$
     customInstructions: |
       Focus on clarity, proper formatting, and comprehensive examples. Always check for broken links and ensure consistency in tone and style.
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `land-plane`
+      - Required punches:
+        - `gate_pass:ruff-format` — Ruff format check must pass
+        - `gate_pass:ruff-check` — Ruff lint check must pass
+        - `gate_pass:mypy` — Mypy type check must pass
+        - `gate_pass:pytest` — Pytest test suite must pass
+        - `step_complete:task_exit` — Task must reach completion
+        - `tool_call:updateTodoList` — At least one todo update required
+      - Forbidden punches: none defined for this card.
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "land-plane"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     source: project
   - slug: process-orchestrator
     name: Process Orchestrator
@@ -474,6 +566,21 @@ customModes:
       - include model-plan match status when a plan is present
 
       Parent must roll up runtime attestations in each phase handoff packet.
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `process-orchestrate`
+      - Required punches:
+        - `child_spawn:code` — Delegate execution to code mode
+        - `child_complete:child_return` — Receive child completion payloads
+        - `step_complete:task_exit` — Complete orchestrator lifecycle
+      - Forbidden punches:
+        - `tool_call:edit_file%` — Parent must not edit files directly
+        - `tool_call:apply_diff%` — Parent must not apply diffs directly
+        - `tool_call:write_to_file%` — Parent must not write files directly
+        - `mcp_call:%codebase___retrieval%` — Parent must not run codebase retrieval directly
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "process-orchestrate"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     source: project
   - slug: audit-orchestrator
     name: "Audit Orchestrator"
@@ -580,6 +687,16 @@ customModes:
       - If a subtask fails, report the failure and stop (no automatic retries)
       - Present the final report using attempt_completion
       - The report must contain all required sections, session exports, and runtime attestations
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `orchestrate`
+      - Required punches:
+        - `child_spawn:%` — Spawn at least one child task
+        - `step_complete:task_exit` — Complete orchestrator lifecycle
+      - Forbidden punches: none defined for this card.
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "orchestrate"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use for adversarial pressure testing of repomap workflows, artifacts, and UX.
       Automatically invoked when user mentions "pressure test", "pressure testing",
@@ -703,6 +820,21 @@ customModes:
       After all children complete:
       1. Sync beads: `.kilocode/tools/bd sync`
       2. Report results via `attempt_completion` with a summary of each child's outcome
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `plant-orchestrate`
+      - Required punches:
+        - `child_spawn:process-orchestrator` — Delegate to process-orchestrator
+        - `child_complete:child_return` — Receive child completion payloads
+        - `step_complete:task_exit` — Complete plant-manager lifecycle
+      - Forbidden punches:
+        - `tool_call:edit_file%` — Plant manager must not edit files directly
+        - `tool_call:apply_diff%` — Plant manager must not apply diffs directly
+        - `tool_call:write_to_file%` — Plant manager must not write files directly
+        - `mcp_call:%codebase___retrieval%` — Plant manager must not run codebase retrieval directly
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "plant-orchestrate"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     source: project
   - slug: thinker-abstract
     name: "Thinker: Abstract (Map-Making)"
@@ -748,6 +880,18 @@ customModes:
       Include in your attempt_completion:
       - runtime_model_reported
       - runtime_mode_reported
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `prepare-phase`
+      - Required punches:
+        - `mcp_call:%process_thought%` — Use sequential thinking tools
+        - `mcp_call:%export_session%` — Export the thinking session artifact
+        - `step_complete:task_exit` — Complete the phase before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "prepare-phase"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use to generate competing problem frames before converging on a solution.
       Spawned as a subtask by orchestrators following a thinking plan.
@@ -798,6 +942,18 @@ customModes:
       Include in your attempt_completion:
       - runtime_model_reported
       - runtime_mode_reported
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `prepare-phase`
+      - Required punches:
+        - `mcp_call:%process_thought%` — Use sequential thinking tools
+        - `mcp_call:%export_session%` — Export the thinking session artifact
+        - `step_complete:task_exit` — Complete the phase before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "prepare-phase"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use to falsify an existing plan/design by enumerating failure modes and mitigations.
       Spawned as a subtask by orchestrators following a thinking plan.
@@ -848,6 +1004,18 @@ customModes:
       Include in your attempt_completion:
       - runtime_model_reported
       - runtime_mode_reported
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `prepare-phase`
+      - Required punches:
+        - `mcp_call:%process_thought%` — Use sequential thinking tools
+        - `mcp_call:%export_session%` — Export the thinking session artifact
+        - `step_complete:task_exit` — Complete the phase before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "prepare-phase"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use to find feedback loops, bottlenecks, and leverage points in a system.
       Spawned as a subtask by orchestrators following a thinking plan.
@@ -899,6 +1067,18 @@ customModes:
       Include in your attempt_completion:
       - runtime_model_reported
       - runtime_mode_reported
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `prepare-phase`
+      - Required punches:
+        - `mcp_call:%process_thought%` — Use sequential thinking tools
+        - `mcp_call:%export_session%` — Export the thinking session artifact
+        - `step_complete:task_exit` — Complete the phase before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "prepare-phase"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use to collapse ambiguity into executable steps with verification checks.
       Spawned as a subtask by orchestrators following a thinking plan.
@@ -951,6 +1131,18 @@ customModes:
       Include in your attempt_completion:
       - runtime_model_reported
       - runtime_mode_reported
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `prepare-phase`
+      - Required punches:
+        - `mcp_call:%process_thought%` — Use sequential thinking tools
+        - `mcp_call:%export_session%` — Export the thinking session artifact
+        - `step_complete:task_exit` — Complete the phase before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "prepare-phase"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use to separate know/believe/guess, assign confidence, and plan uncertainty reduction.
       Spawned as a subtask by orchestrators following a thinking plan.
