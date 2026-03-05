@@ -162,7 +162,7 @@ describe("e2e pipeline integration", () => {
       sourceHash: string;
     };
     expect(firstPunch.punchType).toBe("tool_call");
-    expect(firstPunch.punchKey).toBe("readFile");
+    expect(firstPunch.punchKey).toBe("read_file");
     expect(firstPunch.taskId).toBe("sess-1");
     expect(firstPunch.observedAt).toBeInstanceOf(Date);
     expect(firstPunch.sourceHash).toMatch(/^[a-f0-9]{64}$/);

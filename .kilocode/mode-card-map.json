@@ -1,0 +1,10 @@
+{
+  "plant-manager": "plant-orchestrate",
+  "process-orchestrator": "process-orchestrate",
+  "architect": "discover-phase",
+  "code": "execute-subtask",
+  "fitter": "fitter-line-health",
+  "code-simplifier": "refactor",
+  "pr-review": "respond-to-pr-review",
+  "docs-specialist": "land-plane"
+}
