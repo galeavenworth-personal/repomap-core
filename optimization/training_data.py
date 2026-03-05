@@ -19,6 +19,8 @@ DiagnosisCategory = Literal[
     "model_confusion",
 ]
 
+CardStatus = Literal["pass", "fail"]
+
 
 class SessionOutcome(str, Enum):
     """Coarse session/task outcome label for DSPy optimization datasets."""
@@ -55,6 +57,10 @@ class TaskProfile:
     read_count: int
     edit_count: int
     bash_count: int
+    card_id: str | None = None
+    card_status: CardStatus | None = None
+    missing_punches: str | None = None
+    mode: str | None = None
     checkpoint_status: Literal["pass", "fail"] | None = None
 
     @property
@@ -153,12 +159,15 @@ def extract_task_profiles(limit: int | None = None) -> list[TaskProfile]:
                 cursor.execute(sql, (limit,))
             rows = cast(list[dict[str, Any]], cursor.fetchall())
 
-        checkpoint_by_task: dict[str, Literal["pass", "fail"]] = {}
+        checkpoint_by_task: dict[str, CardStatus] = {}
+        card_id_by_task: dict[str, str] = {}
+        card_status_by_task: dict[str, CardStatus] = {}
+        missing_punches_by_task: dict[str, str] = {}
         if "checkpoints" in tables:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT c.task_id, c.status
+                    SELECT c.task_id, c.card_id, c.status, c.missing_punches
                     FROM checkpoints c
                     JOIN (
                         SELECT task_id, MAX(validated_at) AS max_validated_at
@@ -171,11 +180,33 @@ def extract_task_profiles(limit: int | None = None) -> list[TaskProfile]:
                 )
                 c_rows = cast(list[dict[str, Any]], cursor.fetchall())
             for row in c_rows:
+                task_id = str(row["task_id"])
                 status = str(row.get("status", "")).lower()
                 if status in {"pass", "fail"}:
-                    checkpoint_by_task[str(row["task_id"])] = cast(
-                        Literal["pass", "fail"], status
-                    )
+                    status_value = cast(CardStatus, status)
+                    checkpoint_by_task[task_id] = status_value
+                    card_status_by_task[task_id] = status_value
+                card_id = row.get("card_id")
+                if card_id is not None and str(card_id) != "":
+                    card_id_by_task[task_id] = str(card_id)
+                missing = row.get("missing_punches")
+                if missing is not None and str(missing) != "":
+                    missing_punches_by_task[task_id] = str(missing)
+
+        mode_by_task: dict[str, str] = {}
+        if "tasks" in tables:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT task_id, mode, punch_card_id FROM tasks")
+                t_rows = cast(list[dict[str, Any]], cursor.fetchall())
+            for row in t_rows:
+                task_id = str(row["task_id"])
+                mode = row.get("mode")
+                if mode is not None and str(mode) != "":
+                    mode_by_task[task_id] = str(mode)
+                if task_id not in card_id_by_task:
+                    card_id = row.get("punch_card_id")
+                    if card_id is not None and str(card_id) != "":
+                        card_id_by_task[task_id] = str(card_id)
 
     profiles: list[TaskProfile] = []
     for row in rows:
@@ -197,6 +228,10 @@ def extract_task_profiles(limit: int | None = None) -> list[TaskProfile]:
                 read_count=_to_int(row.get("read_count")),
                 edit_count=_to_int(row.get("edit_count")),
                 bash_count=_to_int(row.get("bash_count")),
+                card_id=card_id_by_task.get(task_id),
+                card_status=card_status_by_task.get(task_id),
+                missing_punches=missing_punches_by_task.get(task_id),
+                mode=mode_by_task.get(task_id),
                 checkpoint_status=checkpoint_by_task.get(task_id),
             )
         )
@@ -205,6 +240,12 @@ def extract_task_profiles(limit: int | None = None) -> list[TaskProfile]:
 
 def label_task_outcome(profile: TaskProfile) -> SessionOutcome:
     """Label session outcome using deterministic, documented heuristics."""
+    if profile.card_status == "fail":
+        return SessionOutcome.FAILURE
+
+    if profile.card_status == "pass":
+        return SessionOutcome.SUCCESS
+
     if profile.checkpoint_status == "fail" or profile.gate_fail_count > 0:
         return SessionOutcome.FAILURE
 
@@ -235,6 +276,15 @@ def label_task_outcome(profile: TaskProfile) -> SessionOutcome:
 
 def infer_diagnosis_category(profile: TaskProfile) -> DiagnosisCategory:
     """Map telemetry patterns to fitter diagnosis categories."""
+    if profile.card_status == "fail" and profile.missing_punches:
+        missing = profile.missing_punches.lower()
+        if "forbidden" in missing:
+            return "scope_creep"
+        if "process_thought" in missing or "codebase___retrieval" in missing:
+            return "context_exhaustion"
+        if "gate_pass" in missing or "ruff" in missing or "mypy" in missing:
+            return "infinite_retry"
+
     if profile.tool_calls >= 10 and profile.step_finished_count == 0:
         return "stuck_on_approval"
 
@@ -356,6 +406,10 @@ def build_dspy_example(
         session_id=profile.task_id,
         summary=_summary(profile, labeled.outcome),
         tool_activity=_tool_activity(profile),
+        card_id=profile.card_id,
+        card_status=profile.card_status,
+        missing_punches=profile.missing_punches,
+        mode=profile.mode,
         total_punches=profile.total_punches,
         tool_calls=profile.tool_calls,
         total_cost=profile.total_cost,
@@ -369,6 +423,10 @@ def build_dspy_example(
         "session_id",
         "summary",
         "tool_activity",
+        "card_id",
+        "card_status",
+        "missing_punches",
+        "mode",
         "total_punches",
         "tool_calls",
         "total_cost",
