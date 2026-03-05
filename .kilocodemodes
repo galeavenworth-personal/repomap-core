@@ -385,45 +385,72 @@ customModes:
       Parent coordinates lifecycle state and contracts; parent does not implement.
       Subtasks execute in clean contexts and return structured outputs only.
 
-      ## Two-Phase Delegation Workflow (mandatory)
+      ## Delegation Model (mandatory)
 
-      Phase 1: start-task (prep only)
-      1. discover  -> architect child
-      2. explore   -> architect child
-      3. prepare   -> thinker-* child (select thinking mode based on problem type)
+      Every phase is its own child session. Never combine phases into one session.
+      The orchestrator spawns children sequentially: child N must complete and
+      return before child N+1 is spawned.
 
-      Phase 2: execute-task (implementation only)
-      4. execute subtasks from prepare output -> code children (sequential)
-      5. gate quality for each code child (ruff, mypy, pytest)
-      6. land (close/sync/report)
+      Phase 1: start-task (understanding + planning)
+      1. discover  -> 1 architect child session (scope, constraints, context)
+      2. explore   -> 1 architect child session (codebase context, dependencies)
+      3. prepare   -> 1 architect or thinker-* child session (produces subtask plan)
+
+      The prepare child MUST return a structured subtask plan that tells the
+      orchestrator exactly how many code sessions are needed and what each does.
+
+      Phase 2: execute-task (implementation, one session per subtask)
+      4. execute   -> N code child sessions, one per subtask from the prepare plan
+                      Each code child does ONE subtask. Sequential, not parallel.
+                      Orchestrator spawns child 1 -> waits for return -> spawns child 2 -> etc.
+      5. gate      -> quality gates run within each code child before it returns
+      6. land      -> orchestrator closes beads, syncs, reports
 
       Never skip, reorder, or merge phases without explicit escalation rationale.
+      Never combine discover+explore or explore+prepare into one session.
       Never implement directly in this parent session.
 
       ## Phase-to-Mode Routing
 
-      Phase          | Mode                 | Purpose
-      discover       | architect            | Fetch task details from beads, understand scope
-      explore        | architect            | Gather codebase context (semantic + structural)
-      prepare        | thinker-*            | Sequential thinking prep, choose approach, produce subtask plan
-      execute        | code                 | Implement each planned subtask in a child session
-      gate           | code                 | Run quality gates per child before child completion
-      refactor       | code-simplifier      | Refactoring when simplification is the primary goal
-      land           | process-orchestrator | Close/sync Beads + run landing script + final attestation/handoff
-      line-fault     | fitter               | Timeout/stall/env recovery
-      docs           | docs-specialist      | Documentation updates
+      Phase          | Mode                 | Sessions | Purpose
+      discover       | architect            | 1        | Fetch task details from beads, understand scope
+      explore        | architect            | 1        | Gather codebase context (semantic + structural)
+      prepare        | architect or thinker-*| 1        | Produce subtask plan for the orchestrator
+      execute        | code                 | N        | One session per subtask from prepare plan
+      refactor       | code-simplifier      | N        | One session per refactoring subtask
+      gate           | (within code child)  | —        | Quality gates run inside each code/refactor child
+      land           | process-orchestrator | —        | Orchestrator closes beads, syncs, reports
+      line-fault     | fitter               | 1        | Timeout/stall/env recovery
+      docs           | docs-specialist      | 1        | Documentation updates
 
-      ## Thinker Mode Selection (for prepare phase)
+      ## Prepare Phase: Mode Selection
 
-      Pick the thinker mode that matches the current problem state:
-      thinker-abstract      | Problem type is unclear — generate competing frames before converging
-      thinker-adversarial   | A plan exists — enumerate failure modes, risks, and mitigations
-      thinker-systems       | Understanding dynamics — find feedback loops and bottlenecks
-      thinker-concrete      | Ready to plan — collapse ambiguity into executable steps with checks
-      thinker-epistemic     | Uncertainty is high — separate know/believe/guess, plan measurement
+      The prepare phase can use architect or a thinker mode. Both are valid.
+      Use architect when the task is straightforward and just needs a plan.
+      Use a thinker when the problem needs structured reasoning first.
 
-      Default for most implementation tasks: thinker-concrete.
-      When in doubt about problem framing: thinker-abstract first, then thinker-concrete.
+      Thinker options (if used):
+      thinker-abstract      | Problem type is unclear — generate competing frames
+      thinker-adversarial   | A plan exists — enumerate failure modes and risks
+      thinker-systems       | Understanding dynamics — find feedback loops
+      thinker-concrete      | Ready to plan — collapse into executable steps
+      thinker-epistemic     | Uncertainty is high — separate know/believe/guess
+
+      ## Prepare Phase: Required Output Format
+
+      The prepare child MUST return a structured subtask plan. The orchestrator
+      uses this plan to determine how many code sessions to spawn.
+
+      Required fields in prepare output:
+      - subtask_count: integer (how many code sessions needed)
+      - subtasks: ordered list, each with:
+        - id: short identifier (e.g. "subtask-1")
+        - objective: what this code session must accomplish
+        - files: which files to touch
+        - acceptance: how to verify it worked
+        - dependencies: which prior subtasks must complete first (if any)
+      - execution_mode: "code" or "code-simplifier"
+      - risks: anything the orchestrator should watch for
 
       ## Parent vs Subtask Contract
 
@@ -503,43 +530,66 @@ customModes:
       ## Task Tool Usage (CRITICAL)
 
       When delegating to specialist agents, use the `task` tool with these parameters:
-      - subagent_type: the agent slug from the Phase-to-Mode Routing table (e.g. "architect", "code", "thinker-concrete", "fitter")
+      - subagent_type: the agent slug from the Phase-to-Mode Routing table
       - description: a short 3-5 word label (e.g. "Discover scope for ywk.8")
       - prompt: the full handoff packet with phase objective, acceptance checks, and evidence pointers
 
-      Example (explore phase → architect):
+      CRITICAL: Every phase is its own child session. Never ask one child to do
+      multiple phases. The orchestrator drives the sequence.
+
+      Example (child 1: discover → architect):
       <task>
       <subagent_type>architect</subagent_type>
-      <description>Explore codebase context</description>
+      <description>Discover scope for ywk.8</description>
+      <prompt>
+      Phase: discover
+      Objective: Read bead repomap-core-ywk.8, identify scope, constraints, affected files
+      Context: [bead content]
+      Return: scope summary, constraints, context pointers for explore phase
+      </prompt>
+      </task>
+
+      Example (child 2: explore → architect):
+      <task>
+      <subagent_type>architect</subagent_type>
+      <description>Explore codebase for ywk.8</description>
       <prompt>
       Phase: explore
       Objective: Gather codebase context for bead repomap-core-ywk.8
-      ...
+      Discovery summary: [from child 1 output]
+      Return: dependency map, relevant code sections, integration points
       </prompt>
       </task>
 
-      Example (prepare phase → thinker):
+      Example (child 3: prepare → architect):
       <task>
-      <subagent_type>thinker-concrete</subagent_type>
+      <subagent_type>architect</subagent_type>
       <description>Plan subtasks for ywk.8</description>
       <prompt>
       Phase: prepare
-      Objective: Produce executable subtask plan for bead repomap-core-ywk.8
-      Exploration summary: [from explore child output]
-      Required thinking style: concrete (collapse ambiguity into steps)
-      Export path: .kilocode/thinking/task-ywk.8-prep-2026-03-05.json
-      ...
+      Objective: Produce a subtask plan for bead repomap-core-ywk.8
+      Exploration summary: [from child 2 output]
+      REQUIRED OUTPUT: Return a subtask plan with:
+        - subtask_count: N
+        - subtasks: [{id, objective, files, acceptance, dependencies}]
+        - execution_mode: "code" or "code-simplifier"
+        - risks: []
+      The orchestrator will spawn one code session per subtask.
       </prompt>
       </task>
 
-      Example (refactor phase → code-simplifier):
+      Example (child 4..N: execute → code, one per subtask):
       <task>
-      <subagent_type>code-simplifier</subagent_type>
-      <description>Refactor parser module</description>
+      <subagent_type>code</subagent_type>
+      <description>Execute subtask-1 for ywk.8</description>
       <prompt>
-      Phase: refactor
-      Objective: Simplify src/parse/ast_imports.py without changing public API
-      ...
+      Phase: execute
+      Subtask: subtask-1 of 3
+      Objective: [from prepare plan subtask-1 objective]
+      Files: [from prepare plan subtask-1 files]
+      Acceptance: [from prepare plan subtask-1 acceptance]
+      Prior subtask results: [from child 4 output, if subtask-2+]
+      Quality gates: ruff format, ruff check, mypy, pytest
       </prompt>
       </task>
 
@@ -572,15 +622,24 @@ customModes:
       ## Required Delegation Sequence
 
       For every work unit, produce these child sessions in order:
-      1. architect child for discover
-      2. architect child for explore
-      3. thinker-* child for prepare (select mode based on problem type; default: thinker-concrete)
-      4. one or more code children for execute subtasks from prepare output
-         (or code-simplifier children if the task is primarily refactoring)
+      1. architect child for discover (1 session)
+      2. architect child for explore (1 session)
+      3. architect or thinker-* child for prepare (1 session — returns subtask plan)
+      4. code child for subtask 1 from prepare plan (1 session)
+      5. code child for subtask 2 from prepare plan (1 session)
+      ... repeat for each subtask in the prepare plan
+      N+3. land phase (orchestrator closes beads, syncs, reports)
 
-      Do not spawn code/code-simplifier children before prepare completes.
-      Do not run code children in parallel unless subtasks are explicitly independent.
-      Default policy: sequential code children with gate evidence per child.
+      Minimum children: 4 (discover + explore + prepare + at least 1 code).
+      Typical: 5-8 children (3 planning + 2-5 code subtasks).
+
+      RULES:
+      - Each phase is its own child session. Never combine phases.
+      - Do not spawn code children before prepare completes and returns its plan.
+      - Execute code children sequentially: child N must return before child N+1 spawns.
+      - Pass prior subtask results to subsequent code children for context.
+      - If prepare says execution_mode is "code-simplifier", use that instead of code.
+      - Gate quality runs inside each code child, not as a separate session.
 
       ## Phase Handoff Templates
 
@@ -591,14 +650,16 @@ customModes:
       - discovery summary, dependency map objective, files/modules to inspect
 
       Prepare handoff must include:
-      - exploration summary
-      - selected thinker mode and rationale (e.g. "thinker-concrete: ready to plan steps")
-      - export path for thinking session artifact
-      - output format for planned subtasks
+      - exploration summary (from explore child output)
+      - mode selection rationale (architect for straightforward, thinker-* for complex)
+      - export path for thinking session artifact (if using thinker)
+      - REQUIRED: instruction to return structured subtask plan (subtask_count, subtasks[], execution_mode)
 
-      Execute handoff must include:
-      - selected subtask objective
-      - allowed file set
+      Execute handoff (one per subtask) must include:
+      - subtask ID and position (e.g. "subtask-2 of 4")
+      - subtask objective (from prepare plan)
+      - allowed file set (from prepare plan)
+      - results from prior subtask children (for context continuity)
       - required quality gates (ruff format/check, mypy, pytest)
       - completion evidence requirements
 

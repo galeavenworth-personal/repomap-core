@@ -328,19 +328,26 @@ npx --prefix daemon pm2 restart all
 **Three-tier delegation:** plant-manager → orchestrators → specialists.
 Orchestrators delegate; they do not use implementation tools directly.
 
-**process-orchestrator phase routing:**
+**process-orchestrator delegation model:**
 
-| Phase | Mode | Purpose |
-|---|---|---|
-| discover | `architect` | Fetch task details from beads, understand scope |
-| explore | `architect` | Gather codebase context (semantic + structural) |
-| prepare | `thinker-*` | Sequential thinking prep, choose approach, produce subtask plan |
-| execute | `code` | Implement each planned subtask |
-| gate | `code` | Run quality gates per child |
-| refactor | `code-simplifier` | Refactoring when simplification is the goal |
-| land | `process-orchestrator` | Close/sync beads, final attestation |
-| line-fault | `fitter` | Timeout/stall/env recovery |
-| docs | `docs-specialist` | Documentation updates |
+Each phase = its own child session. Orchestrator spawns sequentially (child N
+returns before child N+1). Minimum 4 children, typical 5-8.
+
+| Phase | Mode | Sessions | Purpose |
+|---|---|---|---|
+| discover | `architect` | 1 | Fetch task details, scope, constraints |
+| explore | `architect` | 1 | Gather codebase context, dependencies |
+| prepare | `architect` or `thinker-*` | 1 | Produce subtask plan (tells orchestrator how many code sessions) |
+| execute | `code` | N | One session per subtask from prepare plan, sequential |
+| refactor | `code-simplifier` | N | One session per refactoring subtask (when prepare says so) |
+| gate | (within code child) | — | Quality gates run inside each code/refactor child |
+| land | (orchestrator) | — | Close beads, sync, report |
+| line-fault | `fitter` | 1 | Timeout/stall/env recovery |
+| docs | `docs-specialist` | 1 | Documentation updates |
+
+**Key rule:** The prepare child returns a structured plan with `subtask_count` and
+an ordered list of subtasks. The orchestrator loops over this plan and spawns one
+code session per subtask, passing prior results to each subsequent child.
 
 **audit-orchestrator phase routing:**
 
@@ -352,15 +359,19 @@ Orchestrators delegate; they do not use implementation tools directly.
 | leverage-hunt | `architect` | Find highest-leverage improvement |
 | synthesis | `architect` | Compile findings into recommendations |
 
-**Thinker mode selection (for prepare phase):**
+**Prepare phase mode selection:**
 
-| Thinker | When to use |
+Default: use `architect` for straightforward tasks that just need a subtask plan.
+Use a thinker mode when the problem needs structured reasoning before planning.
+
+| Mode | When to use |
 |---|---|
-| `thinker-abstract` | When the problem type is unclear — generate competing frames |
-| `thinker-adversarial` | When a plan exists — enumerate failure modes and risks |
-| `thinker-systems` | When understanding dynamics — find feedback loops and bottlenecks |
-| `thinker-concrete` | When ready to plan — collapse ambiguity into executable steps |
-| `thinker-epistemic` | When uncertainty is high — separate know/believe/guess |
+| `architect` | **Default.** Task is clear, just needs a subtask breakdown |
+| `thinker-abstract` | Problem type is unclear — generate competing frames first |
+| `thinker-adversarial` | A plan exists — enumerate failure modes and risks |
+| `thinker-systems` | Understanding dynamics — find feedback loops and bottlenecks |
+| `thinker-concrete` | Ready to plan but need rigorous step decomposition with checks |
+| `thinker-epistemic` | Uncertainty is high — separate know/believe/guess |
 
 **Direct dispatch (not via orchestrator):**
 

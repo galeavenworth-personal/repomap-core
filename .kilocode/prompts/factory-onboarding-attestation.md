@@ -54,20 +54,20 @@ Then answer each section. Be concise — bullet points, not paragraphs.
 ## 7. Agent Roster — 15 Modes (prove you know who does what)
 
 - List ALL 15 mode slugs, grouped by tier (1 strategic, 2 tactical, 12 specialist).
-- For process-orchestrator: name the mode dispatched for each phase
-  (discover, explore, prepare, execute, gate, refactor, land, line-fault, docs).
-- For the prepare phase: which 5 thinker modes exist, and when do you pick each one?
 - For audit-orchestrator: name the mode dispatched for each of its 5 phases.
 - Which modes are dispatched directly (not via orchestrator)?
 - What is the key behavioral rule for orchestrators?
 
-## 8. Routing Correctness (prove you understand the delegation flow)
+## 8. Delegation Model (prove you understand how process-orchestrator works)
 
-- The process-orchestrator's prepare phase routes to `thinker-*`. Why not `architect`?
-  What is the default thinker mode for implementation tasks?
-- When does process-orchestrator dispatch to `code-simplifier` instead of `code`?
-- If you were dispatching a task where the problem type is unclear, which thinker
-  mode would you use first? What would you follow it with?
+- How many child sessions does the process-orchestrator spawn at minimum? What is typical?
+- Are discover and explore the same session or different sessions? Why?
+- What mode is used for prepare by default? When would you use a thinker instead?
+- What must the prepare child return to the orchestrator? Name the required fields.
+- If prepare says there are 3 subtasks, how many code sessions does the orchestrator
+  spawn? Are they parallel or sequential? What gets passed between them?
+- Where do quality gates run — as their own session, or inside each code child?
+- When does the orchestrator use `code-simplifier` instead of `code`?
 
 ---
 
