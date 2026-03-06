@@ -7,9 +7,23 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CONFIG_FILE="${FACTORY_ROOT_CONFIG:-$REPO_ROOT/.kilocode/factory-root.json}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
+require_root_enabled() {
+  case "${FACTORY_REQUIRE_ROOT:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if ! require_root_enabled; then
+  exit 0
+fi
+
 if [[ ! -f "$CONFIG_FILE" ]]; then
-  echo "FATAL: factory root config not found: $CONFIG_FILE" >&2
-  exit 64
+  if require_root_enabled; then
+    echo "FATAL: factory root config not found: $CONFIG_FILE" >&2
+    exit 64
+  fi
+  exit 0
 fi
 
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then

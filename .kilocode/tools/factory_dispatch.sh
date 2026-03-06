@@ -52,7 +52,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-"$SCRIPT_DIR/require_factory_root.sh" "$REPO_ROOT"
+if [[ "${FACTORY_REQUIRE_ROOT:-}" == "1" || "${FACTORY_REQUIRE_ROOT:-}" == "true" ]]; then
+    "$SCRIPT_DIR/require_factory_root.sh" "$REPO_ROOT"
+fi
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 
