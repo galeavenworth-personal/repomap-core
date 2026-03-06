@@ -13,6 +13,8 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 KILO_STORAGE = Path.home() / ".config/Code/User/globalStorage/kilocode.kilo-code"
 TASKS_DIR = KILO_STORAGE / "tasks"
@@ -20,6 +22,8 @@ DOLT_BIN = shutil.which("dolt")
 DOLT_DATA_DIR = Path.home() / ".dolt-data/beads"
 GATE_RUNS_JSONL = Path(".kilocode/gate_runs.jsonl")
 BATCH_SIZE = 1000
+KILO_SERVE_BASE_URL = "http://127.0.0.1:4096"
+KILO_SERVE_TIMEOUT = 5  # seconds
 
 
 def _sql_escape_literal(value: str) -> str:
@@ -87,28 +91,111 @@ def _is_uuid(value: str) -> bool:
     return True
 
 
-def resolve_task_id(raw_task_id: str) -> str:
-    """Resolve 'auto' sentinel to the current task UUID, or pass through as-is.
+def resolve_child_from_session_api(
+    parent_session_id: str,
+    child_index: int = 0,
+    base_url: str = KILO_SERVE_BASE_URL,
+    timeout: int = KILO_SERVE_TIMEOUT,
+) -> str | None:
+    """Query kilo serve session API to resolve a child task UUID deterministically.
 
-    Raises SystemExit with a clear message if auto-discovery fails.
+    Calls GET ``{base_url}/session/{parent_session_id}/children`` and returns
+    the child task ID at *child_index*, or ``None`` when the API is unreachable
+    or the child does not exist.
     """
+    url = f"{base_url}/session/{parent_session_id}/children"
+    req = Request(url, method="GET")
+    req.add_header("Accept", "application/json")
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (URLError, OSError, json.JSONDecodeError, ValueError) as exc:
+        print(
+            f"WARNING: kilo serve session API unreachable ({url}): {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+    if not isinstance(data, list):
+        print(
+            f"WARNING: unexpected response from {url}: expected JSON array",
+            file=sys.stderr,
+        )
+        return None
+
+    if child_index < 0 or child_index >= len(data):
+        return None
+
+    child = data[child_index]
+    child_id = child.get("id") if isinstance(child, dict) else None
+    if isinstance(child_id, str) and _is_uuid(child_id):
+        return child_id
+    return None
+
+
+def resolve_task_id(
+    raw_task_id: str,
+    parent_session: str | None = None,
+    child_index: int = 0,
+) -> str:
+    """Resolve a task ID using a 3-tier strategy.
+
+    Resolution order:
+    1. **Explicit UUID** — if *raw_task_id* parses as a UUID, return it directly.
+    2. **Kilo serve session API** — if *parent_session* is provided and
+       *raw_task_id* is ``"auto"``, query the kilo serve children endpoint.
+    3. **Filesystem mtime heuristic** — fall back to the most-recently-modified
+       task directory, emitting a WARNING to stderr.
+
+    Raises ``SystemExit`` with a clear message when all methods fail.
+    """
+    # Tier 1: explicit UUID passthrough
     if _is_uuid(raw_task_id):
         return raw_task_id
 
-    if raw_task_id.lower() == "auto":
-        discovered = get_current_task_id()
-        if discovered is not None:
-            print(f"Auto-discovered task_id from VS Code tasks dir: {discovered}")
-            return discovered
+    if raw_task_id.lower() != "auto":
+        # Non-UUID, non-auto sentinel — pass through as-is
+        return raw_task_id
 
+    # Tier 2: kilo serve session API
+    if parent_session:
+        child_id = resolve_child_from_session_api(
+            parent_session, child_index=child_index
+        )
+        if child_id is not None:
+            print(
+                f"Resolved task_id from kilo serve session API "
+                f"(parent={parent_session}, index={child_index}): {child_id}"
+            )
+            return child_id
         print(
-            "ERROR: task_id 'auto' requested but discovery failed. "
-            f"No task directories found in {TASKS_DIR}",
+            f"WARNING: kilo serve session API did not return a child "
+            f"(parent={parent_session}, index={child_index}), "
+            "falling back to mtime heuristic",
             file=sys.stderr,
         )
-        sys.exit(1)
 
-    return raw_task_id
+    # Tier 3: filesystem mtime heuristic (with warning)
+    discovered = get_current_task_id()
+    if discovered is not None:
+        if parent_session:
+            # Warning already emitted above for API failure → heuristic fallback
+            pass
+        else:
+            print(
+                "WARNING: falling back to mtime heuristic "
+                "(no --parent-session provided)",
+                file=sys.stderr,
+            )
+        print(f"Auto-discovered task_id from VS Code tasks dir: {discovered}")
+        return discovered
+
+    print(
+        "ERROR: task_id 'auto' requested but all resolution methods failed. "
+        f"No task directories found in {TASKS_DIR}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def load_ui_messages(task_id: str) -> list[dict]:
@@ -670,6 +757,27 @@ def main() -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # ── Shared optional arguments for deterministic ID resolution ──
+    def _add_session_args(subparser: argparse.ArgumentParser) -> None:
+        subparser.add_argument(
+            "--parent-session",
+            default=None,
+            help=(
+                "Parent kilo serve session UUID.  When task_id is 'auto', "
+                "the engine queries the kilo serve /session/{id}/children "
+                "endpoint to resolve the child task ID deterministically."
+            ),
+        )
+        subparser.add_argument(
+            "--child-index",
+            type=int,
+            default=0,
+            help=(
+                "Zero-based index into the children array returned by the "
+                "session API (default: 0)."
+            ),
+        )
+
     mint_p = sub.add_parser("mint", help="Mint punches from task events")
     mint_p.add_argument(
         "task_id",
@@ -680,6 +788,7 @@ def main() -> int:
         default=None,
         help="Beads issue ID for gate_runs.jsonl matching",
     )
+    _add_session_args(mint_p)
 
     eval_p = sub.add_parser("evaluate", help="Evaluate a punch card for a task")
     eval_p.add_argument(
@@ -687,6 +796,7 @@ def main() -> int:
         help="Kilo Code task UUID, or 'auto' to discover the current task",
     )
     eval_p.add_argument("card_id")
+    _add_session_args(eval_p)
 
     cp_p = sub.add_parser(
         "checkpoint",
@@ -697,11 +807,16 @@ def main() -> int:
         help="Kilo Code task UUID, or 'auto' to discover the current task",
     )
     cp_p.add_argument("card_id")
+    _add_session_args(cp_p)
 
     args = parser.parse_args()
 
     # Resolve 'auto' sentinel to the actual current task UUID
-    task_id = resolve_task_id(args.task_id)
+    task_id = resolve_task_id(
+        args.task_id,
+        parent_session=args.parent_session,
+        child_index=args.child_index,
+    )
 
     if args.command == "mint":
         cmd_mint(task_id, bead_id=args.bead_id)
