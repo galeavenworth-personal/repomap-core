@@ -335,13 +335,19 @@ export function createDoltWriter(config: DoltConfig): DoltWriter {
       if (!connection) throw new Error("Not connected to Dolt");
       await connection.execute(
         `INSERT INTO checkpoints (task_id, card_id, status, validated_at, missing_punches)
-         VALUES (?, ?, ?, ?, ?)`,
+         SELECT ?, ?, ?, ?, ?
+         FROM DUAL
+         WHERE NOT EXISTS (
+           SELECT 1 FROM checkpoints WHERE task_id = ? AND card_id = ?
+         )`,
         [
           checkpoint.taskId,
           checkpoint.cardId,
           checkpoint.status,
           checkpoint.validatedAt,
           checkpoint.missingPunches ?? null,
+          checkpoint.taskId,
+          checkpoint.cardId,
         ]
       );
     },

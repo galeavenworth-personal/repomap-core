@@ -20,6 +20,10 @@ def _profile(**overrides: object) -> td.TaskProfile:
         read_count=5,
         edit_count=3,
         bash_count=2,
+        card_id=None,
+        card_status=None,
+        missing_punches=None,
+        mode=None,
         checkpoint_status=None,
     )
     return td.TaskProfile(**{**base.__dict__, **overrides})
@@ -33,6 +37,11 @@ def test_label_task_outcome_success_from_checkpoint_pass() -> None:
 def test_label_task_outcome_failure_from_checkpoint_fail() -> None:
     profile = _profile(checkpoint_status="fail")
     assert td.label_task_outcome(profile) == td.SessionOutcome.FAILURE
+
+
+def test_label_task_outcome_uses_card_status_as_primary_signal() -> None:
+    profile = _profile(card_status="pass", checkpoint_status="fail")
+    assert td.label_task_outcome(profile) == td.SessionOutcome.SUCCESS
 
 
 def test_label_task_outcome_failure_from_runaway_cost() -> None:
@@ -60,6 +69,14 @@ def test_infer_diagnosis_context_exhaustion() -> None:
     assert td.infer_diagnosis_category(profile) == "context_exhaustion"
 
 
+def test_infer_diagnosis_uses_card_missing_punches_context() -> None:
+    profile = _profile(
+        card_status="fail",
+        missing_punches="FORBIDDEN violation: tool_call:edit_file",
+    )
+    assert td.infer_diagnosis_category(profile) == "scope_creep"
+
+
 def test_identify_kill_recovery_pairs() -> None:
     failed = td.LabeledTaskProfile(
         profile=_profile(task_id="parent-fail", total_cost=10.0),
@@ -84,7 +101,14 @@ def test_identify_kill_recovery_pairs() -> None:
 
 def test_build_dspy_example_contains_labels() -> None:
     labeled = td.LabeledTaskProfile(
-        profile=_profile(task_id="t-123", total_cost=0.7),
+        profile=_profile(
+            task_id="t-123",
+            total_cost=0.7,
+            card_id="execute-subtask",
+            card_status="pass",
+            missing_punches="",
+            mode="code",
+        ),
         outcome=td.SessionOutcome.SUCCESS,
         diagnosis_category="scope_creep",
     )
@@ -92,3 +116,6 @@ def test_build_dspy_example_contains_labels() -> None:
     assert example.outcome_label == "success"
     assert example.diagnosis_category == "scope_creep"
     assert example.is_kill_recovery is True
+    assert example.card_id == "execute-subtask"
+    assert example.card_status == "pass"
+    assert example.mode == "code"

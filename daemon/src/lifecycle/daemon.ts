@@ -117,10 +117,17 @@ async function loadModeCardMap(): Promise<ModeCardMap> {
     "process-orchestrator": "process-orchestrate",
     architect: "discover-phase",
     code: "execute-subtask",
+    "audit-orchestrator": "audit-orchestrate",
     fitter: "fitter-line-health",
     "code-simplifier": "refactor",
+    "product-skeptic": "friction-audit",
     "pr-review": "respond-to-pr-review",
     "docs-specialist": "land-plane",
+    "thinker-abstract": "prepare-phase",
+    "thinker-adversarial": "prepare-phase",
+    "thinker-systems": "prepare-phase",
+    "thinker-concrete": "prepare-phase",
+    "thinker-epistemic": "prepare-phase",
   };
   return modeCardMapCache;
 }
@@ -201,7 +208,16 @@ async function validateSessionCheckpoint(
   }
 }
 
-/** Record child session relationships when a session completes. */
+/**
+ * Record child session relationships when a session completes.
+ *
+ * LIMITATION: child_complete:child_return punches are minted for every child
+ * session ID when the parent completes, without verifying that each child
+ * actually reached a terminal state. The daemon processes events asynchronously
+ * so child completion status may not yet be available at the time the parent's
+ * session_completed event fires. A future improvement could query each child's
+ * status and filter accordingly.
+ */
 async function recordSessionChildren(
   client: OcClient,
   writer: DoltWriter,
@@ -214,6 +230,12 @@ async function recordSessionChildren(
     if (!children) return;
     for (const child of children) {
       await writer.writeChildRelation(taskId, child.id);
+      // TODO: Verify child session actually completed before minting child_complete punch.
+      // Currently assumes completion because the daemon processes events asynchronously
+      // and child terminal status may not be available yet.
+      console.warn(
+        `[oc-daemon] Minting child_complete punch for child ${child.id} of parent ${taskId} — child completion assumed, not verified`
+      );
       await writer.writePunch({
         taskId,
         punchType: "child_complete",
