@@ -41,6 +41,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DAEMON_DIR="$REPO_ROOT/daemon"
 ECOSYSTEM_CONFIG="$SCRIPT_DIR/ecosystem.config.cjs"
 
+"$SCRIPT_DIR/require_factory_root.sh" "$REPO_ROOT"
+
 # oc-daemon lives alongside the repo, not inside it
 OC_DAEMON_DIR="${OC_DAEMON_DIR:-$(cd "$REPO_ROOT/.." && pwd)/oc-daemon}"
 

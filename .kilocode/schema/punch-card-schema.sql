@@ -127,6 +127,7 @@ CREATE TABLE checkpoints (
     validated_at     DATETIME     NOT NULL,
     dolt_commit_hash CHAR(40)     DEFAULT NULL,
     missing_punches  TEXT         DEFAULT NULL,
+    violations       TEXT         DEFAULT NULL,
 
     INDEX idx_task (task_id),
     INDEX idx_card (card_id)

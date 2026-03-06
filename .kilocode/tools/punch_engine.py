@@ -7,6 +7,7 @@ import datetime
 import hashlib
 import io
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -184,6 +185,18 @@ def _parse_json_text(text: object) -> dict | None:
     return data
 
 
+def _normalize_tool_name(name: str) -> str:
+    """Convert camelCase tool names to snake_case for punch-card matching.
+
+    Kilo Code UI emits camelCase (editFile, applyDiff, writeToFile, readFile,
+    newTask).  Punch cards use snake_case patterns (edit_file%, apply_diff%,
+    write_to_file%).
+    """
+    # Insert underscore before uppercase letters, then lowercase
+    s1 = re.sub(r"([A-Z])", r"_\1", name)
+    return s1.lower().lstrip("_")
+
+
 def _emit_punch(
     punches: list[tuple[str, str, str, str]],
     task_id: str,
@@ -220,11 +233,23 @@ def _extract_ui_punches(
             if tool_name == "newTask":
                 mode = data.get("mode")
                 if isinstance(mode, str) and mode:
-                    _emit_punch(punches, task_id, "child_spawn", mode, ts_ms)
+                    _emit_punch(
+                        punches,
+                        task_id,
+                        "child_spawn",
+                        _normalize_tool_name(mode),
+                        ts_ms,
+                    )
                 continue
 
             if isinstance(tool_name, str) and tool_name:
-                _emit_punch(punches, task_id, "tool_call", tool_name, ts_ms)
+                _emit_punch(
+                    punches,
+                    task_id,
+                    "tool_call",
+                    _normalize_tool_name(tool_name),
+                    ts_ms,
+                )
             continue
 
         if ask == "command":
@@ -535,22 +560,14 @@ def _insert_checkpoint(
     else:
         violations_clause = "NULL"
 
-    insert_query_with_violations = (
+    insert_query = (
         "INSERT INTO punch_cards.checkpoints "
         "(task_id, card_id, status, validated_at, missing_punches, violations) "
         "VALUES "
-        f"('{task_q}', '{card_q}', '{status_q}', '{validated_q}', {missing_clause}, {violations_clause})"
+        f"('{task_q}', '{card_q}', '{status_q}', '{validated_q}', "
+        f"{missing_clause}, {violations_clause})"
     )
-    out = dolt_sql(insert_query_with_violations)
-    if out is None:
-        # Backward-compatible fallback when checkpoints table has no `violations` column.
-        insert_query_legacy = (
-            "INSERT INTO punch_cards.checkpoints "
-            "(task_id, card_id, status, validated_at, missing_punches) "
-            "VALUES "
-            f"('{task_q}', '{card_q}', '{status_q}', '{validated_q}', {missing_clause})"
-        )
-        out = dolt_sql(insert_query_legacy)
+    out = dolt_sql(insert_query)
     if out is None:
         return None
 

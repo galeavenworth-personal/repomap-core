@@ -49,6 +49,11 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+"$SCRIPT_DIR/require_factory_root.sh" "$REPO_ROOT"
+
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 
 MODE="plant-manager"
@@ -140,8 +145,6 @@ if [[ -n "$KILO_PIDS" ]]; then
     done
     sleep 1  # extra settle time
     # Start fresh — use op run for 1Password-injected env if .env.op exists
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
     if [[ -f "$REPO_ROOT/.env.op" && -x "$(command -v op 2>/dev/null || true)" ]]; then
         nohup op run --env-file "$REPO_ROOT/.env.op" -- kilo serve --port "$PORT" > /tmp/kilo-serve.log 2>&1 &
     else
@@ -165,10 +168,9 @@ if [[ -n "$KILO_PIDS" ]]; then
     done
     # Kilo restart may have killed oc-daemon SSE connection. Re-run start-stack
     # to revive any dead components before the preflight check.
-    SCRIPT_DIR_="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-    if [[ -x "$SCRIPT_DIR_/start-stack.sh" ]]; then
+    if [[ -x "$SCRIPT_DIR/start-stack.sh" ]]; then
         log "$(timestamp) Re-running start-stack.sh to revive components after kilo restart..."
-        "$SCRIPT_DIR_/start-stack.sh" 2>&1 | while IFS= read -r line; do
+        "$SCRIPT_DIR/start-stack.sh" 2>&1 | while IFS= read -r line; do
             log "  $line"
         done || true
     fi
