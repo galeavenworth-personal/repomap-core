@@ -130,66 +130,111 @@ SELECT
 FROM task_tree
 GROUP BY root_task_id;
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
     ('quality-gates', 'quality-gates', 'gate_pass', 'ruff-format',   TRUE,  'Ruff format check must pass'),
     ('quality-gates', 'quality-gates', 'gate_pass', 'ruff-check',    TRUE,  'Ruff lint check must pass'),
     ('quality-gates', 'quality-gates', 'gate_pass', 'mypy',          TRUE,  'Mypy type check must pass'),
     ('quality-gates', 'quality-gates', 'gate_pass', 'pytest',        TRUE,  'Pytest test suite must pass'),
-    ('quality-gates', 'quality-gates', 'cost_checkpoint', '%',       FALSE, 'Cost tracking (optional)');
+    ('quality-gates', 'quality-gates', 'cost_checkpoint', '%',       FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
     ('land-plane', 'land-plane', 'gate_pass',      'ruff-format',      TRUE,  'Ruff format check must pass'),
     ('land-plane', 'land-plane', 'gate_pass',      'ruff-check',       TRUE,  'Ruff lint check must pass'),
     ('land-plane', 'land-plane', 'gate_pass',      'mypy',             TRUE,  'Mypy type check must pass'),
     ('land-plane', 'land-plane', 'gate_pass',      'pytest',           TRUE,  'Pytest test suite must pass'),
     ('land-plane', 'land-plane', 'step_complete',  'task_exit',        TRUE,  'Task must reach completion'),
-    ('land-plane', 'land-plane', 'tool_call',      'updateTodoList',   TRUE,  'At least one todo update required'),
+    ('land-plane', 'land-plane', 'tool_call',      'update_todo_list', TRUE,  'At least one todo update required'),
     ('land-plane', 'land-plane', 'child_spawn',    '%',                FALSE, 'Child task spawning (optional)'),
-    ('land-plane', 'land-plane', 'cost_checkpoint', '%',               FALSE, 'Cost tracking (optional)');
+    ('land-plane', 'land-plane', 'cost_checkpoint', '%',               FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
     ('orchestrate', 'orchestrate', 'child_spawn',     '%',          TRUE,  'Must spawn at least one child'),
     ('orchestrate', 'orchestrate', 'step_complete',   'task_exit',  TRUE,  'Orchestrator must reach completion'),
-    ('orchestrate', 'orchestrate', 'cost_checkpoint', '%',          FALSE, 'Cost tracking (optional)');
+    ('orchestrate', 'orchestrate', 'cost_checkpoint', '%',          FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
     ('validate-plant', 'validate-plant', 'gate_pass',     'workflow-gate',  TRUE,  'Workflow gate must pass'),
-    ('validate-plant', 'validate-plant', 'step_complete', 'task_exit',      TRUE,  'Validation must complete');
+    ('validate-plant', 'validate-plant', 'step_complete', 'task_exit',      TRUE,  'Validation must complete')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
     ('fix-ci', 'fix-ci', 'gate_pass', 'ruff-format',   TRUE,  'Ruff format check must pass'),
     ('fix-ci', 'fix-ci', 'gate_pass', 'ruff-check',    TRUE,  'Ruff lint check must pass'),
     ('fix-ci', 'fix-ci', 'gate_pass', 'mypy',          TRUE,  'Mypy type check must pass'),
     ('fix-ci', 'fix-ci', 'gate_pass', 'pytest',        TRUE,  'Pytest test suite must pass'),
-    ('fix-ci', 'fix-ci', 'cost_checkpoint', '%',       FALSE, 'Cost tracking (optional)');
+    ('fix-ci', 'fix-ci', 'cost_checkpoint', '%',       FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
     ('fitter-line-health', 'fitter-line-health', 'gate_pass',      'workflow-gate',  TRUE,  'At least one gate must be restored'),
     ('fitter-line-health', 'fitter-line-health', 'step_complete',  'task_exit',      TRUE,  'Restoration must complete'),
-    ('fitter-line-health', 'fitter-line-health', 'cost_checkpoint', '%',             FALSE, 'Cost tracking (optional)');
+    ('fitter-line-health', 'fitter-line-health', 'cost_checkpoint', '%',             FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
     ('friction-audit', 'friction-audit', 'mcp_call',         'process_thought',  TRUE,  'Sequential thinking required for audit'),
     ('friction-audit', 'friction-audit', 'step_complete',    'task_exit',        TRUE,  'Audit must complete'),
-    ('friction-audit', 'friction-audit', 'cost_checkpoint',  '%',               FALSE, 'Cost tracking (optional)');
+    ('friction-audit', 'friction-audit', 'cost_checkpoint',  '%',               FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
     ('refactor', 'refactor', 'gate_pass',        'ruff-format',          TRUE,  'Ruff format check must pass'),
     ('refactor', 'refactor', 'gate_pass',        'ruff-check',           TRUE,  'Ruff lint check must pass'),
     ('refactor', 'refactor', 'gate_pass',        'mypy',                 TRUE,  'Mypy type check must pass'),
     ('refactor', 'refactor', 'gate_pass',        'pytest',               TRUE,  'Pytest test suite must pass'),
     ('refactor', 'refactor', 'mcp_call',         'process_thought',      TRUE,  'Sequential thinking required for refactoring'),
     ('refactor', 'refactor', 'mcp_call',         'codebase___retrieval', TRUE,  'Codebase exploration required'),
-    ('refactor', 'refactor', 'cost_checkpoint',  '%',                    FALSE, 'Cost tracking (optional)');
+    ('refactor', 'refactor', 'cost_checkpoint',  '%',                    FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, description) VALUES
     ('respond-to-pr-review', 'respond-to-pr-review', 'gate_pass',        'ruff-format',  TRUE,  'Ruff format check must pass'),
     ('respond-to-pr-review', 'respond-to-pr-review', 'gate_pass',        'ruff-check',   TRUE,  'Ruff lint check must pass'),
     ('respond-to-pr-review', 'respond-to-pr-review', 'gate_pass',        'mypy',         TRUE,  'Mypy type check must pass'),
     ('respond-to-pr-review', 'respond-to-pr-review', 'gate_pass',        'pytest',       TRUE,  'Pytest test suite must pass'),
-    ('respond-to-pr-review', 'respond-to-pr-review', 'cost_checkpoint',  '%',            FALSE, 'Cost tracking (optional)');
+    ('respond-to-pr-review', 'respond-to-pr-review', 'cost_checkpoint',  '%',            FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
     ('plant-orchestrate', 'plant-orchestrate', 'child_spawn',    '%orchestrator%',        TRUE,  FALSE, '[v2] Must delegate to an orchestrator child'),
     ('plant-orchestrate', 'plant-orchestrate', 'child_complete',  'child_return',        TRUE,  FALSE, 'Must receive child completion'),
     ('plant-orchestrate', 'plant-orchestrate', 'step_complete',   'task_exit',           TRUE,  FALSE, 'Plant manager must reach completion'),
@@ -197,9 +242,14 @@ INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pa
     ('plant-orchestrate', 'plant-orchestrate', 'tool_call',       'apply_diff%',         TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs directly'),
     ('plant-orchestrate', 'plant-orchestrate', 'tool_call',       'write_to_file%',      TRUE,  TRUE,  'FORBIDDEN: Must not write files directly'),
     ('plant-orchestrate', 'plant-orchestrate', 'mcp_call',        '%codebase___retrieval%', TRUE, TRUE, 'FORBIDDEN: Must not explore codebase directly'),
-    ('plant-orchestrate', 'plant-orchestrate', 'cost_checkpoint', '%',                   FALSE, FALSE, 'Cost tracking (optional)');
+    ('plant-orchestrate', 'plant-orchestrate', 'cost_checkpoint', '%',                   FALSE, FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
     ('audit-orchestrate', 'audit-orchestrate', 'child_spawn',    'product-skeptic',      TRUE,  FALSE, '[v2] Must delegate adversarial phases to product-skeptic'),
     ('audit-orchestrate', 'audit-orchestrate', 'child_spawn',    'architect',            TRUE,  FALSE, '[v2] Must delegate synthesis phases to architect'),
     ('audit-orchestrate', 'audit-orchestrate', 'child_complete', 'child_return',         TRUE,  FALSE, '[v2] Must receive child completions'),
@@ -208,9 +258,14 @@ INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pa
     ('audit-orchestrate', 'audit-orchestrate', 'tool_call',      'apply_diff%',          TRUE,  TRUE,  '[v2] FORBIDDEN: Must not apply diffs directly'),
     ('audit-orchestrate', 'audit-orchestrate', 'tool_call',      'write_to_file%',       TRUE,  TRUE,  '[v2] FORBIDDEN: Must not write files directly'),
     ('audit-orchestrate', 'audit-orchestrate', 'mcp_call',       '%codebase___retrieval%', TRUE, TRUE, '[v2] FORBIDDEN: Must not explore codebase directly'),
-    ('audit-orchestrate', 'audit-orchestrate', 'cost_checkpoint','%',                    FALSE, FALSE, 'Cost tracking (optional)');
+    ('audit-orchestrate', 'audit-orchestrate', 'cost_checkpoint','%',                    FALSE, FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
     ('start-task-orchestrate', 'start-task-orchestrate', 'child_spawn',     'architect',              TRUE,  FALSE, 'Must delegate prep phases to architect'),
     ('start-task-orchestrate', 'start-task-orchestrate', 'child_complete',  'child_return',           TRUE,  FALSE, 'Must receive child completions'),
     ('start-task-orchestrate', 'start-task-orchestrate', 'step_complete',   'task_exit',              TRUE,  FALSE, 'Orchestrator must reach completion'),
@@ -218,9 +273,14 @@ INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pa
     ('start-task-orchestrate', 'start-task-orchestrate', 'tool_call',       'apply_diff%',            TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs directly'),
     ('start-task-orchestrate', 'start-task-orchestrate', 'tool_call',       'write_to_file%',         TRUE,  TRUE,  'FORBIDDEN: Must not write files directly'),
     ('start-task-orchestrate', 'start-task-orchestrate', 'mcp_call',        '%codebase___retrieval%', TRUE,  TRUE,  'FORBIDDEN: Must not explore codebase directly'),
-    ('start-task-orchestrate', 'start-task-orchestrate', 'cost_checkpoint', '%',                      FALSE, FALSE, 'Cost tracking (optional)');
+    ('start-task-orchestrate', 'start-task-orchestrate', 'cost_checkpoint', '%',                      FALSE, FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
     ('process-orchestrate', 'process-orchestrate', 'child_spawn',    'code',               TRUE,  FALSE, 'Must delegate execute phase to code mode'),
     ('process-orchestrate', 'process-orchestrate', 'child_complete', 'child_return',       TRUE,  FALSE, 'Must receive child completions'),
     ('process-orchestrate', 'process-orchestrate', 'step_complete',  'task_exit',          TRUE,  FALSE, 'Orchestrator must reach completion'),
@@ -228,34 +288,60 @@ INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pa
     ('process-orchestrate', 'process-orchestrate', 'tool_call',      'apply_diff%',        TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs directly'),
     ('process-orchestrate', 'process-orchestrate', 'tool_call',      'write_to_file%',     TRUE,  TRUE,  'FORBIDDEN: Must not write files directly'),
     ('process-orchestrate', 'process-orchestrate', 'mcp_call',       '%codebase___retrieval%', TRUE, TRUE, 'FORBIDDEN: Must not explore codebase directly'),
-    ('process-orchestrate', 'process-orchestrate', 'cost_checkpoint', '%',                 FALSE, FALSE, 'Cost tracking (optional)');
+    ('process-orchestrate', 'process-orchestrate', 'cost_checkpoint', '%',                 FALSE, FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
     ('discover-phase', 'discover-phase', 'mcp_call',       '%codebase___retrieval%', TRUE,  FALSE, 'Must use Augment context engine for discovery'),
     ('discover-phase', 'discover-phase', 'tool_call',      'read_file',             TRUE,  FALSE, 'Must read at least one file'),
     ('discover-phase', 'discover-phase', 'step_complete',  'task_exit',             TRUE,  FALSE, 'Phase must complete'),
     ('discover-phase', 'discover-phase', 'child_spawn',    '%',                     TRUE,  TRUE,  'FORBIDDEN: Specialist must not delegate'),
-    ('discover-phase', 'discover-phase', 'cost_checkpoint', '%',                    FALSE, FALSE, 'Cost tracking (optional)');
+    ('discover-phase', 'discover-phase', 'cost_checkpoint', '%',                    FALSE, FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
     ('explore-phase', 'explore-phase', 'mcp_call',       '%codebase___retrieval%', TRUE,  FALSE, 'Must use Augment context engine for exploration'),
     ('explore-phase', 'explore-phase', 'step_complete',  'task_exit',             TRUE,  FALSE, 'Phase must complete'),
     ('explore-phase', 'explore-phase', 'child_spawn',    '%',                     TRUE,  TRUE,  'FORBIDDEN: Specialist must not delegate'),
-    ('explore-phase', 'explore-phase', 'cost_checkpoint', '%',                    FALSE, FALSE, 'Cost tracking (optional)');
+    ('explore-phase', 'explore-phase', 'cost_checkpoint', '%',                    FALSE, FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
     ('prepare-phase', 'prepare-phase', 'mcp_call',       '%process_thought%',     TRUE,  FALSE, 'Must use sequential thinking'),
     ('prepare-phase', 'prepare-phase', 'mcp_call',       '%export_session%',      TRUE,  FALSE, 'Must export thinking session'),
     ('prepare-phase', 'prepare-phase', 'step_complete',  'task_exit',             TRUE,  FALSE, 'Phase must complete'),
     ('prepare-phase', 'prepare-phase', 'child_spawn',    '%',                     TRUE,  TRUE,  'FORBIDDEN: Specialist must not delegate'),
-    ('prepare-phase', 'prepare-phase', 'cost_checkpoint', '%',                    FALSE, FALSE, 'Cost tracking (optional)');
+    ('prepare-phase', 'prepare-phase', 'cost_checkpoint', '%',                    FALSE, FALSE, 'Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
 
-INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
     ('execute-subtask', 'execute-subtask', 'mcp_call',       '%codebase___retrieval%', TRUE,  FALSE, 'Must gather context before editing'),
     ('execute-subtask', 'execute-subtask', 'gate_pass',      'ruff-format',           TRUE,  FALSE, 'Ruff format check must pass'),
     ('execute-subtask', 'execute-subtask', 'gate_pass',      'ruff-check',            TRUE,  FALSE, 'Ruff lint check must pass'),
     ('execute-subtask', 'execute-subtask', 'gate_pass',      'mypy',                  TRUE,  FALSE, 'Mypy type check must pass'),
     ('execute-subtask', 'execute-subtask', 'gate_pass',      'pytest',                TRUE,  FALSE, 'Pytest test suite must pass'),
-    ('execute-subtask', 'execute-subtask', 'step_complete',  'task_exit',             TRUE,  FALSE, 'Subtask must complete'),
-    ('execute-subtask', 'execute-subtask', 'child_spawn',    '%',                     TRUE,  TRUE,  'FORBIDDEN: Specialist must not delegate'),
-    ('execute-subtask', 'execute-subtask', 'cost_checkpoint', '%',                    FALSE, FALSE, 'Cost tracking (optional)');
+    ('execute-subtask', 'execute-subtask', 'step_complete',  'task_exit',             TRUE,  FALSE, '[v2] Subtask must complete'),
+    ('execute-subtask', 'execute-subtask', 'child_spawn',    '%',                     TRUE,  TRUE,  '[v2] FORBIDDEN: Specialist must not delegate'),
+    ('execute-subtask', 'execute-subtask', 'cost_checkpoint', '%',                    FALSE, FALSE, '[v2] Cost tracking (optional)')
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description);
+

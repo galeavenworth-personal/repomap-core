@@ -115,6 +115,153 @@ def _existing_tables(conn: Any) -> set[str]:
     return tables
 
 
+_PUNCH_AGGREGATE_SQL = """
+    SELECT
+        task_id,
+        COUNT(*) AS total_punches,
+        SUM(CASE WHEN punch_type = 'tool_call' THEN 1 ELSE 0 END) AS tool_calls,
+        SUM(CASE WHEN punch_type = 'step_complete' AND punch_key = 'step_start_observed' THEN 1 ELSE 0 END) AS step_start_count,
+        SUM(CASE WHEN punch_type = 'step_complete' AND punch_key = 'step_finished' THEN 1 ELSE 0 END) AS step_finished_count,
+        SUM(CASE WHEN punch_type = 'gate_pass' THEN 1 ELSE 0 END) AS gate_pass_count,
+        SUM(CASE WHEN punch_type = 'gate_fail' THEN 1 ELSE 0 END) AS gate_fail_count,
+        SUM(CASE WHEN punch_type = 'child_spawn' THEN 1 ELSE 0 END) AS child_spawn_count,
+        SUM(CASE WHEN punch_type = 'child_complete' THEN 1 ELSE 0 END) AS child_complete_count,
+        SUM(COALESCE(cost, 0)) AS total_cost,
+        COALESCE(TIMESTAMPDIFF(MINUTE, MIN(observed_at), MAX(observed_at)), 0) AS duration_minutes,
+        COUNT(DISTINCT CASE WHEN punch_type = 'tool_call' THEN punch_key ELSE NULL END) AS distinct_tools,
+        SUM(CASE WHEN punch_type = 'tool_call' AND LOWER(punch_key) IN ('read', 'read_file', 'readfile') THEN 1 ELSE 0 END) AS read_count,
+        SUM(CASE WHEN punch_type = 'tool_call' AND LOWER(punch_key) IN ('edit', 'edit_file', 'applieddiff', 'write') THEN 1 ELSE 0 END) AS edit_count,
+        SUM(CASE WHEN punch_type = 'tool_call' AND LOWER(punch_key) = 'bash' THEN 1 ELSE 0 END) AS bash_count
+    FROM punches
+    GROUP BY task_id
+    ORDER BY task_id
+"""
+
+
+def _fetch_punch_rows(conn: Any, limit: int | None) -> list[dict[str, Any]]:
+    """Execute the punch aggregate query and return rows."""
+    sql = _PUNCH_AGGREGATE_SQL
+    if limit is not None:
+        sql = f"{sql} LIMIT %s"
+
+    with conn.cursor() as cursor:
+        if limit is None:
+            cursor.execute(sql)
+        else:
+            cursor.execute(sql, (limit,))
+        return cast(list[dict[str, Any]], cursor.fetchall())
+
+
+@dataclass
+class _CheckpointEnrichment:
+    checkpoint_by_task: dict[str, CardStatus]
+    card_id_by_task: dict[str, str]
+    card_status_by_task: dict[str, CardStatus]
+    missing_punches_by_task: dict[str, str]
+
+
+def _load_checkpoint_enrichment(conn: Any) -> _CheckpointEnrichment:
+    """Load latest checkpoint data per task from the checkpoints table."""
+    enrichment = _CheckpointEnrichment(
+        checkpoint_by_task={},
+        card_id_by_task={},
+        card_status_by_task={},
+        missing_punches_by_task={},
+    )
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT c.task_id, c.card_id, c.status, c.missing_punches
+            FROM checkpoints c
+            JOIN (
+                SELECT task_id, MAX(validated_at) AS max_validated_at
+                FROM checkpoints
+                GROUP BY task_id
+            ) latest
+                ON latest.task_id = c.task_id
+               AND latest.max_validated_at = c.validated_at
+            """
+        )
+        c_rows = cast(list[dict[str, Any]], cursor.fetchall())
+
+    for row in c_rows:
+        task_id = str(row["task_id"])
+        status = str(row.get("status", "")).lower()
+        if status in {"pass", "fail"}:
+            status_value = cast(CardStatus, status)
+            enrichment.checkpoint_by_task[task_id] = status_value
+            enrichment.card_status_by_task[task_id] = status_value
+
+        card_id = row.get("card_id")
+        if card_id is not None and str(card_id) != "":
+            enrichment.card_id_by_task[task_id] = str(card_id)
+
+        missing = row.get("missing_punches")
+        if missing is not None and str(missing) != "":
+            enrichment.missing_punches_by_task[task_id] = str(missing)
+
+    return enrichment
+
+
+def _load_task_enrichment(
+    conn: Any, card_id_by_task: dict[str, str]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Load mode and card_id data from the tasks table.
+
+    Returns (mode_by_task, updated card_id_by_task).
+    """
+    mode_by_task: dict[str, str] = {}
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT task_id, mode, punch_card_id FROM tasks")
+        t_rows = cast(list[dict[str, Any]], cursor.fetchall())
+
+    for row in t_rows:
+        task_id = str(row["task_id"])
+        mode = row.get("mode")
+        if mode is not None and str(mode) != "":
+            mode_by_task[task_id] = str(mode)
+        if task_id not in card_id_by_task:
+            card_id = row.get("punch_card_id")
+            if card_id is not None and str(card_id) != "":
+                card_id_by_task[task_id] = str(card_id)
+
+    return mode_by_task, card_id_by_task
+
+
+def _row_to_task_profile(
+    row: dict[str, Any],
+    card_id_by_task: dict[str, str],
+    card_status_by_task: dict[str, CardStatus],
+    missing_punches_by_task: dict[str, str],
+    mode_by_task: dict[str, str],
+    checkpoint_by_task: dict[str, CardStatus],
+) -> TaskProfile:
+    """Convert a single punch-aggregate row into a TaskProfile."""
+    task_id = str(row["task_id"])
+    return TaskProfile(
+        task_id=task_id,
+        total_punches=_to_int(row.get("total_punches")),
+        tool_calls=_to_int(row.get("tool_calls")),
+        step_start_count=_to_int(row.get("step_start_count")),
+        step_finished_count=_to_int(row.get("step_finished_count")),
+        gate_pass_count=_to_int(row.get("gate_pass_count")),
+        gate_fail_count=_to_int(row.get("gate_fail_count")),
+        child_spawn_count=_to_int(row.get("child_spawn_count")),
+        child_complete_count=_to_int(row.get("child_complete_count")),
+        total_cost=_to_float(row.get("total_cost")),
+        duration_minutes=_to_int(row.get("duration_minutes")),
+        distinct_tools=_to_int(row.get("distinct_tools")),
+        read_count=_to_int(row.get("read_count")),
+        edit_count=_to_int(row.get("edit_count")),
+        bash_count=_to_int(row.get("bash_count")),
+        card_id=card_id_by_task.get(task_id),
+        card_status=card_status_by_task.get(task_id),
+        missing_punches=missing_punches_by_task.get(task_id),
+        mode=mode_by_task.get(task_id),
+        checkpoint_status=checkpoint_by_task.get(task_id),
+    )
+
+
 def extract_task_profiles(limit: int | None = None) -> list[TaskProfile]:
     """Extract task/session profiles from Dolt telemetry tables.
 
@@ -128,114 +275,34 @@ def extract_task_profiles(limit: int | None = None) -> list[TaskProfile]:
         if "punches" not in tables:
             return []
 
-        sql = """
-            SELECT
-                task_id,
-                COUNT(*) AS total_punches,
-                SUM(CASE WHEN punch_type = 'tool_call' THEN 1 ELSE 0 END) AS tool_calls,
-                SUM(CASE WHEN punch_type = 'step_complete' AND punch_key = 'step_start_observed' THEN 1 ELSE 0 END) AS step_start_count,
-                SUM(CASE WHEN punch_type = 'step_complete' AND punch_key = 'step_finished' THEN 1 ELSE 0 END) AS step_finished_count,
-                SUM(CASE WHEN punch_type = 'gate_pass' THEN 1 ELSE 0 END) AS gate_pass_count,
-                SUM(CASE WHEN punch_type = 'gate_fail' THEN 1 ELSE 0 END) AS gate_fail_count,
-                SUM(CASE WHEN punch_type = 'child_spawn' THEN 1 ELSE 0 END) AS child_spawn_count,
-                SUM(CASE WHEN punch_type = 'child_complete' THEN 1 ELSE 0 END) AS child_complete_count,
-                SUM(COALESCE(cost, 0)) AS total_cost,
-                COALESCE(TIMESTAMPDIFF(MINUTE, MIN(observed_at), MAX(observed_at)), 0) AS duration_minutes,
-                COUNT(DISTINCT CASE WHEN punch_type = 'tool_call' THEN punch_key ELSE NULL END) AS distinct_tools,
-                SUM(CASE WHEN punch_type = 'tool_call' AND LOWER(punch_key) IN ('read', 'read_file', 'readfile') THEN 1 ELSE 0 END) AS read_count,
-                SUM(CASE WHEN punch_type = 'tool_call' AND LOWER(punch_key) IN ('edit', 'edit_file', 'applieddiff', 'write') THEN 1 ELSE 0 END) AS edit_count,
-                SUM(CASE WHEN punch_type = 'tool_call' AND LOWER(punch_key) = 'bash' THEN 1 ELSE 0 END) AS bash_count
-            FROM punches
-            GROUP BY task_id
-            ORDER BY task_id
-        """
-        if limit is not None:
-            sql = f"{sql} LIMIT %s"
+        rows = _fetch_punch_rows(conn, limit)
 
-        with conn.cursor() as cursor:
-            if limit is None:
-                cursor.execute(sql)
-            else:
-                cursor.execute(sql, (limit,))
-            rows = cast(list[dict[str, Any]], cursor.fetchall())
-
-        checkpoint_by_task: dict[str, CardStatus] = {}
-        card_id_by_task: dict[str, str] = {}
-        card_status_by_task: dict[str, CardStatus] = {}
-        missing_punches_by_task: dict[str, str] = {}
+        enrichment = _CheckpointEnrichment(
+            checkpoint_by_task={},
+            card_id_by_task={},
+            card_status_by_task={},
+            missing_punches_by_task={},
+        )
         if "checkpoints" in tables:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT c.task_id, c.card_id, c.status, c.missing_punches
-                    FROM checkpoints c
-                    JOIN (
-                        SELECT task_id, MAX(validated_at) AS max_validated_at
-                        FROM checkpoints
-                        GROUP BY task_id
-                    ) latest
-                        ON latest.task_id = c.task_id
-                       AND latest.max_validated_at = c.validated_at
-                    """
-                )
-                c_rows = cast(list[dict[str, Any]], cursor.fetchall())
-            for row in c_rows:
-                task_id = str(row["task_id"])
-                status = str(row.get("status", "")).lower()
-                if status in {"pass", "fail"}:
-                    status_value = cast(CardStatus, status)
-                    checkpoint_by_task[task_id] = status_value
-                    card_status_by_task[task_id] = status_value
-                card_id = row.get("card_id")
-                if card_id is not None and str(card_id) != "":
-                    card_id_by_task[task_id] = str(card_id)
-                missing = row.get("missing_punches")
-                if missing is not None and str(missing) != "":
-                    missing_punches_by_task[task_id] = str(missing)
+            enrichment = _load_checkpoint_enrichment(conn)
 
         mode_by_task: dict[str, str] = {}
         if "tasks" in tables:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT task_id, mode, punch_card_id FROM tasks")
-                t_rows = cast(list[dict[str, Any]], cursor.fetchall())
-            for row in t_rows:
-                task_id = str(row["task_id"])
-                mode = row.get("mode")
-                if mode is not None and str(mode) != "":
-                    mode_by_task[task_id] = str(mode)
-                if task_id not in card_id_by_task:
-                    card_id = row.get("punch_card_id")
-                    if card_id is not None and str(card_id) != "":
-                        card_id_by_task[task_id] = str(card_id)
-
-    profiles: list[TaskProfile] = []
-    for row in rows:
-        task_id = str(row["task_id"])
-        profiles.append(
-            TaskProfile(
-                task_id=task_id,
-                total_punches=_to_int(row.get("total_punches")),
-                tool_calls=_to_int(row.get("tool_calls")),
-                step_start_count=_to_int(row.get("step_start_count")),
-                step_finished_count=_to_int(row.get("step_finished_count")),
-                gate_pass_count=_to_int(row.get("gate_pass_count")),
-                gate_fail_count=_to_int(row.get("gate_fail_count")),
-                child_spawn_count=_to_int(row.get("child_spawn_count")),
-                child_complete_count=_to_int(row.get("child_complete_count")),
-                total_cost=_to_float(row.get("total_cost")),
-                duration_minutes=_to_int(row.get("duration_minutes")),
-                distinct_tools=_to_int(row.get("distinct_tools")),
-                read_count=_to_int(row.get("read_count")),
-                edit_count=_to_int(row.get("edit_count")),
-                bash_count=_to_int(row.get("bash_count")),
-                card_id=card_id_by_task.get(task_id),
-                card_status=card_status_by_task.get(task_id),
-                missing_punches=missing_punches_by_task.get(task_id),
-                mode=mode_by_task.get(task_id),
-                checkpoint_status=checkpoint_by_task.get(task_id),
+            mode_by_task, enrichment.card_id_by_task = _load_task_enrichment(
+                conn, enrichment.card_id_by_task
             )
+
+    return [
+        _row_to_task_profile(
+            row,
+            enrichment.card_id_by_task,
+            enrichment.card_status_by_task,
+            enrichment.missing_punches_by_task,
+            mode_by_task,
+            enrichment.checkpoint_by_task,
         )
-    return profiles
+        for row in rows
+    ]
 
 
 def label_task_outcome(profile: TaskProfile) -> SessionOutcome:
@@ -274,17 +341,20 @@ def label_task_outcome(profile: TaskProfile) -> SessionOutcome:
     return SessionOutcome.PARTIAL
 
 
-def infer_diagnosis_category(profile: TaskProfile) -> DiagnosisCategory:
-    """Map telemetry patterns to fitter diagnosis categories."""
-    if profile.card_status == "fail" and profile.missing_punches:
-        missing = profile.missing_punches.lower()
-        if "forbidden" in missing:
-            return "scope_creep"
-        if "process_thought" in missing or "codebase___retrieval" in missing:
-            return "context_exhaustion"
-        if "gate_pass" in missing or "ruff" in missing or "mypy" in missing:
-            return "infinite_retry"
+def _diagnose_from_card_failure(missing_punches: str) -> DiagnosisCategory | None:
+    """Diagnose category from punch card missing_punches text, or None if no match."""
+    missing = missing_punches.lower()
+    if "forbidden" in missing:
+        return "scope_creep"
+    if "process_thought" in missing or "codebase___retrieval" in missing:
+        return "context_exhaustion"
+    if "gate_pass" in missing or "ruff" in missing or "mypy" in missing:
+        return "infinite_retry"
+    return None
 
+
+def _diagnose_from_heuristics(profile: TaskProfile) -> DiagnosisCategory:
+    """Diagnose category from telemetry heuristics (when card failure data is absent)."""
     if profile.tool_calls >= 10 and profile.step_finished_count == 0:
         return "stuck_on_approval"
 
@@ -304,6 +374,16 @@ def infer_diagnosis_category(profile: TaskProfile) -> DiagnosisCategory:
         return "model_confusion"
 
     return "model_confusion"
+
+
+def infer_diagnosis_category(profile: TaskProfile) -> DiagnosisCategory:
+    """Map telemetry patterns to fitter diagnosis categories."""
+    if profile.card_status == "fail" and profile.missing_punches:
+        card_diagnosis = _diagnose_from_card_failure(profile.missing_punches)
+        if card_diagnosis is not None:
+            return card_diagnosis
+
+    return _diagnose_from_heuristics(profile)
 
 
 def label_profiles(profiles: Iterable[TaskProfile]) -> list[LabeledTaskProfile]:

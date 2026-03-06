@@ -91,10 +91,12 @@ is_kilo_healthy() {
 
 is_temporal_running() {
     "$SS" -tlnp 2>/dev/null | "$GREP" -q ":${TEMPORAL_PORT} "
+    return $?
 }
 
 is_dolt_running() {
     "$SS" -tlnp 2>/dev/null | "$GREP" -q ":${DOLT_PORT} "
+    return $?
 }
 
 # pm2-based health checks: check process status via pm2 jlist
@@ -102,14 +104,17 @@ is_pm2_app_online() {
     local app_name="$1"
     "$PM2" jlist 2>/dev/null \
         | "$GREP" -q "\"name\":\"${app_name}\".*\"status\":\"online\""
+    return $?
 }
 
 is_oc_daemon_running() {
     is_pm2_app_online "oc-daemon"
+    return $?
 }
 
 is_worker_running() {
     is_pm2_app_online "temporal-worker"
+    return $?
 }
 
 find_temporal_cli() {

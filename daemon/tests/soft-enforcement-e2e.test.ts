@@ -176,7 +176,7 @@ describe.skipIf(SKIP_LIVE)("soft enforcement live scenarios", () => {
       [session.id],
     );
     const count = Number((rows as Array<{ count: number }>)[0]?.count ?? 0);
-    expect(count).toBeGreaterThanOrEqual(0);
+    expect(count).toBeGreaterThan(0);
   });
 
   it("scenario 2: plant-manager delegation enforcement (KILO_LIVE)", async () => {
@@ -213,7 +213,7 @@ describe.skipIf(SKIP_LIVE)("soft enforcement live scenarios", () => {
       [session.id],
     );
     const spawns = (spawnRows as Array<{ punch_key: string }>).map((row) => row.punch_key);
-    expect(spawns.length).toBeGreaterThanOrEqual(0);
+    expect(spawns.length).toBeGreaterThan(0);
   });
 
   it("scenario 3: negative test with forced card failure", async () => {
