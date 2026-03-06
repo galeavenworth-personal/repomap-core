@@ -95,7 +95,7 @@ function applyApiRequestMetrics(
 }
 
 function roleFromUiType(type: string): "user" | "assistant" {
-  return type === "ask.text" ? "user" : "assistant";
+  return type.startsWith("ask") ? "user" : "assistant";
 }
 
 function parseToolUses(row: Record<string, unknown>): unknown[] {
@@ -129,7 +129,10 @@ async function ingestUiMessages(
 
   for (const item of uiMessages) {
     const row = asRecord(item);
-    const type = asString(row.type) ?? "";
+    const baseType = asString(row.type) ?? "";
+    const subType = asString(row.say) ?? asString(row.ask) ?? "";
+    // Kilo format: {type: "say", say: "api_req_started"} → composite "say.api_req_started"
+    const type = subType ? `${baseType}.${subType}` : baseType;
     const text = row.text;
     const ts = toTimestamp(row.ts ?? row.timestamp ?? row.createdAt);
 

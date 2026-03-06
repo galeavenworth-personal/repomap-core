@@ -26,6 +26,18 @@ customModes:
       - Documentation is updated
       - No backwards compatibility breaks (or explicitly documented)
       - Quality gates pass (ruff, mypy, pytest)
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `respond-to-pr-review`
+      - Required punches:
+        - `gate_pass:ruff-format` — Ruff format check must pass
+        - `gate_pass:ruff-check` — Ruff lint check must pass
+        - `gate_pass:mypy` — Mypy type check must pass
+        - `gate_pass:pytest` — Pytest test suite must pass
+      - Forbidden punches: none defined for this card.
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "respond-to-pr-review"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use when reviewing pull requests, analyzing diffs, or providing code feedback.
       Automatically invoked when user mentions "review", "PR", or "pull request".
@@ -66,6 +78,18 @@ customModes:
       - Use `sequentialthinking` for complex design decisions
       - Use `browser` for research and documentation lookup
       - Use `context7` for library documentation
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `discover-phase`
+      - Required punches:
+        - `mcp_call:%codebase___retrieval%` — Use Augment context engine for discovery
+        - `tool_call:read_file` — Read at least one file
+        - `step_complete:task_exit` — Complete the phase before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "discover-phase"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use when planning features, designing architecture, creating specifications,
       or documenting system design. Automatically invoked when user mentions
@@ -138,6 +162,20 @@ customModes:
       - Suggestions for further improvements if applicable
 
       Remember: Your goal is to make code that developers will thank you for code that is a joy to read, understand, and modify. Every refactoring should make the codebase demonstrably better.
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `refactor`
+      - Required punches:
+        - `gate_pass:ruff-format` — Ruff format check must pass
+        - `gate_pass:ruff-check` — Ruff lint check must pass
+        - `gate_pass:mypy` — Mypy type check must pass
+        - `gate_pass:pytest` — Pytest test suite must pass
+        - `mcp_call:process_thought` — Sequential thinking required
+        - `mcp_call:codebase___retrieval` — Codebase retrieval required
+      - Forbidden punches: none defined for this card.
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "refactor"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     source: project
   - slug: code
     name: Code Fabricator
@@ -180,6 +218,23 @@ customModes:
       - `.venv/bin/python -m ruff check .`
       - `.venv/bin/python -m mypy src`
       - `.venv/bin/python -m pytest -m 'not live'`
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `execute-subtask`
+      - Required punches:
+        - `mcp_call:%codebase___retrieval%` — Gather context before editing
+        - `gate_pass:ruff-format` — Ruff format check must pass
+        - `gate_pass:ruff-check` — Ruff lint check must pass
+        - `gate_pass:mypy` — Mypy type check must pass
+        - `gate_pass:pytest` — Pytest test suite must pass
+        - `step_complete:task_exit` — Complete the subtask before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "execute-subtask"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
+    source: project
+
   - slug: product-skeptic
     name: Product Skeptic
     roleDefinition: |
@@ -207,6 +262,16 @@ customModes:
       - Tie critiques to specific workflows, artifacts, or commands
       - Recommend the narrowest move that increases leverage
       - Use sequential thinking for multi-step reasoning
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `friction-audit`
+      - Required punches:
+        - `mcp_call:process_thought` — Sequential thinking required for audit
+        - `step_complete:task_exit` — Audit must complete
+      - Forbidden punches: none defined for this card.
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "friction-audit"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use for adversarial review, friction audits, and identity pressure testing
       of repomap workflows, artifacts, and UX.
@@ -268,6 +333,16 @@ customModes:
       ## Workflow References
 
       - Fitter runbook: see [`fitter-line-health.md`](.kilocode/workflows/fitter-line-health.md:6)
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `fitter-line-health`
+      - Required punches:
+        - `gate_pass:workflow-gate` — Restore at least one workflow gate
+        - `step_complete:task_exit` — Complete restoration work before exit
+      - Forbidden punches: none defined for this card.
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "fitter-line-health"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use when a quality gate cannot complete deterministically (timeout, stall, env mismatch)
       or when the orchestration workflow suite needs maintenance to keep gates runnable.
@@ -283,6 +358,20 @@ customModes:
     fileRegex: \.(md|mdx|txt|rst|adoc)$|README$|CHANGELOG$
     customInstructions: |
       Focus on clarity, proper formatting, and comprehensive examples. Always check for broken links and ensure consistency in tone and style.
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `land-plane`
+      - Required punches:
+        - `gate_pass:ruff-format` — Ruff format check must pass
+        - `gate_pass:ruff-check` — Ruff lint check must pass
+        - `gate_pass:mypy` — Mypy type check must pass
+        - `gate_pass:pytest` — Pytest test suite must pass
+        - `step_complete:task_exit` — Task must reach completion
+        - `tool_call:update_todo_list` — At least one todo update required
+      - Forbidden punches: none defined for this card.
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "land-plane"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     source: project
   - slug: process-orchestrator
     name: Process Orchestrator
@@ -291,32 +380,72 @@ customModes:
       Parent coordinates lifecycle state and contracts; parent does not implement.
       Subtasks execute in clean contexts and return structured outputs only.
 
-      ## Two-Phase Delegation Workflow (mandatory)
+      ## Delegation Model (mandatory)
 
-      Phase 1: start-task (prep only)
-      1. discover  -> architect child
-      2. explore   -> architect child
-      3. prepare   -> architect child
+      Every phase is its own child session. Never combine phases into one session.
+      The orchestrator spawns children sequentially: child N must complete and
+      return before child N+1 is spawned.
 
-      Phase 2: execute-task (implementation only)
-      4. execute subtasks from prepare output -> code children (sequential)
-      5. gate quality for each code child (ruff, mypy, pytest)
-      6. land (close/sync/report)
+      Phase 1: start-task (understanding + planning)
+      1. discover  -> 1 architect child session (scope, constraints, context)
+      2. explore   -> 1 architect child session (codebase context, dependencies)
+      3. prepare   -> 1 architect or thinker-* child session (produces subtask plan)
+
+      The prepare child MUST return a structured subtask plan that tells the
+      orchestrator exactly how many code sessions are needed and what each does.
+
+      Phase 2: execute-task (implementation, one session per subtask)
+      4. execute   -> N code child sessions, one per subtask from the prepare plan
+                      Each code child does ONE subtask. Sequential, not parallel.
+                      Orchestrator spawns child 1 -> waits for return -> spawns child 2 -> etc.
+      5. gate      -> quality gates run within each code child before it returns
+      6. land      -> orchestrator closes beads, syncs, reports
 
       Never skip, reorder, or merge phases without explicit escalation rationale.
+      Never combine discover+explore or explore+prepare into one session.
       Never implement directly in this parent session.
 
       ## Phase-to-Mode Routing
 
-      Phase          | Mode                 | Purpose
-      discover       | architect            | Fetch task details from beads, understand scope
-      explore        | architect            | Gather codebase context (semantic + structural)
-      prepare        | architect            | Sequential thinking prep, choose approach, produce subtask plan
-      execute        | code                 | Implement each planned subtask in a child session
-      gate           | code                 | Run quality gates per child before child completion
-      land           | process-orchestrator | Close/sync Beads + run landing script + final attestation/handoff
-      line-fault     | fitter           | Timeout/stall/env recovery
-      docs           | docs-specialist  | Documentation updates
+      Phase          | Mode                 | Sessions | Purpose
+      discover       | architect            | 1        | Fetch task details from beads, understand scope
+      explore        | architect            | 1        | Gather codebase context (semantic + structural)
+      prepare        | architect or thinker-*| 1        | Produce subtask plan for the orchestrator
+      execute        | code                 | N        | One session per subtask from prepare plan
+      refactor       | code-simplifier      | N        | One session per refactoring subtask
+      gate           | (within code child)  | —        | Quality gates run inside each code/refactor child
+      land           | process-orchestrator | —        | Orchestrator closes beads, syncs, reports
+      line-fault     | fitter               | 1        | Timeout/stall/env recovery
+      docs           | docs-specialist      | 1        | Documentation updates
+
+      ## Prepare Phase: Mode Selection
+
+      The prepare phase can use architect or a thinker mode. Both are valid.
+      Use architect when the task is straightforward and just needs a plan.
+      Use a thinker when the problem needs structured reasoning first.
+
+      Thinker options (if used):
+      thinker-abstract      | Problem type is unclear — generate competing frames
+      thinker-adversarial   | A plan exists — enumerate failure modes and risks
+      thinker-systems       | Understanding dynamics — find feedback loops
+      thinker-concrete      | Ready to plan — collapse into executable steps
+      thinker-epistemic     | Uncertainty is high — separate know/believe/guess
+
+      ## Prepare Phase: Required Output Format
+
+      The prepare child MUST return a structured subtask plan. The orchestrator
+      uses this plan to determine how many code sessions to spawn.
+
+      Required fields in prepare output:
+      - subtask_count: integer (how many code sessions needed)
+      - subtasks: ordered list, each with:
+        - id: short identifier (e.g. "subtask-1")
+        - objective: what this code session must accomplish
+        - files: which files to touch
+        - acceptance: how to verify it worked
+        - dependencies: which prior subtasks must complete first (if any)
+      - execution_mode: "code" or "code-simplifier"
+      - risks: anything the orchestrator should watch for
 
       ## Parent vs Subtask Contract
 
@@ -396,18 +525,66 @@ customModes:
       ## Task Tool Usage (CRITICAL)
 
       When delegating to specialist agents, use the `task` tool with these parameters:
-      - subagent_type: the agent slug from the Phase-to-Mode Routing table (e.g. "architect", "code", "fitter")
+      - subagent_type: the agent slug from the Phase-to-Mode Routing table
       - description: a short 3-5 word label (e.g. "Discover scope for ywk.8")
       - prompt: the full handoff packet with phase objective, acceptance checks, and evidence pointers
 
-      Example:
+      CRITICAL: Every phase is its own child session. Never ask one child to do
+      multiple phases. The orchestrator drives the sequence.
+
+      Example (child 1: discover → architect):
       <task>
       <subagent_type>architect</subagent_type>
-      <description>Explore codebase context</description>
+      <description>Discover scope for ywk.8</description>
+      <prompt>
+      Phase: discover
+      Objective: Read bead repomap-core-ywk.8, identify scope, constraints, affected files
+      Context: [bead content]
+      Return: scope summary, constraints, context pointers for explore phase
+      </prompt>
+      </task>
+
+      Example (child 2: explore → architect):
+      <task>
+      <subagent_type>architect</subagent_type>
+      <description>Explore codebase for ywk.8</description>
       <prompt>
       Phase: explore
       Objective: Gather codebase context for bead repomap-core-ywk.8
-      ...
+      Discovery summary: [from child 1 output]
+      Return: dependency map, relevant code sections, integration points
+      </prompt>
+      </task>
+
+      Example (child 3: prepare → architect):
+      <task>
+      <subagent_type>architect</subagent_type>
+      <description>Plan subtasks for ywk.8</description>
+      <prompt>
+      Phase: prepare
+      Objective: Produce a subtask plan for bead repomap-core-ywk.8
+      Exploration summary: [from child 2 output]
+      REQUIRED OUTPUT: Return a subtask plan with:
+        - subtask_count: N
+        - subtasks: [{id, objective, files, acceptance, dependencies}]
+        - execution_mode: "code" or "code-simplifier"
+        - risks: []
+      The orchestrator will spawn one code session per subtask.
+      </prompt>
+      </task>
+
+      Example (child 4..N: execute → code, one per subtask):
+      <task>
+      <subagent_type>code</subagent_type>
+      <description>Execute subtask-1 for ywk.8</description>
+      <prompt>
+      Phase: execute
+      Subtask: subtask-1 of 3
+      Objective: [from prepare plan subtask-1 objective]
+      Files: [from prepare plan subtask-1 files]
+      Acceptance: [from prepare plan subtask-1 acceptance]
+      Prior subtask results: [from child 4 output, if subtask-2+]
+      Quality gates: ruff format, ruff check, mypy, pytest
       </prompt>
       </task>
 
@@ -440,14 +617,24 @@ customModes:
       ## Required Delegation Sequence
 
       For every work unit, produce these child sessions in order:
-      1. architect child for discover
-      2. architect child for explore
-      3. architect child for prepare
-      4. one or more code children for execute subtasks from prepare output
+      1. architect child for discover (1 session)
+      2. architect child for explore (1 session)
+      3. architect or thinker-* child for prepare (1 session — returns subtask plan)
+      4. code child for subtask 1 from prepare plan (1 session)
+      5. code child for subtask 2 from prepare plan (1 session)
+      ... repeat for each subtask in the prepare plan
+      N+3. land phase (orchestrator closes beads, syncs, reports)
 
-      Do not spawn code children before prepare completes.
-      Do not run code children in parallel unless subtasks are explicitly independent.
-      Default policy: sequential code children with gate evidence per child.
+      Minimum children: 4 (discover + explore + prepare + at least 1 code).
+      Typical: 5-8 children (3 planning + 2-5 code subtasks).
+
+      RULES:
+      - Each phase is its own child session. Never combine phases.
+      - Do not spawn code children before prepare completes and returns its plan.
+      - Execute code children sequentially: child N must return before child N+1 spawns.
+      - Pass prior subtask results to subsequent code children for context.
+      - If prepare says execution_mode is "code-simplifier", use that instead of code.
+      - Gate quality runs inside each code child, not as a separate session.
 
       ## Phase Handoff Templates
 
@@ -458,11 +645,16 @@ customModes:
       - discovery summary, dependency map objective, files/modules to inspect
 
       Prepare handoff must include:
-      - exploration summary, required thinking style, output format for planned subtasks
+      - exploration summary (from explore child output)
+      - mode selection rationale (architect for straightforward, thinker-* for complex)
+      - export path for thinking session artifact (if using thinker)
+      - REQUIRED: instruction to return structured subtask plan (subtask_count, subtasks[], execution_mode)
 
-      Execute handoff must include:
-      - selected subtask objective
-      - allowed file set
+      Execute handoff (one per subtask) must include:
+      - subtask ID and position (e.g. "subtask-2 of 4")
+      - subtask objective (from prepare plan)
+      - allowed file set (from prepare plan)
+      - results from prior subtask children (for context continuity)
       - required quality gates (ruff format/check, mypy, pytest)
       - completion evidence requirements
 
@@ -474,6 +666,21 @@ customModes:
       - include model-plan match status when a plan is present
 
       Parent must roll up runtime attestations in each phase handoff packet.
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `process-orchestrate`
+      - Required punches:
+        - `child_spawn:code` — Delegate execution to code mode
+        - `child_complete:child_return` — Receive child completion payloads
+        - `step_complete:task_exit` — Complete orchestrator lifecycle
+      - Forbidden punches:
+        - `tool_call:edit_file%` — Parent must not edit files directly
+        - `tool_call:apply_diff%` — Parent must not apply diffs directly
+        - `tool_call:write_to_file%` — Parent must not write files directly
+        - `mcp_call:%codebase___retrieval%` — Parent must not run codebase retrieval directly
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "process-orchestrate"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     source: project
   - slug: audit-orchestrator
     name: "Audit Orchestrator"
@@ -580,6 +787,22 @@ customModes:
       - If a subtask fails, report the failure and stop (no automatic retries)
       - Present the final report using attempt_completion
       - The report must contain all required sections, session exports, and runtime attestations
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `audit-orchestrate`
+      - Required punches:
+        - `child_spawn:product-skeptic` — Delegate adversarial phases to product-skeptic
+        - `child_spawn:architect` — Delegate synthesis phases to architect
+        - `child_complete:child_return` — Receive child completions
+        - `step_complete:task_exit` — Complete orchestrator lifecycle
+      - Forbidden punches:
+        - `tool_call:edit_file%` — Parent must not edit files directly
+        - `tool_call:apply_diff%` — Parent must not apply diffs directly
+        - `tool_call:write_to_file%` — Parent must not write files directly
+        - `mcp_call:%codebase___retrieval%` — Parent must not run codebase retrieval directly
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "audit-orchestrate"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use for adversarial pressure testing of repomap workflows, artifacts, and UX.
       Automatically invoked when user mentions "pressure test", "pressure testing",
@@ -703,6 +926,21 @@ customModes:
       After all children complete:
       1. Sync beads: `.kilocode/tools/bd sync`
       2. Report results via `attempt_completion` with a summary of each child's outcome
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `plant-orchestrate`
+      - Required punches:
+        - `child_spawn:%orchestrator%` — Delegate to an orchestrator child
+        - `child_complete:child_return` — Receive child completion payloads
+        - `step_complete:task_exit` — Complete plant-manager lifecycle
+      - Forbidden punches:
+        - `tool_call:edit_file%` — Plant manager must not edit files directly
+        - `tool_call:apply_diff%` — Plant manager must not apply diffs directly
+        - `tool_call:write_to_file%` — Plant manager must not write files directly
+        - `mcp_call:%codebase___retrieval%` — Plant manager must not run codebase retrieval directly
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "plant-orchestrate"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     source: project
   - slug: thinker-abstract
     name: "Thinker: Abstract (Map-Making)"
@@ -748,6 +986,18 @@ customModes:
       Include in your attempt_completion:
       - runtime_model_reported
       - runtime_mode_reported
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `prepare-phase`
+      - Required punches:
+        - `mcp_call:%process_thought%` — Use sequential thinking tools
+        - `mcp_call:%export_session%` — Export the thinking session artifact
+        - `step_complete:task_exit` — Complete the phase before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "prepare-phase"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use to generate competing problem frames before converging on a solution.
       Spawned as a subtask by orchestrators following a thinking plan.
@@ -798,6 +1048,18 @@ customModes:
       Include in your attempt_completion:
       - runtime_model_reported
       - runtime_mode_reported
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `prepare-phase`
+      - Required punches:
+        - `mcp_call:%process_thought%` — Use sequential thinking tools
+        - `mcp_call:%export_session%` — Export the thinking session artifact
+        - `step_complete:task_exit` — Complete the phase before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "prepare-phase"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use to falsify an existing plan/design by enumerating failure modes and mitigations.
       Spawned as a subtask by orchestrators following a thinking plan.
@@ -848,6 +1110,18 @@ customModes:
       Include in your attempt_completion:
       - runtime_model_reported
       - runtime_mode_reported
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `prepare-phase`
+      - Required punches:
+        - `mcp_call:%process_thought%` — Use sequential thinking tools
+        - `mcp_call:%export_session%` — Export the thinking session artifact
+        - `step_complete:task_exit` — Complete the phase before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "prepare-phase"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use to find feedback loops, bottlenecks, and leverage points in a system.
       Spawned as a subtask by orchestrators following a thinking plan.
@@ -899,6 +1173,18 @@ customModes:
       Include in your attempt_completion:
       - runtime_model_reported
       - runtime_mode_reported
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `prepare-phase`
+      - Required punches:
+        - `mcp_call:%process_thought%` — Use sequential thinking tools
+        - `mcp_call:%export_session%` — Export the thinking session artifact
+        - `step_complete:task_exit` — Complete the phase before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "prepare-phase"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use to collapse ambiguity into executable steps with verification checks.
       Spawned as a subtask by orchestrators following a thinking plan.
@@ -951,6 +1237,18 @@ customModes:
       Include in your attempt_completion:
       - runtime_model_reported
       - runtime_mode_reported
+
+      ## Punch Card Exit Conditions
+
+      - Punch card: `prepare-phase`
+      - Required punches:
+        - `mcp_call:%process_thought%` — Use sequential thinking tools
+        - `mcp_call:%export_session%` — Export the thinking session artifact
+        - `step_complete:task_exit` — Complete the phase before exit
+      - Forbidden punches:
+        - `child_spawn:%` — Do not delegate from specialist mode
+      - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "prepare-phase"`.
+      - If the check fails, continue work, mint missing punches, and re-run until PASS.
     whenToUse: |
       Use to separate know/believe/guess, assign confidence, and plan uncertainty reduction.
       Spawned as a subtask by orchestrators following a thinking plan.

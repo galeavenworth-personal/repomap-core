@@ -1,0 +1,8 @@
+{
+  "parts": [
+    {
+      "type": "text",
+      "text": "Run the attestation E2E test suite. This validates all agent modes, tool access, model routing, cache behavior, and punch card recording.\n\nSteps:\n1. cd to the daemon directory\n2. Run: KILO_LIVE=1 npx vitest run tests/attestation-e2e.test.ts\n3. Wait for all tests to complete\n4. Report the full test output including pass/fail counts\n\nDo NOT modify any code. Just run the test and report results verbatim."
+    }
+  ]
+}
