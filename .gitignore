@@ -50,6 +50,9 @@ Thumbs.db
 # Local Dolt state for punch-card memory (machine-local cache like beads.db)
 .kilocode/dolt/
 
+# Machine-local factory root pin
+.kilocode/factory-root.json
+
 # Beads install glue code (temporary workaround for upstream CGO bug steveyegge/beads#1849)
 # Remove this entry when beads releases CGO-enabled binaries
 .kilocode/tools/beads_install.sh
