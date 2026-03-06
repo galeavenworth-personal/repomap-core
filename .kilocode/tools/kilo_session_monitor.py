@@ -409,6 +409,7 @@ class ChildMatch:
     spawn: SpawnEvent
     child_task_id: str
     cost: TaskCost | None
+    resolution_method: str = "unresolved"  # "explicit" | "heuristic" | "unresolved"
 
 
 def uuid7_timestamp_ms(task_id: str) -> int | None:
@@ -477,10 +478,93 @@ def extract_spawns(task_id: str) -> list[SpawnEvent]:
     return spawns
 
 
-def correlate_children(spawns: list[SpawnEvent]) -> list[ChildMatch]:
-    """Match each spawn to a child task directory by UUID v7 timing."""
+def _extract_explicit_child_ids(parent_task_id: str) -> list[str | None]:
+    """Extract explicit child task IDs from Kilo session metadata.
+
+    Inspects api_conversation_history.json for subtask_result messages that
+    contain task_id references, providing deterministic lineage when available.
+    Returns a list parallel to spawns (None for spawns without explicit IDs).
+    """
+    history_path = TASKS_DIR / parent_task_id / "api_conversation_history.json"
+    if not history_path.exists():
+        return []
+
+    try:
+        history = json.loads(history_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    if not isinstance(history, list):
+        return []
+
+    # Look for subtask_result entries that contain child task IDs.
+    # Kilo encodes these as JSON in the content field when children return.
+    child_ids: list[str | None] = []
+    for msg in history:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role != "tool":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, (str, list)):
+            continue
+
+        # Content may be a string or a list of content blocks
+        text_parts: list[str] = []
+        if isinstance(content, str):
+            text_parts.append(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    text_parts.append(block["text"])
+
+        for text in text_parts:
+            # Look for task UUID patterns in subtask results
+            try:
+                data = json.loads(text)
+                if isinstance(data, dict):
+                    tid = data.get("taskId") or data.get("task_id")
+                    if isinstance(tid, str) and _is_valid_uuid(tid):
+                        child_ids.append(tid)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+    return child_ids
+
+
+def _is_valid_uuid(value: str) -> bool:
+    """Return True when value parses as an RFC4122 UUID string."""
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+def correlate_children(
+    spawns: list[SpawnEvent],
+    parent_task_id: str | None = None,
+) -> list[ChildMatch]:
+    """Match each spawn to a child task directory, preferring explicit IDs.
+
+    Resolution strategy (in priority order):
+    1. **Explicit**: Use child task IDs found in Kilo session metadata
+       (api_conversation_history.json).  Deterministic and reliable.
+    2. **Heuristic**: Fall back to UUID v7 timestamp correlation when
+       explicit IDs are unavailable.
+    3. **Unresolved**: No match found by either method.
+
+    Each returned ``ChildMatch`` carries a ``resolution_method`` flag
+    indicating which strategy produced the match.
+    """
     if not spawns:
         return []
+
+    # --- Phase 1: Try explicit child IDs from session metadata ---
+    explicit_ids: list[str | None] = []
+    if parent_task_id:
+        explicit_ids = _extract_explicit_child_ids(parent_task_id)
 
     # Build index of all task dirs with their UUID v7 timestamps
     all_tasks: list[tuple[str, int]] = []
@@ -491,10 +575,31 @@ def correlate_children(spawns: list[SpawnEvent]) -> list[ChildMatch]:
                 all_tasks.append((d.name, ts))
     all_tasks.sort(key=lambda x: x[1])
 
+    # Set of valid task dir names for quick membership testing
+    valid_task_dirs = {name for name, _ in all_tasks}
+
     matches: list[ChildMatch] = []
     used_child_ids: set[str] = set()
-    for spawn in spawns:
-        # Child must be created after newTask call, before subtask_result
+
+    for idx, spawn in enumerate(spawns):
+        # --- Try explicit resolution first ---
+        if idx < len(explicit_ids) and explicit_ids[idx] is not None:
+            child_id = explicit_ids[idx]
+            assert child_id is not None  # narrowing for mypy
+            if child_id in valid_task_dirs and child_id not in used_child_ids:
+                cost = get_task_cost(child_id)
+                used_child_ids.add(child_id)
+                matches.append(
+                    ChildMatch(
+                        spawn=spawn,
+                        child_task_id=child_id,
+                        cost=cost,
+                        resolution_method="explicit",
+                    )
+                )
+                continue
+
+        # --- Fall back to UUID v7 heuristic ---
         lower = spawn.new_task_ts
         upper = spawn.result_ts if spawn.result_ts else spawn.new_task_ts + 120_000
         candidates = [
@@ -507,18 +612,36 @@ def correlate_children(spawns: list[SpawnEvent]) -> list[ChildMatch]:
             child_id = candidates[0][0]
             cost = get_task_cost(child_id)
             used_child_ids.add(child_id)
-            matches.append(ChildMatch(spawn=spawn, child_task_id=child_id, cost=cost))
+            matches.append(
+                ChildMatch(
+                    spawn=spawn,
+                    child_task_id=child_id,
+                    cost=cost,
+                    resolution_method="heuristic",
+                )
+            )
         elif len(candidates) > 1:
             # Pick closest to spawn time
             candidates.sort(key=lambda x: x[1] - lower)
             child_id = candidates[0][0]
             cost = get_task_cost(child_id)
             used_child_ids.add(child_id)
-            matches.append(ChildMatch(spawn=spawn, child_task_id=child_id, cost=cost))
-        else:
-            # No match found
             matches.append(
-                ChildMatch(spawn=spawn, child_task_id="(unresolved)", cost=None)
+                ChildMatch(
+                    spawn=spawn,
+                    child_task_id=child_id,
+                    cost=cost,
+                    resolution_method="heuristic",
+                )
+            )
+        else:
+            matches.append(
+                ChildMatch(
+                    spawn=spawn,
+                    child_task_id="(unresolved)",
+                    cost=None,
+                    resolution_method="unresolved",
+                )
             )
 
     return matches
@@ -625,7 +748,7 @@ def cmd_children(task_id: str | None = None) -> None:
         print("No subtask spawns found (no newTask calls in this task).")
         return
 
-    matches = correlate_children(spawns)
+    matches = correlate_children(spawns, parent_task_id=task_id)
     persisted = persist_child_relationships(task_id, matches)
     parent_cost = get_task_cost(task_id)
 
@@ -654,9 +777,10 @@ def cmd_children(task_id: str | None = None) -> None:
         tok_str = (
             f"({m.cost.tokens_in:,} in, {m.cost.tokens_out:,} out)" if m.cost else ""
         )
+        resolution_tag = f"[{m.resolution_method}]"
         print(
             f"  #{m.spawn.index + 1:<2} {child_short:<16} [{m.spawn.mode:<12}]"
-            f" {cost_str}  {tok_str}"
+            f" {cost_str}  {tok_str}  {resolution_tag}"
         )
         print(f"       {m.spawn.label}")
 

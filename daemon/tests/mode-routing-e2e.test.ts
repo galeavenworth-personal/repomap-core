@@ -31,18 +31,18 @@ const EXPECTED_ROUTING: Record<string, string> = {
   "plant-manager": "kilo/anthropic/claude-opus-4.6",
   "process-orchestrator": "kilo/anthropic/claude-opus-4.6",
   "audit-orchestrator": "kilo/anthropic/claude-opus-4.6",
-  architect: "kilo/anthropic/claude-opus-4.6",
-  "product-skeptic": "kilo/anthropic/claude-opus-4.6",
-  code: "openai/gpt-5.3-codex",
-  fitter: "openai/gpt-5.3-codex",
-  "code-simplifier": "openai/gpt-5.3-codex",
+  architect: "kilo/openai/gpt-5.4",
+  "product-skeptic": "kilo/openai/gpt-5.4",
+  code: "kilo/openai/gpt-5.3-codex",
+  fitter: "kilo/openai/gpt-5.3-codex",
+  "code-simplifier": "kilo/openai/gpt-5.3-codex",
   "pr-review": "kilo/anthropic/claude-sonnet-4.6",
-  "docs-specialist": "kilo/anthropic/claude-sonnet-4.6",
-  "thinker-abstract": "openai/gpt-5.2",
-  "thinker-adversarial": "openai/gpt-5.2",
-  "thinker-systems": "openai/gpt-5.2",
-  "thinker-concrete": "openai/gpt-5.2",
-  "thinker-epistemic": "openai/gpt-5.2",
+  "docs-specialist": "kilo/anthropic/claude-opus-4.6",
+  "thinker-abstract": "kilo/anthropic/claude-opus-4.6",
+  "thinker-adversarial": "kilo/openai/gpt-5.3-codex",
+  "thinker-systems": "kilo/anthropic/claude-opus-4.6",
+  "thinker-concrete": "kilo/openai/gpt-5.4",
+  "thinker-epistemic": "kilo/openai/gpt-5.4",
 };
 
 const AGENTS_TO_TEST = Object.keys(EXPECTED_ROUTING);
@@ -229,8 +229,9 @@ describe.skipIf(SKIP)(
 
             console.log(`[mode-routing] Dispatched ${agent} → ${session.id}`);
 
-            // Poll until done (60s per agent — they just need to reply)
-            const msgs = await pollUntilDone(session.id, 60_000);
+            // Poll until done. Some OpenAI GPT-5.4 routes can take longer than codex routes
+            // to produce a first completed turn under live load.
+            const msgs = await pollUntilDone(session.id, 180_000);
             return extractReport(agent, session.id, msgs);
           } catch (err) {
             console.error(`[mode-routing] ${agent}: ${(err as Error).message}`);
@@ -262,7 +263,7 @@ describe.skipIf(SKIP)(
         );
         expect(completed.length).toBeGreaterThan(0);
       },
-      120_000
+      300_000
     );
 
     it("prints mode routing report", () => {

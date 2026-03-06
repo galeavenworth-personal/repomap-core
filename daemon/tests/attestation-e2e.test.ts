@@ -76,17 +76,17 @@ const AGENTS: AgentSpec[] = [
   // Tier 3 — Opus
   {
     agent: "architect",
-    expectedModel: "anthropic/claude-opus-4.6",
+    expectedModel: "gpt-5.4",
     toolGroups: ["read", "command", "browser", "mcp"],
     exercisableTools: ["read", "bash"],
-    cacheExpected: true,
+    cacheExpected: false,
   },
   {
     agent: "product-skeptic",
-    expectedModel: "anthropic/claude-opus-4.6",
+    expectedModel: "gpt-5.4",
     toolGroups: ["read", "command", "mcp", "browser"],
     exercisableTools: ["read", "bash"],
-    cacheExpected: true,
+    cacheExpected: false,
   },
   // Tier 3 — Sonnet
   {
@@ -105,7 +105,7 @@ const AGENTS: AgentSpec[] = [
   },
   {
     agent: "docs-specialist",
-    expectedModel: "anthropic/claude-sonnet-4.6",
+    expectedModel: "anthropic/claude-opus-4.6",
     toolGroups: ["read", "edit", "command"],
     exercisableTools: ["read", "bash"],
     cacheExpected: true,
@@ -132,38 +132,38 @@ const AGENTS: AgentSpec[] = [
     exercisableTools: ["read", "bash"],
     cacheExpected: false,
   },
-  // Tier 3 — Thinker (OpenAI gpt-5.2)
+  // Tier 3 — Thinker
   {
     agent: "thinker-abstract",
-    expectedModel: "gpt-5.2",
+    expectedModel: "anthropic/claude-opus-4.6",
     toolGroups: ["read", "mcp"],
     exercisableTools: ["read"],
-    cacheExpected: false,
+    cacheExpected: true,
   },
   {
     agent: "thinker-adversarial",
-    expectedModel: "gpt-5.2",
+    expectedModel: "gpt-5.3-codex",
     toolGroups: ["read", "mcp"],
     exercisableTools: ["read"],
     cacheExpected: false,
   },
   {
     agent: "thinker-systems",
-    expectedModel: "gpt-5.2",
+    expectedModel: "anthropic/claude-opus-4.6",
     toolGroups: ["read", "mcp"],
     exercisableTools: ["read"],
-    cacheExpected: false,
+    cacheExpected: true,
   },
   {
     agent: "thinker-concrete",
-    expectedModel: "gpt-5.2",
+    expectedModel: "gpt-5.4",
     toolGroups: ["read", "mcp"],
     exercisableTools: ["read"],
     cacheExpected: false,
   },
   {
     agent: "thinker-epistemic",
-    expectedModel: "gpt-5.2",
+    expectedModel: "gpt-5.4",
     toolGroups: ["read", "mcp"],
     exercisableTools: ["read"],
     cacheExpected: false,
@@ -234,6 +234,10 @@ interface SessionResult {
   attestationJson: Record<string, unknown> | null;
   completed: boolean;
   elapsedMs: number;
+}
+
+function isAnthropicModel(modelUsed: string): boolean {
+  return modelUsed.includes("anthropic/") || modelUsed.includes("claude-");
 }
 
 /** Check if messages indicate the session is complete. */
@@ -507,25 +511,30 @@ describe.skipIf(SKIP)(
           ).toContain(spec.expectedModel);
         });
 
-        if (spec.cacheExpected) {
-          it("has Anthropic prompt caching active", () => {
-            const r = results.get(spec.agent);
-            if (!r) return;
-            const hasCaching = r.totalCacheRead > 0 || r.totalCacheWrite > 0;
-            if (!hasCaching) {
+        it("matches expected caching behavior for its runtime model", () => {
+          const r = results.get(spec.agent);
+          if (!r) return;
+          const anthropicModel = isAnthropicModel(r.modelUsed);
+          const totalCacheActivity = r.totalCacheRead + r.totalCacheWrite;
+          if (anthropicModel) {
+            if (totalCacheActivity === 0) {
               console.warn(
                 `[attestation] WARNING: ${spec.agent} has no cache activity ` +
                 `(read=${r.totalCacheRead}, write=${r.totalCacheWrite}). ` +
                 `This may be a first-run cache miss or a gateway issue.`
               );
             }
-            // Soft check: warn but don't fail on first run (cache write expected)
             expect(
-              r.totalCacheRead + r.totalCacheWrite,
-              `${spec.agent}: expected cache activity (read+write > 0)`
+              totalCacheActivity,
+              `${spec.agent}: expected Anthropic cache activity (read+write > 0) for model "${r.modelUsed}"`
             ).toBeGreaterThan(0);
-          });
-        }
+          } else {
+            expect(
+              totalCacheActivity,
+              `${spec.agent}: expected no explicit Anthropic cache activity for model "${r.modelUsed}"`
+            ).toBe(0);
+          }
+        });
 
         if (spec.dispatchOnly) {
           it("correctly refused direct tool use (dispatch-only)", () => {
@@ -581,9 +590,7 @@ describe.skipIf(SKIP)(
         it("has positive tokens (cost > 0 for paid models)", () => {
           const r = results.get(spec.agent);
           if (!r) return;
-          // OpenAI models via ChatGPT subscription may report cost=0
-          if (spec.cacheExpected) {
-            // Anthropic (paid) — cost should be > 0
+          if (isAnthropicModel(r.modelUsed)) {
             expect(r.totalCost, `${spec.agent}: cost should be > 0`).toBeGreaterThan(0);
           }
           expect(r.totalTokensOut, `${spec.agent}: output tokens should be > 0`).toBeGreaterThan(0);
