@@ -863,8 +863,17 @@ customModes:
 
       ## Sequential Work
 
-      For N beads: N sequential children. One at a time.
-      Wait for each child to complete before spawning the next.
+      For each bead, execute workflow tasks in this strict order:
+      1. Spawn one discover child to understand and further define the bead.
+      2. After discover completes, spawn one explore child to gather codebase context.
+      3. After explore completes, spawn one prepare child to turn the work into concrete steps.
+      4. After prepare completes, spawn N code children for the prepared implementation subtasks.
+
+      The N code subtasks are not beads themselves. They are the granular implementation
+      tasks produced by the prepare phase for the current bead.
+
+      All children run sequentially, one at a time. Never start the next child until the
+      previous child has completed, because each phase depends on information from the prior phase.
 
       ## Beads Commands
 
