@@ -19,6 +19,7 @@
 #   -q, --quiet            Suppress progress output, print only final result
 #   --poll SECONDS         Poll interval (default: 10)
 #   --no-monitor           Fire and forget — print session ID and exit
+#   --reload-kilo          Explicitly restart kilo serve before dispatch
 #   --json                 Output final result as JSON instead of text
 #   --help                 Show this help
 #
@@ -66,6 +67,7 @@ MAX_WAIT=600
 POLL_INTERVAL=10
 QUIET=false
 NO_MONITOR=false
+RELOAD_KILO=false
 JSON_OUTPUT=false
 PROMPT_ARG=""
 
@@ -86,6 +88,7 @@ while [[ $# -gt 0 ]]; do
         -q|--quiet)   QUIET=true; shift ;;
         --poll)       POLL_INTERVAL="$2"; shift 2 ;;
         --no-monitor) NO_MONITOR=true; shift ;;
+        --reload-kilo) RELOAD_KILO=true; shift ;;
         --json)       JSON_OUTPUT=true; shift ;;
         --help)       show_help ;;
         -*)           echo "ERROR: Unknown option: $1" >&2; exit 1 ;;
@@ -130,54 +133,28 @@ PGREP=$(resolve_bin pgrep /usr/bin/pgrep /bin/pgrep)
 SS=$(resolve_bin ss /usr/bin/ss /usr/sbin/ss)
 GREP=$(resolve_bin grep /usr/bin/grep /bin/grep)
 
-# ─── Phase 0: Restart kilo serve to pick up .kilocodemodes changes ────────────
-# kilo serve caches mode definitions at startup. In dev, we always restart
-# to ensure the latest .kilocodemodes is loaded.
+# ─── Phase 0: Optional kilo serve reload ─────────────────────────────────────
+# Reload only when explicitly requested. Dispatch should not bounce healthy
+# infrastructure by default.
 
-# Find ALL kilo serve processes (binary, node wrapper, op run wrapper)
-KILO_PIDS=$("$PGREP" -f "kilo serve" 2>/dev/null | "$GREP" -v "$$" || true)
+if [[ "$RELOAD_KILO" == true ]]; then
+    KILO_PIDS=$("$PGREP" -f "kilo serve" 2>/dev/null | "$GREP" -v "$$" || true)
 
-if [[ -n "$KILO_PIDS" ]]; then
-    log "$(timestamp) Killing kilo serve to pick up .kilocodemodes changes..."
-    echo "$KILO_PIDS" | xargs kill 2>/dev/null || true
-    # Wait for port to be free (up to 5s)
-    for i in $(seq 1 10); do
-        "$SS" -tlnp 2>/dev/null | "$GREP" -q ":${PORT} " || break
-        sleep 0.5
-    done
-    sleep 1  # extra settle time
-    # Start fresh — use op run for 1Password-injected env if .env.op exists
-    if [[ -f "$REPO_ROOT/.env.op" && -x "$(command -v op 2>/dev/null || true)" ]]; then
-        nohup op run --env-file "$REPO_ROOT/.env.op" -- kilo serve --port "$PORT" > /tmp/kilo-serve.log 2>&1 &
-    else
-        if [[ -f "$REPO_ROOT/.env.op" ]]; then
-            log "$(timestamp) 1Password CLI 'op' not found; starting kilo serve without .env.op"
-        fi
-        nohup kilo serve --port "$PORT" > /tmp/kilo-serve.log 2>&1 &
+    if [[ -n "$KILO_PIDS" ]]; then
+        log "$(timestamp) Reloading kilo serve on request..."
+        echo "$KILO_PIDS" | xargs kill 2>/dev/null || true
+        for i in $(seq 1 10); do
+            "$SS" -tlnp 2>/dev/null | "$GREP" -q ":${PORT} " || break
+            sleep 0.5
+        done
     fi
-    log "$(timestamp) kilo serve restarting (PID $!), waiting for health..."
-    # Wait for it to be ready (up to 20s)
-    for i in $(seq 1 40); do
-        if "$CURL" -sf "http://127.0.0.1:${PORT}/session" >/dev/null 2>&1; then
-            log "$(timestamp) kilo serve healthy after ~$((i / 2))s"
-            break
-        fi
-        if [[ $i -eq 40 ]]; then
-            echo "ERROR: kilo serve failed to start after 20s. Check /tmp/kilo-serve.log" >&2
-            exit 1
-        fi
-        sleep 0.5
-    done
-    # Kilo restart may have killed oc-daemon SSE connection. Re-run start-stack
-    # to revive any dead components before the preflight check.
+
     if [[ -x "$SCRIPT_DIR/start-stack.sh" ]]; then
-        log "$(timestamp) Re-running start-stack.sh to revive components after kilo restart..."
-        "$SCRIPT_DIR/start-stack.sh" 2>&1 | while IFS= read -r line; do
+        log "$(timestamp) Ensuring stack after kilo reload..."
+        "$SCRIPT_DIR/start-stack.sh" --ensure 2>&1 | while IFS= read -r line; do
             log "  $line"
-        done || true
+        done
     fi
-else
-    log "$(timestamp) kilo serve not found — skipping restart"
 fi
 
 # ─── Phase 1: Full stack pre-flight check ────────────────────────────────────
@@ -240,8 +217,8 @@ if [[ "$PREFLIGHT_OK" != true ]]; then
     echo " DISPATCH BLOCKED — Stack is incomplete" >&2
     echo "═══════════════════════════════════════════════════════════" >&2
     echo -e "$PREFLIGHT_MISSING" >&2
-    echo "Start the full stack first:" >&2
-    echo "  .kilocode/tools/start-stack.sh" >&2
+    echo "Ensure the full stack is healthy first:" >&2
+    echo "  .kilocode/tools/start-stack.sh --ensure" >&2
     echo "" >&2
     echo "Or check status with:" >&2
     echo "  .kilocode/tools/start-stack.sh --check" >&2

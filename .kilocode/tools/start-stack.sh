@@ -18,11 +18,13 @@
 #
 # Usage:
 #   .kilocode/tools/start-stack.sh           # Start full stack
+#   .kilocode/tools/start-stack.sh --ensure  # Ensure full stack is healthy (start missing pieces only)
 #   .kilocode/tools/start-stack.sh --check   # Check stack health only
 #   .kilocode/tools/start-stack.sh --stop    # Stop all managed components
+#   .kilocode/tools/start-stack.sh --with-kilo # Start kilo serve too if it is missing
 #
 # Prerequisites:
-#   - kilo serve must be running on port 4096 (started separately)
+#   - kilo serve must be running on port 4096 (started separately unless --with-kilo/--ensure is used)
 #   - temporal CLI installed (~/.temporalio/bin/temporal or on PATH)
 #   - daemon/node_modules installed (cd daemon && npm install)
 #   - oc-daemon/node_modules installed (cd oc-daemon && npm install)
@@ -54,6 +56,7 @@ TEMPORAL_PORT="${TEMPORAL_PORT:-7233}"
 TEMPORAL_UI_PORT="${TEMPORAL_UI_PORT:-8233}"
 DOLT_PORT="${DOLT_PORT:-3307}"
 DOLT_DATA_DIR="${DOLT_DATA_DIR:-$HOME/.dolt-data/beads}"
+MANAGE_KILO=false
 
 # ─── Hard Dependencies ────────────────────────────────────────────────────────
 # Resolve all external binaries at startup. Fail fast if missing.
@@ -230,14 +233,78 @@ do_stop() {
     return 0
 }
 
+start_kilo_if_needed() {
+    if is_kilo_healthy; then
+        log "✅ kilo serve already healthy on ${KILO_HOST}:${KILO_PORT}."
+        return 0
+    fi
+
+    if [[ "$MANAGE_KILO" != true ]]; then
+        log "ERROR: kilo serve is not running at ${KILO_HOST}:${KILO_PORT}"
+        log "Start it first: kilo serve --port ${KILO_PORT}"
+        log "Or use: .kilocode/tools/start-stack.sh --with-kilo"
+        exit 2
+    fi
+
+    log "Starting kilo serve on ${KILO_HOST}:${KILO_PORT}..."
+    if [[ -f "$REPO_ROOT/.env.op" && -x "$(command -v op 2>/dev/null || true)" ]]; then
+        nohup op run --env-file "$REPO_ROOT/.env.op" -- kilo serve --port "$KILO_PORT" > /tmp/kilo-serve.log 2>&1 &
+    else
+        nohup kilo serve --port "$KILO_PORT" > /tmp/kilo-serve.log 2>&1 &
+    fi
+    log "kilo serve starting (PID $!)..."
+
+    for i in $(seq 1 20); do
+        if is_kilo_healthy; then
+            log "✅ kilo serve started."
+            return 0
+        fi
+        sleep 1
+    done
+
+    log "ERROR: kilo serve failed to start within 20s"
+    log "Check /tmp/kilo-serve.log for details"
+    exit 2
+}
+
+ensure_temporal_server() {
+    if is_temporal_running; then
+        log "✅ Temporal server already running on port ${TEMPORAL_PORT}."
+        return 0
+    fi
+
+    log "Starting Temporal dev server on port ${TEMPORAL_PORT} (UI: ${TEMPORAL_UI_PORT})..."
+    local temporal_cli
+    temporal_cli=$(find_temporal_cli) || {
+        log "ERROR: 'temporal' CLI not found."
+        log "Install via: curl -sSf https://temporal.download/cli.sh | sh"
+        exit 1
+    }
+
+    nohup "$temporal_cli" server start-dev \
+        --port "$TEMPORAL_PORT" \
+        --ui-port "$TEMPORAL_UI_PORT" \
+        --db-filename /tmp/temporal-dev.db \
+        > /tmp/temporal-dev.log 2>&1 &
+    log "Temporal server starting (PID $!)..."
+
+    for i in $(seq 1 10); do
+        if is_temporal_running; then
+            log "✅ Temporal server started."
+            return 0
+        fi
+        sleep 1
+    done
+
+    log "ERROR: Temporal server failed to start within 10s"
+    log "Check /tmp/temporal-dev.log for details"
+    exit 5
+}
+
 do_start() {
     # ── Step 1: Validate kilo serve ──────────────────────────────────────
     log "Checking kilo serve at ${KILO_HOST}:${KILO_PORT}..."
-    if ! is_kilo_healthy; then
-        log "ERROR: kilo serve is not running at ${KILO_HOST}:${KILO_PORT}"
-        log "Start it first: kilo serve --port ${KILO_PORT}"
-        exit 2
-    fi
+    start_kilo_if_needed
     log "✅ kilo serve is healthy."
 
     # ── Step 2: Start Dolt server ────────────────────────────────────────
@@ -299,7 +366,10 @@ do_start() {
         (cd "$DAEMON_DIR" && npm install --silent)
     fi
 
-    # ── Step 4: Start pm2-managed processes (oc-daemon + temporal-worker) ─
+    # ── Step 4: Start Temporal dev server before worker dependencies ──────
+    ensure_temporal_server
+
+    # ── Step 5: Start pm2-managed processes (oc-daemon + temporal-worker) ─
     # pm2 handles: daemonization, auto-restart on crash, log management,
     # proper process tree. No more nohup/pgrep hacks.
     log "Starting pm2-managed processes..."
@@ -327,37 +397,6 @@ do_start() {
     fi
     log "✅ Temporal worker online (pm2, auto-restart enabled)."
 
-    # ── Step 5: Start Temporal dev server (native binary) ─────────────────
-    if is_temporal_running; then
-        log "✅ Temporal server already running on port ${TEMPORAL_PORT}."
-    else
-        log "Starting Temporal dev server on port ${TEMPORAL_PORT} (UI: ${TEMPORAL_UI_PORT})..."
-        local temporal_cli
-        temporal_cli=$(find_temporal_cli) || {
-            log "ERROR: 'temporal' CLI not found."
-            log "Install via: curl -sSf https://temporal.download/cli.sh | sh"
-            exit 1
-        }
-
-        "$temporal_cli" server start-dev \
-            --port "$TEMPORAL_PORT" \
-            --ui-port "$TEMPORAL_UI_PORT" \
-            --db-filename /tmp/temporal-dev.db \
-            >/dev/null 2>&1 &
-        log "Temporal server starting (PID $!)..."
-
-        for i in $(seq 1 10); do
-            if is_temporal_running; then break; fi
-            sleep 1
-        done
-
-        if ! is_temporal_running; then
-            log "ERROR: Temporal server failed to start within 10s"
-            exit 5
-        fi
-        log "✅ Temporal server started."
-    fi
-
     # ── Final verification ───────────────────────────────────────────────
     log ""
     log "═══════════════════════════════════════════════════"
@@ -381,8 +420,16 @@ do_start() {
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
+    --ensure)
+        MANAGE_KILO=true
+        do_start
+        ;;
     --check)  do_check ;;
     --stop)   do_stop ;;
+    --with-kilo)
+        MANAGE_KILO=true
+        do_start
+        ;;
     --help|-h)
         sed -n '/^# Usage:/,/^# =====/p' "$0" | sed 's/^# \?//'
         ;;
