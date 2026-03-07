@@ -91,8 +91,8 @@ nc -z 127.0.0.1 3307 && echo "Server OK" || echo "Server NOT running"
 # Verify Dolt server is running
 nc -z 127.0.0.1 3307 && echo "Server OK" || echo "Start Dolt server first"
 
-# Refresh Dolt from JSONL if this clone may be behind
-.kilocode/tools/bd import
+# Refresh Dolt from JSONL if a cross-clone git pull may have brought newer JSONL
+.kilocode/tools/bd import --from-jsonl .beads/issues.jsonl
 
 # Find available work
 .kilocode/tools/bd ready

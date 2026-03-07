@@ -31,11 +31,11 @@ beads".
 
 ## Session Start
 
-Refresh Beads state before starting work:
+Refresh Beads state before starting work when a cross-clone `git pull` brought in newer JSONL:
 
 ```bash
 .kilocode/tools/dolt_start.sh
-.kilocode/tools/bd import
+.kilocode/tools/bd import --from-jsonl .beads/issues.jsonl
 ```
 
 ## Landing the Plane (Session Completion)

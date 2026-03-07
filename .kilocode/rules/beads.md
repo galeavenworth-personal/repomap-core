@@ -23,7 +23,7 @@ This covers ~90% of git operations in the agentic workflow.
 
 The plugin does NOT fire for manual `git commit` in a terminal, IDE git integration,
 or CI/CD. For these cases:
-- run `.kilocode/tools/bd import` at session start when you need JSONL → Dolt refresh
+- run `.kilocode/tools/bd import --from-jsonl .beads/issues.jsonl` after a cross-clone `git pull` brings newer JSONL and you need JSONL → Dolt refresh
 - Run `bd export` manually before manual commits if JSONL needs to be current
 - The merge driver (configured by `beads_git_setup.sh`) handles JSONL merge conflicts
 
