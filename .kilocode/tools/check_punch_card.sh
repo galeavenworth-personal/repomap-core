@@ -7,7 +7,7 @@ DOLT_PORT="${DOLT_PORT:-3307}"
 DOLT_DATABASE="${DOLT_DATABASE:-beads_repomap-core}"
 
 usage() {
-  echo "Usage: $0 <session_id> <card_id>" >&2
+  echo "Usage: $0 [--parent-session PARENT_UUID] <session_id> <card_id>" >&2
   return 0
 }
 
@@ -15,6 +15,27 @@ die() {
   echo "ERROR: $*" >&2
   exit 2
 }
+
+PARENT_SESSION=""
+
+# Parse optional --parent-session flag
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --parent-session)
+      if [[ $# -lt 2 ]]; then
+        die "--parent-session requires a value"
+      fi
+      PARENT_SESSION="$2"
+      shift 2
+      ;;
+    -*)
+      die "unknown option: $1"
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 if [[ $# -ne 2 ]]; then
   usage
@@ -134,6 +155,9 @@ echo "Punch Card Check"
 echo "- Session: ${SESSION_ID}"
 echo "- Card: ${CARD_ID}"
 echo "- Engine: ${SQL_ENGINE}"
+if [[ -n "$PARENT_SESSION" ]]; then
+  echo "- Parent Session: ${PARENT_SESSION}"
+fi
 
 FAILURES=0
 

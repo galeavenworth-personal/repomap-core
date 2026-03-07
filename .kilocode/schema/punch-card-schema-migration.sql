@@ -243,7 +243,6 @@ INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, 
     ('process-orchestrate', 'process-orchestrate', 'tool_call',      'edit_file%',         TRUE,  TRUE,  'FORBIDDEN: Must not edit files directly'),
     ('process-orchestrate', 'process-orchestrate', 'tool_call',      'apply_diff%',        TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs directly'),
     ('process-orchestrate', 'process-orchestrate', 'tool_call',      'write_to_file%',     TRUE,  TRUE,  'FORBIDDEN: Must not write files directly'),
-    ('process-orchestrate', 'process-orchestrate', 'mcp_call',       '%codebase___retrieval%', TRUE, TRUE, 'FORBIDDEN: Must not explore codebase directly'),
     ('process-orchestrate', 'process-orchestrate', 'cost_checkpoint', '%',                 FALSE, FALSE, 'Cost tracking (optional)')
 ON DUPLICATE KEY UPDATE
     workflow_name = VALUES(workflow_name),

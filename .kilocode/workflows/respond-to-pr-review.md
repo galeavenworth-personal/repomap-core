@@ -28,6 +28,10 @@ ensures changes meet quality standards, and requires that **every comment is ack
 - PR number or branch name known
 - Local branch checked out and up-to-date with remote
 
+**Branch truth is mandatory:** branch name alone is not sufficient. Before making any claim
+about PR state or completion, you must run `git fetch origin` and verify the checkout's
+`HEAD` matches `origin/<headRefName>` or explain the exact divergence.
+
 ---
 
 ## Phase 0: Fetch + Normalize Review Feedback
@@ -72,6 +76,7 @@ Create a ledger that contains **every** piece of reviewer feedback you intend to
 - Every comment appears exactly once in the ledger.
 - Each row has a **disposition** and a **reply plan**.
 - No work is considered complete until all ledger rows are `acknowledged`.
+- The ledger must be persisted in the task/session artifacts; transient in-model tracking is insufficient.
 
 Suggested schema:
 
@@ -245,6 +250,9 @@ gh pr comment <PR_NUMBER> --body "<ledger acknowledgement summary>"
 
 All ledger rows must be `acknowledged` before pushing.
 
+Do not treat "I know what I would reply" as acknowledgement. The replies must be actually
+posted to GitHub, and the ledger must record that they were posted.
+
 ---
 
 ## Phase 6: Push + (Optional) Request Re-Review
@@ -254,6 +262,18 @@ git push origin <headRefName>
 
 gh pr edit <PR_NUMBER> --add-reviewer <reviewer>
 ```
+
+Completion is not allowed at "ready to push" or "changes prepared". If code changed, you must:
+
+1. commit the changes
+2. push the branch to `origin/<headRefName>`
+3. run `git fetch origin`
+4. verify:
+   - `git rev-parse HEAD`
+   - `git rev-parse origin/<headRefName>`
+   - ahead/behind is `0/0`
+
+Only then may you claim the PR branch contains the fix.
 
 ---
 
@@ -270,6 +290,9 @@ gh pr edit <PR_NUMBER> --add-reviewer <reviewer>
 
 **If checkpoint FAILS:** Do NOT call `attempt_completion`. Review which required punches
 are missing, complete the missing steps, re-mint, and re-checkpoint.
+
+**If code changed but commit/push/remote verification did not happen:** Do NOT call
+`attempt_completion`, even if tests pass.
 
 **If checkpoint PASSES:** Proceed to `attempt_completion` with the response summary.
 

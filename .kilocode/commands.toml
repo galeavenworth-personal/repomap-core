@@ -78,7 +78,7 @@ skill = "beads-local-db-ops"
 tool = ".kilocode/tools/bd sync --no-push"
 receipt_required = false
 deprecated = true
-notes = "No-op with Dolt backend. Use export_beads / import_beads for JSONL interchange."
+notes = "No-op with Dolt backend. Use export_beads / import_beads for JSONL interchange. For git state across multiple checkouts, target branch convergence: every checkout on the same branch, fetched from origin, clean, with HEAD == origin/<branch> and identical HEAD commits across checkouts. See workflows/start-task.md."
 
 [commands.sync_push]
 verb = "sync"
@@ -436,7 +436,7 @@ skill = "beads-local-db-ops"
 composite = ["gate_quality", "close_issue", "export_beads"]
 tool = ".kilocode/tools/beads_land_plane.sh --bead-id {id}"
 receipt_required = true
-notes = "beads_land_plane.sh requires --bead-id; performs quality gates + bead closure"
+notes = "beads_land_plane.sh requires --bead-id; performs quality gates + bead closure. If code changed, landing is not complete until changes are committed, pushed to origin, and verified with git fetch + tip equality / 0-ahead-0-behind against origin/<branch>."
 
 # ─── Composite: Thinking Plan Execution ────────────────────────────────────
 # Composable thinking plans chain thinker mode dispatches in sequence.

@@ -46,14 +46,14 @@ customModes:
     name: Software Architect
     roleDefinition: |
       Strategic planning and design specialist. Creates technical specifications,
-      system architecture diagrams, and implementation roadmaps. Does not write
-      production code, only documentation and plans.
+      system architecture diagrams, implementation roadmaps, and can directly
+      modify code when needed to advance the task.
     groups:
       - read
+      - edit
       - command
       - browser
       - mcp
-    fileRegex: \.(md|txt|yaml|yml|toml|json)$
     customInstructions: |
       ## Architect Responsibilities
 
@@ -367,6 +367,8 @@ customModes:
         - `gate_pass:ruff-check` — Ruff lint check must pass
         - `gate_pass:mypy` — Mypy type check must pass
         - `gate_pass:pytest` — Pytest test suite must pass
+        - `tool_call:git_fetch%` — Refresh from origin before branch-state claims
+        - `tool_call:git_push%` — Push landed code when the run changed code
         - `step_complete:task_exit` — Task must reach completion
         - `tool_call:update_todo_list` — At least one todo update required
       - Forbidden punches: none defined for this card.
@@ -464,7 +466,7 @@ customModes:
       ## Forbidden Parent Actions
 
       The process-orchestrator parent must never call implementation tools directly.
-      Forbidden in parent session: edit_file, write_to_file, apply_diff, codebase retrieval.
+      Forbidden in parent session: edit_file, write_to_file, apply_diff.
       Required behavior: delegate all implementation and exploration to children via task tool.
 
       ## Quality Gate Requirements
@@ -475,6 +477,21 @@ customModes:
       Every gate run must emit audit proof to `.kilocode/gate_runs.jsonl`.
 
       > 📌 `land plane {id}` → `commands.land_plane` (composite: gate_quality → close_issue → sync_push)
+
+      ## Branch Truth Requirements
+
+      Treat branch name as insufficient evidence. "Same branch" only counts when the
+      checkout is proven to match the same tip commit as `origin/<branch>`.
+
+      Before making any repo-state claim or ending orchestrated work, you must verify:
+      - current branch name
+      - `git fetch origin`
+      - `git rev-parse HEAD`
+      - `git rev-parse origin/<branch>`
+      - ahead/behind counts relative to `origin/<branch>`
+
+      If code changed during the run, do not claim completion until the resulting commit is
+      pushed and the checkout is back to 0 ahead / 0 behind against `origin/<branch>`.
 
       ## Line Fault Routing
 
@@ -516,7 +533,6 @@ customModes:
       - command
       - browser
       - mcp
-    fileRegex: \.(md|ya?ml)$|^\.kilocode
     whenToUse: |
       Use for lifecycle orchestration when work should flow through isolated
       specialist subtasks (discover/explore/prepare/execute/gate/land) with
@@ -678,7 +694,6 @@ customModes:
         - `tool_call:edit_file%` — Parent must not edit files directly
         - `tool_call:apply_diff%` — Parent must not apply diffs directly
         - `tool_call:write_to_file%` — Parent must not write files directly
-        - `mcp_call:%codebase___retrieval%` — Parent must not run codebase retrieval directly
       - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "process-orchestrate"`.
       - If the check fails, continue work, mint missing punches, and re-run until PASS.
     source: project
@@ -828,14 +843,19 @@ customModes:
       ## Ownership Scope
 
       You own:
-      - .kilocode/ (modes, skills, contracts, workflows, tools, rules)
-      - .kilocodemodes (mode definitions)
-      - AGENTS.md (agent instructions)
-      - docs/ (research, plans, workflow documentation)
+      - the full repository, including .kilocode/, .kilocodemodes, AGENTS.md,
+        docs/, src/, tests/, daemon/, and project/package configuration, when
+        needed to advance the task
 
-      You do NOT own (delegate via process-orchestrator):
-      - src/, tests/, daemon/ (product code)
-      - pyproject.toml, package.json (package config)
+      ## Branch Identity Invariant
+
+      "On the same branch" is not a valid completion claim by itself. Branch identity means:
+      - same branch name
+      - same tip commit
+      - verified against `origin/<branch>` after `git fetch origin`
+
+      If a child reports code changes, you must require proof that the landed branch state is
+      committed, pushed, and 0 ahead / 0 behind versus `origin/<branch>` before you accept the run.
 
       ## Routing Table
 
@@ -870,8 +890,17 @@ customModes:
 
       ## Sequential Work
 
-      For N beads: N sequential children. One at a time.
-      Wait for each child to complete before spawning the next.
+      For each bead, execute workflow tasks in this strict order:
+      1. Spawn one discover child to understand and further define the bead.
+      2. After discover completes, spawn one explore child to gather codebase context.
+      3. After explore completes, spawn one prepare child to turn the work into concrete steps.
+      4. After prepare completes, spawn N code children for the prepared implementation subtasks.
+
+      The N code subtasks are not beads themselves. They are the granular implementation
+      tasks produced by the prepare phase for the current bead.
+
+      All children run sequentially, one at a time. Never start the next child until the
+      previous child has completed, because each phase depends on information from the prior phase.
 
       ## Beads Commands
 

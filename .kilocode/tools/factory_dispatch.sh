@@ -539,10 +539,37 @@ if [[ -z "$RESULT" ]]; then
     exit 6
 fi
 
+# ─── Fetch children once for Phase 8 + Phase 9 ──────────────────────────────
+# Both phases need child session IDs; call the endpoint once and derive both
+# the JSON array (Phase 8) and newline-delimited IDs (Phase 9) from it.
+
+CHILDREN_RAW=""
+CHILD_IDS_JSON="[]"
+CHILD_SESSION_IDS=""
+if [[ "$LAST_CHILDREN" -gt 0 ]]; then
+    CHILDREN_RAW=$("$CURL" -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null || true)
+fi
+if [[ -n "$CHILDREN_RAW" ]]; then
+    CHILD_IDS_JSON=$("$PYTHON3" -c "
+import sys, json
+children = json.loads(sys.argv[1])
+print(json.dumps([c.get('id','') for c in children if c.get('id')]))
+" "$CHILDREN_RAW" 2>/dev/null || echo "[]")
+
+    CHILD_SESSION_IDS=$("$PYTHON3" -c "
+import sys, json
+children = json.loads(sys.argv[1])
+for c in children:
+    cid = c.get('id', '')
+    if cid:
+        print(cid)
+" "$CHILDREN_RAW" 2>/dev/null || true)
+fi
+
 # ─── Phase 8: Output ─────────────────────────────────────────────────────────
 
 if [[ "$JSON_OUTPUT" == true ]]; then
-    "$PYTHON3" - "$SESSION_ID" "$MODE" "$TITLE" "$LAST_CHILDREN" "$ELAPSED" "$RESULT" <<'PYEOF'
+    "$PYTHON3" - "$SESSION_ID" "$MODE" "$TITLE" "$LAST_CHILDREN" "$ELAPSED" "$RESULT" "$CHILD_IDS_JSON" <<'PYEOF'
 import json, sys
 result = {
     'session_id': sys.argv[1],
@@ -550,7 +577,8 @@ result = {
     'title': sys.argv[3],
     'children': int(sys.argv[4]),
     'elapsed_seconds': int(sys.argv[5]),
-    'result': sys.argv[6]
+    'result': sys.argv[6],
+    'child_session_ids': json.loads(sys.argv[7])
 }
 print(json.dumps(result, indent=2))
 PYEOF
@@ -558,4 +586,20 @@ else
     echo "$RESULT"
 fi
 
+# ─── Phase 9: Capture child session IDs for deterministic handoff ─────────────
+# Uses CHILD_SESSION_IDS already fetched above (single API call).
+
+if [[ -n "$CHILD_SESSION_IDS" ]]; then
+    log "$(timestamp) Child session IDs captured for handoff:"
+    while IFS= read -r cid; do
+        [[ -z "$cid" ]] && continue
+        log "  - ${cid}"
+    done <<< "$CHILD_SESSION_IDS"
+
+    # Export for downstream consumers
+    export FACTORY_CHILD_SESSION_IDS="$CHILD_SESSION_IDS"
+    export FACTORY_PARENT_SESSION_ID="$SESSION_ID"
+fi
+
 log "$(timestamp) Done. Session: ${SESSION_ID} | Children: ${LAST_CHILDREN} | Elapsed: ${ELAPSED}s"
+log "$(timestamp) Handoff: use --parent-session ${SESSION_ID} with punch_engine for deterministic child ID resolution"

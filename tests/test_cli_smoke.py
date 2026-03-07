@@ -187,4 +187,7 @@ def test_punch_resolve_task_id_auto_errors_when_no_discovery(
         punch_engine.resolve_task_id("auto")
 
     assert exc_info.value.code == 1
-    assert "task_id 'auto' requested but discovery failed" in capsys.readouterr().err
+    assert (
+        "task_id 'auto' requested but all resolution methods failed"
+        in capsys.readouterr().err
+    )
