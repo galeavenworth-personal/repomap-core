@@ -173,6 +173,33 @@ cause your punch card checkpoint to FAIL (forbidden punch violations).
 
 Run at session start if not already synced.
 
+### Branch Convergence
+
+**Definition:** `branch convergence` is the state where all intended checkouts are on the
+same named branch, have fetched from `origin`, have clean working trees, and are pinned to
+the exact same local and remote tip commit.
+
+Use this term whenever the operator asks to "get the branches up to date" across multiple
+working copies.
+
+**Acceptance criteria:**
+- every checkout is on the target branch name
+- every checkout has run `git fetch origin`
+- every checkout has a clean working tree
+- every checkout satisfies `HEAD == origin/<target_branch>`
+- every checkout has the same `HEAD` commit as the other checkouts
+
+**Procedure to achieve branch convergence:**
+1. choose the target branch name
+2. run `git fetch origin` in every checkout
+3. verify each checkout's current branch name
+4. if a checkout is intended to match the remote exactly, update it to `origin/<target_branch>`
+5. verify `git rev-parse HEAD` equals `git rev-parse origin/<target_branch>` in every checkout
+6. verify all checkouts report the same `HEAD` commit
+7. verify all working trees are clean before declaring success
+
+Do not claim branch convergence from branch-name equality alone.
+
 ### Layered Architecture
 Respect layer boundaries defined in [`repomap.toml`](../../repomap.toml).
 

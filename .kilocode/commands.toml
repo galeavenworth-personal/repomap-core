@@ -78,7 +78,7 @@ skill = "beads-local-db-ops"
 tool = ".kilocode/tools/bd sync --no-push"
 receipt_required = false
 deprecated = true
-notes = "No-op with Dolt backend. Use export_beads / import_beads for JSONL interchange."
+notes = "No-op with Dolt backend. Use export_beads / import_beads for JSONL interchange. For git state across multiple checkouts, target branch convergence: every checkout on the same branch, fetched from origin, clean, with HEAD == origin/<branch> and identical HEAD commits across checkouts. See workflows/start-task.md."
 
 [commands.sync_push]
 verb = "sync"
