@@ -367,6 +367,8 @@ customModes:
         - `gate_pass:ruff-check` — Ruff lint check must pass
         - `gate_pass:mypy` — Mypy type check must pass
         - `gate_pass:pytest` — Pytest test suite must pass
+        - `tool_call:git_fetch%` — Refresh from origin before branch-state claims
+        - `tool_call:git_push%` — Push landed code when the run changed code
         - `step_complete:task_exit` — Task must reach completion
         - `tool_call:update_todo_list` — At least one todo update required
       - Forbidden punches: none defined for this card.
@@ -475,6 +477,21 @@ customModes:
       Every gate run must emit audit proof to `.kilocode/gate_runs.jsonl`.
 
       > 📌 `land plane {id}` → `commands.land_plane` (composite: gate_quality → close_issue → sync_push)
+
+      ## Branch Truth Requirements
+
+      Treat branch name as insufficient evidence. "Same branch" only counts when the
+      checkout is proven to match the same tip commit as `origin/<branch>`.
+
+      Before making any repo-state claim or ending orchestrated work, you must verify:
+      - current branch name
+      - `git fetch origin`
+      - `git rev-parse HEAD`
+      - `git rev-parse origin/<branch>`
+      - ahead/behind counts relative to `origin/<branch>`
+
+      If code changed during the run, do not claim completion until the resulting commit is
+      pushed and the checkout is back to 0 ahead / 0 behind against `origin/<branch>`.
 
       ## Line Fault Routing
 
@@ -829,6 +846,16 @@ customModes:
       - the full repository, including .kilocode/, .kilocodemodes, AGENTS.md,
         docs/, src/, tests/, daemon/, and project/package configuration, when
         needed to advance the task
+
+      ## Branch Identity Invariant
+
+      "On the same branch" is not a valid completion claim by itself. Branch identity means:
+      - same branch name
+      - same tip commit
+      - verified against `origin/<branch>` after `git fetch origin`
+
+      If a child reports code changes, you must require proof that the landed branch state is
+      committed, pushed, and 0 ahead / 0 behind versus `origin/<branch>` before you accept the run.
 
       ## Routing Table
 

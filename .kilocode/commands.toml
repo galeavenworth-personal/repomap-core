@@ -436,7 +436,7 @@ skill = "beads-local-db-ops"
 composite = ["gate_quality", "close_issue", "export_beads"]
 tool = ".kilocode/tools/beads_land_plane.sh --bead-id {id}"
 receipt_required = true
-notes = "beads_land_plane.sh requires --bead-id; performs quality gates + bead closure"
+notes = "beads_land_plane.sh requires --bead-id; performs quality gates + bead closure. If code changed, landing is not complete until changes are committed, pushed to origin, and verified with git fetch + tip equality / 0-ahead-0-behind against origin/<branch>."
 
 # ─── Composite: Thinking Plan Execution ────────────────────────────────────
 # Composable thinking plans chain thinker mode dispatches in sequence.
