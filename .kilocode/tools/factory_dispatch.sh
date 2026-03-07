@@ -539,17 +539,36 @@ if [[ -z "$RESULT" ]]; then
     exit 6
 fi
 
+# ─── Fetch children once for Phase 8 + Phase 9 ──────────────────────────────
+# Both phases need child session IDs; call the endpoint once and derive both
+# the JSON array (Phase 8) and newline-delimited IDs (Phase 9) from it.
+
+CHILDREN_RAW=""
+CHILD_IDS_JSON="[]"
+CHILD_SESSION_IDS=""
+if [[ "$LAST_CHILDREN" -gt 0 ]]; then
+    CHILDREN_RAW=$("$CURL" -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null || true)
+fi
+if [[ -n "$CHILDREN_RAW" ]]; then
+    CHILD_IDS_JSON=$("$PYTHON3" -c "
+import sys, json
+children = json.loads(sys.argv[1])
+print(json.dumps([c.get('id','') for c in children if c.get('id')]))
+" "$CHILDREN_RAW" 2>/dev/null || echo "[]")
+
+    CHILD_SESSION_IDS=$("$PYTHON3" -c "
+import sys, json
+children = json.loads(sys.argv[1])
+for c in children:
+    cid = c.get('id', '')
+    if cid:
+        print(cid)
+" "$CHILDREN_RAW" 2>/dev/null || true)
+fi
+
 # ─── Phase 8: Output ─────────────────────────────────────────────────────────
 
 if [[ "$JSON_OUTPUT" == true ]]; then
-    # Collect child session IDs for JSON output
-    CHILD_IDS_JSON=$("$CURL" -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null \
-        | "$PYTHON3" -c "
-import sys, json
-children = json.load(sys.stdin)
-print(json.dumps([c.get('id','') for c in children if c.get('id')]))
-" 2>/dev/null || echo "[]")
-
     "$PYTHON3" - "$SESSION_ID" "$MODE" "$TITLE" "$LAST_CHILDREN" "$ELAPSED" "$RESULT" "$CHILD_IDS_JSON" <<'PYEOF'
 import json, sys
 result = {
@@ -568,21 +587,7 @@ else
 fi
 
 # ─── Phase 9: Capture child session IDs for deterministic handoff ─────────────
-# Query the kilo serve session children endpoint and expose child IDs for
-# downstream orchestrators (e.g. punch_engine --parent-session).
-
-CHILD_SESSION_IDS=""
-if [[ "$LAST_CHILDREN" -gt 0 ]]; then
-    CHILD_SESSION_IDS=$("$CURL" -sf "${BASE_URL}/session/${SESSION_ID}/children" 2>/dev/null \
-        | "$PYTHON3" -c "
-import sys, json
-children = json.load(sys.stdin)
-for c in children:
-    cid = c.get('id', '')
-    if cid:
-        print(cid)
-" 2>/dev/null || true)
-fi
+# Uses CHILD_SESSION_IDS already fetched above (single API call).
 
 if [[ -n "$CHILD_SESSION_IDS" ]]; then
     log "$(timestamp) Child session IDs captured for handoff:"

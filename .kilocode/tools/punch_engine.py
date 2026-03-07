@@ -165,7 +165,8 @@ def resolve_task_id(
         if child_id is not None:
             print(
                 f"Resolved task_id from kilo serve session API "
-                f"(parent={parent_session}, index={child_index}): {child_id}"
+                f"(parent={parent_session}, index={child_index}): {child_id}",
+                file=sys.stderr,
             )
             return child_id
         print(
@@ -178,16 +179,16 @@ def resolve_task_id(
     # Tier 3: filesystem mtime heuristic (with warning)
     discovered = get_current_task_id()
     if discovered is not None:
-        if parent_session:
-            # Warning already emitted above for API failure → heuristic fallback
-            pass
-        else:
+        if not parent_session:
             print(
                 "WARNING: falling back to mtime heuristic "
                 "(no --parent-session provided)",
                 file=sys.stderr,
             )
-        print(f"Auto-discovered task_id from VS Code tasks dir: {discovered}")
+        print(
+            f"Auto-discovered task_id from VS Code tasks dir: {discovered}",
+            file=sys.stderr,
+        )
         return discovered
 
     print(
@@ -749,8 +750,12 @@ def cmd_checkpoint(task_id: str, card_id: str) -> tuple[int | None, str | None, 
     return checkpoint_id, dolt_commit_hash, status
 
 
-def main() -> int:
-    """CLI entry point for mint/evaluate/checkpoint commands."""
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser for punch_engine subcommands.
+
+    Extracted so that tests can validate argument parsing without
+    reconstructing the parser manually.
+    """
     parser = argparse.ArgumentParser(
         prog="punch_engine",
         description="Punch card engine for task verification",
@@ -809,6 +814,12 @@ def main() -> int:
     cp_p.add_argument("card_id")
     _add_session_args(cp_p)
 
+    return parser
+
+
+def main() -> int:
+    """CLI entry point for mint/evaluate/checkpoint commands."""
+    parser = build_parser()
     args = parser.parse_args()
 
     # Resolve 'auto' sentinel to the actual current task UUID

@@ -22,6 +22,9 @@ PARENT_SESSION=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --parent-session)
+      if [[ $# -lt 2 ]]; then
+        die "--parent-session requires a value"
+      fi
       PARENT_SESSION="$2"
       shift 2
       ;;
@@ -153,7 +156,7 @@ echo "- Session: ${SESSION_ID}"
 echo "- Card: ${CARD_ID}"
 echo "- Engine: ${SQL_ENGINE}"
 if [[ -n "$PARENT_SESSION" ]]; then
-  echo "- Parent Session: ${PARENT_SESSION} (deterministic child resolution available)"
+  echo "- Parent Session: ${PARENT_SESSION}"
 fi
 
 FAILURES=0

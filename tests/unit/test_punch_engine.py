@@ -9,6 +9,7 @@ Covers:
 - Deterministic child task ID resolution via kilo serve session API
 - 3-tier resolve_task_id strategy (explicit → API → mtime heuristic)
 - Warning telemetry when falling back to mtime heuristic
+- CLI argument parsing via build_parser()
 """
 
 import importlib
@@ -39,6 +40,82 @@ _emit_punch = punch_engine._emit_punch
 _insert_checkpoint = punch_engine._insert_checkpoint
 resolve_task_id = punch_engine.resolve_task_id
 resolve_child_from_session_api = punch_engine.resolve_child_from_session_api
+build_parser = punch_engine.build_parser
+
+# A valid UUID v4 for testing
+_CHILD_UUID = "01961f3a-b8c5-7c2e-9b3e-7a1b2c3d4e5f"
+_PARENT_UUID = "01961f3a-0000-7000-8000-000000000001"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Shared fixtures and helpers
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class _MockHandler(BaseHTTPRequestHandler):
+    """Minimal HTTP handler that serves canned children responses.
+
+    NOTE: Uses class-level response configuration — not safe for pytest-xdist.
+    """
+
+    # Class-level response configuration; tests override before each request.
+    response_body: bytes = b"[]"
+    response_code: int = 200
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.send_response(self.response_code)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(self.response_body)
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        pass  # suppress server logs during tests
+
+
+@pytest.fixture()
+def _mock_kilo_server():
+    """Start a temporary HTTP server mimicking kilo serve.
+
+    NOTE: Uses class-level response configuration — not safe for pytest-xdist.
+    """
+    # Reset to defaults before each test
+    _MockHandler.response_body = b"[]"
+    _MockHandler.response_code = 200
+    server = HTTPServer(("127.0.0.1", 0), _MockHandler)
+    port = server.server_address[1]
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{port}", server
+    server.shutdown()
+    # Reset after test to avoid stale state
+    _MockHandler.response_body = b"[]"
+    _MockHandler.response_code = 200
+
+
+def _make_patched_resolve(base_url: str):
+    """Return a patched resolve_child_from_session_api that routes to base_url."""
+
+    def _patched(
+        parent_session_id: str,
+        child_index: int = 0,
+        **_kwargs: object,
+    ) -> str | None:
+        return resolve_child_from_session_api(
+            parent_session_id,
+            child_index=child_index,
+            base_url=base_url,
+        )
+
+    return _patched
+
+
+@pytest.fixture()
+def fake_tasks(tmp_path: Path):
+    """Create a fake TASKS_DIR with a single task directory matching _CHILD_UUID."""
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    (tasks / _CHILD_UUID).mkdir()
+    return tasks
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -163,8 +240,6 @@ class TestExtractUiPunchesNormalization:
     @staticmethod
     def _make_tool_msg(tool_name: str, ts: int = 1000000) -> dict:
         """Build a minimal ui_message for a tool call."""
-        import json
-
         return {
             "ts": ts,
             "ask": "tool",
@@ -173,8 +248,6 @@ class TestExtractUiPunchesNormalization:
 
     @staticmethod
     def _make_new_task_msg(mode: str, ts: int = 1000000) -> dict:
-        import json
-
         return {
             "ts": ts,
             "ask": "tool",
@@ -347,44 +420,12 @@ class TestInsertCheckpoint:
 # 6. resolve_child_from_session_api — kilo serve API resolution
 # ═══════════════════════════════════════════════════════════════════════════
 
-# A valid UUID v4 for testing
-_CHILD_UUID = "01961f3a-b8c5-7c2e-9b3e-7a1b2c3d4e5f"
-_PARENT_UUID = "01961f3a-0000-7000-8000-000000000001"
-
-
-class _MockHandler(BaseHTTPRequestHandler):
-    """Minimal HTTP handler that serves canned children responses."""
-
-    # Class-level response configuration; tests override before each request.
-    response_body: bytes = b"[]"
-    response_code: int = 200
-
-    def do_GET(self) -> None:  # noqa: N802
-        self.send_response(self.response_code)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(self.response_body)
-
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-        pass  # suppress server logs during tests
-
-
-@pytest.fixture()
-def _mock_kilo_server():
-    """Start a temporary HTTP server mimicking kilo serve."""
-    server = HTTPServer(("127.0.0.1", 0), _MockHandler)
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield f"http://127.0.0.1:{port}", server
-    server.shutdown()
-
 
 class TestResolveChildFromSessionApi:
     """resolve_child_from_session_api queries the kilo serve children endpoint."""
 
     def test_returns_child_id_on_success(self, _mock_kilo_server: tuple) -> None:
-        base_url, srv = _mock_kilo_server
+        base_url, _ = _mock_kilo_server
         _MockHandler.response_body = json.dumps([{"id": _CHILD_UUID}]).encode()
         _MockHandler.response_code = 200
         result = resolve_child_from_session_api(
@@ -393,7 +434,7 @@ class TestResolveChildFromSessionApi:
         assert result == _CHILD_UUID
 
     def test_returns_none_on_empty_children(self, _mock_kilo_server: tuple) -> None:
-        base_url, srv = _mock_kilo_server
+        base_url, _ = _mock_kilo_server
         _MockHandler.response_body = b"[]"
         _MockHandler.response_code = 200
         result = resolve_child_from_session_api(
@@ -402,7 +443,7 @@ class TestResolveChildFromSessionApi:
         assert result is None
 
     def test_returns_none_on_out_of_range_index(self, _mock_kilo_server: tuple) -> None:
-        base_url, srv = _mock_kilo_server
+        base_url, _ = _mock_kilo_server
         _MockHandler.response_body = json.dumps([{"id": _CHILD_UUID}]).encode()
         _MockHandler.response_code = 200
         result = resolve_child_from_session_api(
@@ -411,7 +452,7 @@ class TestResolveChildFromSessionApi:
         assert result is None
 
     def test_returns_second_child_with_index_1(self, _mock_kilo_server: tuple) -> None:
-        base_url, srv = _mock_kilo_server
+        base_url, _ = _mock_kilo_server
         second_uuid = "01961f3a-b8c5-7c2e-9b3e-000000000002"
         _MockHandler.response_body = json.dumps(
             [{"id": _CHILD_UUID}, {"id": second_uuid}]
@@ -423,7 +464,7 @@ class TestResolveChildFromSessionApi:
         assert result == second_uuid
 
     def test_returns_none_on_server_error(self, _mock_kilo_server: tuple) -> None:
-        base_url, srv = _mock_kilo_server
+        base_url, _ = _mock_kilo_server
         _MockHandler.response_body = b"Internal Server Error"
         _MockHandler.response_code = 500
         result = resolve_child_from_session_api(
@@ -441,7 +482,7 @@ class TestResolveChildFromSessionApi:
         assert result is None
 
     def test_returns_none_on_invalid_json(self, _mock_kilo_server: tuple) -> None:
-        base_url, srv = _mock_kilo_server
+        base_url, _ = _mock_kilo_server
         _MockHandler.response_body = b"not json"
         _MockHandler.response_code = 200
         result = resolve_child_from_session_api(
@@ -450,7 +491,7 @@ class TestResolveChildFromSessionApi:
         assert result is None
 
     def test_returns_none_on_non_array_response(self, _mock_kilo_server: tuple) -> None:
-        base_url, srv = _mock_kilo_server
+        base_url, _ = _mock_kilo_server
         _MockHandler.response_body = json.dumps({"id": _CHILD_UUID}).encode()
         _MockHandler.response_code = 200
         result = resolve_child_from_session_api(
@@ -461,7 +502,7 @@ class TestResolveChildFromSessionApi:
     def test_returns_none_when_child_id_not_uuid(
         self, _mock_kilo_server: tuple
     ) -> None:
-        base_url, srv = _mock_kilo_server
+        base_url, _ = _mock_kilo_server
         _MockHandler.response_body = json.dumps([{"id": "not-a-uuid"}]).encode()
         _MockHandler.response_code = 200
         result = resolve_child_from_session_api(
@@ -490,58 +531,34 @@ class TestResolveTaskId:
 
     def test_tier2_api_resolution(self, _mock_kilo_server: tuple) -> None:
         """When parent_session is provided, the API is queried."""
-        base_url, srv = _mock_kilo_server
+        base_url, _ = _mock_kilo_server
         _MockHandler.response_body = json.dumps([{"id": _CHILD_UUID}]).encode()
         _MockHandler.response_code = 200
 
-        # Patch resolve_child_from_session_api to use the mock server's base_url
-        def _patched_resolve(
-            parent_session_id: str,
-            child_index: int = 0,
-            **_kwargs: object,
-        ) -> str | None:
-            return resolve_child_from_session_api(
-                parent_session_id,
-                child_index=child_index,
-                base_url=base_url,
-            )
-
         with patch.object(
-            punch_engine, "resolve_child_from_session_api", side_effect=_patched_resolve
+            punch_engine,
+            "resolve_child_from_session_api",
+            side_effect=_make_patched_resolve(base_url),
         ):
             result = resolve_task_id("auto", parent_session=_PARENT_UUID, child_index=0)
         assert result == _CHILD_UUID
 
     def test_tier2_api_failure_falls_back_to_mtime(
-        self, _mock_kilo_server: tuple, tmp_path: Path, capsys: pytest.CaptureFixture
+        self,
+        _mock_kilo_server: tuple,
+        fake_tasks: Path,
+        capsys: pytest.CaptureFixture,
     ) -> None:
         """When API returns empty, falls back to mtime heuristic with warning."""
-        base_url, srv = _mock_kilo_server
+        base_url, _ = _mock_kilo_server
         _MockHandler.response_body = b"[]"
         _MockHandler.response_code = 200
-
-        # Create a fake tasks directory
-        fake_tasks = tmp_path / "tasks"
-        fake_tasks.mkdir()
-        fake_task_dir = fake_tasks / _CHILD_UUID
-        fake_task_dir.mkdir()
-
-        def _patched_resolve(
-            parent_session_id: str,
-            child_index: int = 0,
-            **_kwargs: object,
-        ) -> str | None:
-            return resolve_child_from_session_api(
-                parent_session_id,
-                child_index=child_index,
-                base_url=base_url,
-            )
 
         with (
             patch.object(
                 punch_engine,
                 "resolve_child_from_session_api",
-                side_effect=_patched_resolve,
+                side_effect=_make_patched_resolve(base_url),
             ),
             patch.object(punch_engine, "TASKS_DIR", fake_tasks),
         ):
@@ -552,14 +569,9 @@ class TestResolveTaskId:
         assert "falling back to mtime heuristic" in captured.err
 
     def test_tier3_mtime_heuristic_without_parent_session(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture
+        self, fake_tasks: Path, capsys: pytest.CaptureFixture
     ) -> None:
         """When no parent_session, falls back to mtime with warning."""
-        fake_tasks = tmp_path / "tasks"
-        fake_tasks.mkdir()
-        fake_task_dir = fake_tasks / _CHILD_UUID
-        fake_task_dir.mkdir()
-
         with patch.object(punch_engine, "TASKS_DIR", fake_tasks):
             result = resolve_task_id("auto")
 
@@ -570,11 +582,11 @@ class TestResolveTaskId:
 
     def test_all_methods_fail_exits(self, tmp_path: Path) -> None:
         """When all resolution methods fail, SystemExit is raised."""
-        fake_tasks = tmp_path / "tasks"
-        fake_tasks.mkdir()  # empty — no task dirs
+        empty_tasks = tmp_path / "tasks"
+        empty_tasks.mkdir()  # empty — no task dirs
 
         with (
-            patch.object(punch_engine, "TASKS_DIR", fake_tasks),
+            patch.object(punch_engine, "TASKS_DIR", empty_tasks),
             pytest.raises(SystemExit),
         ):
             resolve_task_id("auto")
@@ -583,31 +595,20 @@ class TestResolveTaskId:
         self, _mock_kilo_server: tuple, tmp_path: Path
     ) -> None:
         """When API fails and no task dirs exist, SystemExit is raised."""
-        base_url, srv = _mock_kilo_server
+        base_url, _ = _mock_kilo_server
         _MockHandler.response_body = b"[]"
         _MockHandler.response_code = 200
 
-        fake_tasks = tmp_path / "tasks"
-        fake_tasks.mkdir()
-
-        def _patched_resolve(
-            parent_session_id: str,
-            child_index: int = 0,
-            **_kwargs: object,
-        ) -> str | None:
-            return resolve_child_from_session_api(
-                parent_session_id,
-                child_index=child_index,
-                base_url=base_url,
-            )
+        empty_tasks = tmp_path / "tasks"
+        empty_tasks.mkdir()
 
         with (
             patch.object(
                 punch_engine,
                 "resolve_child_from_session_api",
-                side_effect=_patched_resolve,
+                side_effect=_make_patched_resolve(base_url),
             ),
-            patch.object(punch_engine, "TASKS_DIR", fake_tasks),
+            patch.object(punch_engine, "TASKS_DIR", empty_tasks),
             pytest.raises(SystemExit),
         ):
             resolve_task_id("auto", parent_session=_PARENT_UUID)
@@ -629,23 +630,8 @@ class TestCliParentSessionArgs:
             argv.append("test-card")
         argv.extend(["--parent-session", _PARENT_UUID])
 
-        parser = punch_engine.main.__code__  # noqa: F841 — verify parsing only
-
-        # Build parser manually to test arg parsing without side effects
-        p = punch_engine.argparse.ArgumentParser()
-        sub = p.add_subparsers(dest="command")
-
-        for cmd_name in ("mint", "evaluate", "checkpoint"):
-            sp = sub.add_parser(cmd_name)
-            sp.add_argument("task_id")
-            if cmd_name in ("evaluate", "checkpoint"):
-                sp.add_argument("card_id")
-            if cmd_name == "mint":
-                sp.add_argument("--bead-id", default=None)
-            sp.add_argument("--parent-session", default=None)
-            sp.add_argument("--child-index", type=int, default=0)
-
-        args = p.parse_args(argv)
+        parser = build_parser()
+        args = parser.parse_args(argv)
         assert args.parent_session == _PARENT_UUID
         assert args.child_index == 0
 
@@ -657,17 +643,6 @@ class TestCliParentSessionArgs:
             argv.append("test-card")
         argv.extend(["--parent-session", _PARENT_UUID, "--child-index", "2"])
 
-        p = punch_engine.argparse.ArgumentParser()
-        sub = p.add_subparsers(dest="command")
-        for cmd_name in ("mint", "evaluate", "checkpoint"):
-            sp = sub.add_parser(cmd_name)
-            sp.add_argument("task_id")
-            if cmd_name in ("evaluate", "checkpoint"):
-                sp.add_argument("card_id")
-            if cmd_name == "mint":
-                sp.add_argument("--bead-id", default=None)
-            sp.add_argument("--parent-session", default=None)
-            sp.add_argument("--child-index", type=int, default=0)
-
-        args = p.parse_args(argv)
+        parser = build_parser()
+        args = parser.parse_args(argv)
         assert args.child_index == 2
