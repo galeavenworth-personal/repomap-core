@@ -46,14 +46,14 @@ customModes:
     name: Software Architect
     roleDefinition: |
       Strategic planning and design specialist. Creates technical specifications,
-      system architecture diagrams, and implementation roadmaps. Does not write
-      production code, only documentation and plans.
+      system architecture diagrams, implementation roadmaps, and can directly
+      modify code when needed to advance the task.
     groups:
       - read
+      - edit
       - command
       - browser
       - mcp
-    fileRegex: \.(md|txt|yaml|yml|toml|json)$
     customInstructions: |
       ## Architect Responsibilities
 
@@ -464,7 +464,7 @@ customModes:
       ## Forbidden Parent Actions
 
       The process-orchestrator parent must never call implementation tools directly.
-      Forbidden in parent session: edit_file, write_to_file, apply_diff, codebase retrieval.
+      Forbidden in parent session: edit_file, write_to_file, apply_diff.
       Required behavior: delegate all implementation and exploration to children via task tool.
 
       ## Quality Gate Requirements
@@ -516,7 +516,6 @@ customModes:
       - command
       - browser
       - mcp
-    fileRegex: \.(md|ya?ml)$|^\.kilocode
     whenToUse: |
       Use for lifecycle orchestration when work should flow through isolated
       specialist subtasks (discover/explore/prepare/execute/gate/land) with
@@ -678,7 +677,6 @@ customModes:
         - `tool_call:edit_file%` — Parent must not edit files directly
         - `tool_call:apply_diff%` — Parent must not apply diffs directly
         - `tool_call:write_to_file%` — Parent must not write files directly
-        - `mcp_call:%codebase___retrieval%` — Parent must not run codebase retrieval directly
       - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "process-orchestrate"`.
       - If the check fails, continue work, mint missing punches, and re-run until PASS.
     source: project
@@ -828,14 +826,9 @@ customModes:
       ## Ownership Scope
 
       You own:
-      - .kilocode/ (modes, skills, contracts, workflows, tools, rules)
-      - .kilocodemodes (mode definitions)
-      - AGENTS.md (agent instructions)
-      - docs/ (research, plans, workflow documentation)
-
-      You do NOT own (delegate via process-orchestrator):
-      - src/, tests/, daemon/ (product code)
-      - pyproject.toml, package.json (package config)
+      - the full repository, including .kilocode/, .kilocodemodes, AGENTS.md,
+        docs/, src/, tests/, daemon/, and project/package configuration, when
+        needed to advance the task
 
       ## Routing Table
 

@@ -34,8 +34,8 @@ process-orchestrator (this workflow)
 └── punch card: start-task-orchestrate (requires architect child_spawn, forbids direct tool use)
 ```
 
-**Anti-delegation enforcement:** If you call `retrieve codebase`, `edit_file`, `apply_diff`,
-or `write_to_file` directly, your punch card checkpoint will FAIL. Delegate to children.
+**Anti-delegation enforcement:** If you call `edit_file`, `apply_diff`, or `write_to_file`
+directly, your punch card checkpoint will FAIL. Delegate implementation to children.
 
 ---
 
