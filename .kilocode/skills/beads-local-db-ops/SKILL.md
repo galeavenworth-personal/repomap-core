@@ -91,8 +91,8 @@ nc -z 127.0.0.1 3307 && echo "Server OK" || echo "Server NOT running"
 # Verify Dolt server is running
 nc -z 127.0.0.1 3307 && echo "Server OK" || echo "Start Dolt server first"
 
-# Check database health
-.kilocode/tools/bd doctor
+# Refresh Dolt from JSONL if a cross-clone git pull may have brought newer JSONL
+.kilocode/tools/bd import --from-jsonl .beads/issues.jsonl
 
 # Find available work
 .kilocode/tools/bd ready
@@ -144,9 +144,6 @@ Instead, use the opencode plugin at `.opencode/plugins/beads-sync.ts` which:
 
 If `bd doctor` warns about missing hooks, this is expected and safe to ignore.
 
-**v0.55.4 note:** Beads upstream removed the `examples/git-hooks/` directory,
-confirming the shift away from git hooks toward editor plugin integration.
-
 ## Deprecated Commands
 
 The following commands exist for backward compatibility but are **no-ops** with Dolt backend:
@@ -158,7 +155,7 @@ The following commands exist for backward compatibility but are **no-ops** with 
 - For JSONL interchange: `bd export` (to JSONL) and `bd import` (from JSONL)
 - For Dolt remote ops: `bd dolt push` and `bd dolt pull`
 
-## Advanced Features (available in v0.55.4+)
+## Advanced Features (available in v0.59.0+)
 
 - `bd gate` — Async coordination gates for fanout/collect patterns
 - `bd query` — Query issues using simple query language
@@ -173,6 +170,8 @@ The following commands exist for backward compatibility but are **no-ops** with 
 - `bd list --rig <name>` — Query another rig's beads from current repo
 - `bd move` / `bd refile` — Move issues between rigs
 - Custom types: molecule, gate, convoy, merge-request, slot, agent, role, rig, message
+- fresher `bd doctor` / init diagnostics for fresh-clone and Dolt database-not-found states
+- improved deterministic ordering and Dolt query behavior in large issue sets
 
 ## Operational Contract
 
@@ -184,7 +183,7 @@ The following commands exist for backward compatibility but are **no-ops** with 
 - Issue prefix (`repomap-core`) automatically partitions issues per repo in the shared database
 - Cross-repo routing requires `routes.jsonl` in both repos
 
-## CGO Build Note (v0.55.4)
+## CGO Build Note (v0.59.0)
 
 The pinned build script at `.kilocode/tools/beads_install.sh` (local-only,
 gitignored) builds from source with `CGO_ENABLED=1`, which is required for
@@ -197,6 +196,7 @@ the Dolt backend. Run it once per machine to install. The version pin is in
 - **Server not listening**: Start Dolt server: `cd ~/.dolt-data/beads && dolt sql-server --port 3307 --host 127.0.0.1`
 - **Database not found**: Run `bd init --server --from-jsonl` to initialize
 - **Sync deprecated warnings**: Expected; `bd sync` is a no-op with Dolt. Use `bd export`/`bd import` for interchange.
+- **Fresh clone confusion**: newer `bd doctor` and init flows should surface fresh-clone state more clearly; prefer those diagnostics before manual repair
 - **Federation errors**: Federation requires the beads database name on the server; use `bd doctor` for diagnostics
 - **Count mismatch (Dolt vs JSONL)**: Normal during migration. Run `bd export -o .beads/issues.jsonl` to re-sync JSONL.
 - **Missing hooks warning**: Expected — we use the opencode plugin instead of git hooks. Safe to ignore.
