@@ -31,10 +31,11 @@ beads".
 
 ## Session Start
 
-Sync Beads state from remote before starting work:
+Refresh Beads state before starting work:
 
 ```bash
-.kilocode/tools/bd sync --no-push
+.kilocode/tools/dolt_start.sh
+.kilocode/tools/bd import
 ```
 
 ## Landing the Plane (Session Completion)
@@ -47,9 +48,9 @@ Sync Beads state from remote before starting work:
 2. **Run quality gates** (if code changed) - Tests, linters, builds
 3. **Check for orphaned issues** - Run `.kilocode/tools/bd_doctor_safe.sh` to detect process failures (no-op if unsupported)
 4. **Update issue status** - Close finished work, update in-progress items
-5. **Sync Beads** - Publish task state updates:
+5. **Export Beads JSONL** - Publish task state updates for cross-clone git sync:
    ```bash
-   .kilocode/tools/bd sync
+   .kilocode/tools/bd export -o .beads/issues.jsonl
    ```
 6. **PUSH TO REMOTE** (only if explicitly requested):
    ```bash

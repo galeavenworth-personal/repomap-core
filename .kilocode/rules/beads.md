@@ -1,6 +1,6 @@
 # Beads Task Tracking
 
-Use 'bd' (v0.55.4) for task tracking throughout the project.
+Use the pinned `bd` version from `.kilocode/tools/beads_version` for task tracking throughout the project.
 
 **Commands:** See beads entries in [`.kilocode/commands.toml`](../commands.toml) (`sync_remote`, `sync_push`, `claim_issue`, `close_issue`, `show_issue`, `list_ready`).
 
@@ -23,7 +23,7 @@ This covers ~90% of git operations in the agentic workflow.
 
 The plugin does NOT fire for manual `git commit` in a terminal, IDE git integration,
 or CI/CD. For these cases:
-- `bd sync` in the landing-the-plane workflow covers session-end sync
+- run `.kilocode/tools/bd import` at session start when you need JSONL → Dolt refresh
 - Run `bd export` manually before manual commits if JSONL needs to be current
 - The merge driver (configured by `beads_git_setup.sh`) handles JSONL merge conflicts
 
@@ -34,9 +34,9 @@ binary without CGO support). This causes hard crashes that block all git commits
 The OpenCode plugin model eliminates this kill chain entirely by using the pinned
 `bd` wrapper at `.kilocode/tools/bd`.
 
-**v0.55.4 note:** Beads upstream removed `examples/git-hooks/`, confirming the shift
-from git hooks to editor plugin integration. If `bd doctor` warns about missing hooks,
-this is expected and safe to ignore.
+**v0.59.0 note:** Beads upstream continues to favor editor/plugin integration over git hooks,
+and current releases keep improving fresh-clone / doctor / Dolt error handling. Missing hook
+warnings remain expected in this repo because we intentionally use the plugin model.
 
 **If `bd doctor --fix` installs hooks:** Remove them immediately:
 ```bash
