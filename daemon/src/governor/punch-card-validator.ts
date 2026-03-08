@@ -16,6 +16,7 @@ interface RequirementRow {
   punch_key_pattern: string;
   required: number | boolean;
   forbidden: number | boolean;
+  enforced: number | boolean;
   description?: string | null;
 }
 
@@ -67,17 +68,22 @@ export class PunchCardValidator {
     return 0;
   }
 
-  private async fetchCardRequirements(cardId: string): Promise<PunchCardRequirement[]> {
+  private async fetchCardRequirements(
+    cardId: string,
+    options?: { enforcedOnly?: boolean },
+  ): Promise<PunchCardRequirement[]> {
     const conn = this.requireConnection();
+    const enforcedClause = options?.enforcedOnly ? " AND enforced = TRUE" : "";
     const [rowsUnknown] = await conn.execute(
       `SELECT
          punch_type,
          punch_key_pattern,
          required,
          forbidden,
+         enforced,
          description
        FROM punch_cards
-       WHERE card_id = ?`,
+       WHERE card_id = ?${enforcedClause}`,
       [cardId],
     );
 
@@ -87,6 +93,7 @@ export class PunchCardValidator {
       punchKeyPattern: row.punch_key_pattern,
       required: PunchCardValidator.toBoolean(row.required),
       forbidden: PunchCardValidator.toBoolean(row.forbidden),
+      enforced: PunchCardValidator.toBoolean(row.enforced),
       description: row.description ?? undefined,
     }));
   }
@@ -110,8 +117,12 @@ export class PunchCardValidator {
     return PunchCardValidator.toNumber(rows[0]?.count);
   }
 
-  async validatePunchCard(taskId: string, cardId: string): Promise<ValidationResult> {
-    const requirements = await this.fetchCardRequirements(cardId);
+  async validatePunchCard(
+    taskId: string,
+    cardId: string,
+    options?: { enforcedOnly?: boolean },
+  ): Promise<ValidationResult> {
+    const requirements = await this.fetchCardRequirements(cardId, options);
 
     if (requirements.length === 0) {
       return {

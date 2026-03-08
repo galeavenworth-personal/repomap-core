@@ -173,6 +173,7 @@ export interface PunchCardRequirement {
   punchKeyPattern: string;
   required: boolean;
   forbidden: boolean;
+  enforced: boolean;
   description?: string;
 }
 

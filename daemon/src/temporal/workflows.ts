@@ -31,7 +31,7 @@ const {
   startToCloseTimeout: "35 minutes",
   heartbeatTimeout: "2 minutes",
   retry: {
-    maximumAttempts: 3,
+    maximumAttempts: 1,
     initialInterval: "5s",
     maximumInterval: "60s",
     backoffCoefficient: 2,
@@ -58,8 +58,20 @@ const quickActivities = proxyActivities<typeof activities>({
 // ── Signals ──
 
 export const abortSignal = defineSignal("abort");
+export const progressSignal = defineSignal<[AgentTaskHeartbeatProgress]>("progress");
 
 // ── Queries ──
+
+export interface AgentTaskLeafStatus {
+  sessionId: string | null;
+  label: string | null;
+  phase: "thinking" | "tools_running" | "working" | "idle" | "unknown";
+  runningTools: number;
+  completedTools: number;
+  lastToolName: string | null;
+  done: boolean;
+  thinking: boolean;
+}
 
 export interface AgentTaskStatus {
   phase: string;
@@ -67,7 +79,29 @@ export interface AgentTaskStatus {
   toolCalls: number;
   totalParts: number;
   elapsedMs: number;
+  childCount: number;
+  totalCost: number;
+  tokensInput: number;
+  tokensOutput: number;
+  idleConfirmations: number;
+  requiredIdleConfirmations: number;
+  lastProgressAt: string | null;
+  leaf: AgentTaskLeafStatus;
   error: string | null;
+}
+
+export interface AgentTaskHeartbeatProgress {
+  elapsedMs: number;
+  totalParts: number;
+  toolCalls: number;
+  childCount: number;
+  totalCost: number;
+  tokensInput: number;
+  tokensOutput: number;
+  idleConfirmations: number;
+  requiredIdleConfirmations: number;
+  lastProgressAt: string;
+  activeLeaf: activities.ActiveLeafProgress;
 }
 
 export const statusQuery = defineQuery<AgentTaskStatus>("status");
@@ -88,6 +122,8 @@ export interface AgentTaskInput {
   cardId?: string;
   /** Task ID for punch card validation (defaults to sessionId). */
   punchCardTaskId?: string;
+  /** When true, only enforced punch card requirements block completion. */
+  enforcedOnly?: boolean;
 }
 
 export interface AgentTaskResult {
@@ -121,12 +157,50 @@ export async function agentTaskWorkflow(
     toolCalls: 0,
     totalParts: 0,
     elapsedMs: 0,
+    childCount: 0,
+    totalCost: 0,
+    tokensInput: 0,
+    tokensOutput: 0,
+    idleConfirmations: 0,
+    requiredIdleConfirmations: 6,
+    lastProgressAt: null,
+    leaf: {
+      sessionId: null,
+      label: null,
+      phase: "unknown",
+      runningTools: 0,
+      completedTools: 0,
+      lastToolName: null,
+      done: false,
+      thinking: false,
+    },
     error: null,
   };
 
   // Register signal/query handlers
   setHandler(abortSignal, () => {
     aborted = true;
+  });
+  setHandler(progressSignal, (progress) => {
+    state.totalParts = progress.totalParts;
+    state.toolCalls = progress.toolCalls;
+    state.childCount = progress.childCount;
+    state.totalCost = progress.totalCost;
+    state.tokensInput = progress.tokensInput;
+    state.tokensOutput = progress.tokensOutput;
+    state.idleConfirmations = progress.idleConfirmations;
+    state.requiredIdleConfirmations = progress.requiredIdleConfirmations;
+    state.lastProgressAt = progress.lastProgressAt;
+    state.leaf = {
+      sessionId: progress.activeLeaf.sessionId,
+      label: progress.activeLeaf.label,
+      phase: progress.activeLeaf.phase,
+      runningTools: progress.activeLeaf.runningTools,
+      completedTools: progress.activeLeaf.completedTools,
+      lastToolName: progress.activeLeaf.lastToolName,
+      done: progress.activeLeaf.done,
+      thinking: progress.activeLeaf.thinking,
+    };
   });
   setHandler(statusQuery, () => ({
     ...state,
@@ -167,6 +241,23 @@ export async function agentTaskWorkflow(
 
     state.totalParts = result.totalParts;
     state.toolCalls = result.toolCalls;
+    state.childCount = result.childCount;
+    state.totalCost = result.totalCost;
+    state.tokensInput = result.tokensInput;
+    state.tokensOutput = result.tokensOutput;
+    state.idleConfirmations = result.idleConfirmations;
+    state.requiredIdleConfirmations = result.requiredIdleConfirmations;
+    state.lastProgressAt = result.lastProgressAt;
+    state.leaf = {
+      sessionId: result.activeLeaf.sessionId,
+      label: result.activeLeaf.label,
+      phase: result.activeLeaf.phase,
+      runningTools: result.activeLeaf.runningTools,
+      completedTools: result.activeLeaf.completedTools,
+      lastToolName: result.activeLeaf.lastToolName,
+      done: result.activeLeaf.done,
+      thinking: result.activeLeaf.thinking,
+    };
 
     // Step 6: Validate punch card (if configured)
     if (input.doltConfig && input.cardId) {
@@ -175,6 +266,7 @@ export async function agentTaskWorkflow(
         input.doltConfig,
         input.punchCardTaskId ?? sessionId,
         input.cardId,
+        input.enforcedOnly,
       );
       if (validation.status === "fail") {
         state.phase = "validation_failed";
@@ -195,6 +287,11 @@ export async function agentTaskWorkflow(
       return makeResult("aborted", state, startTime);
     }
     const errorMsg = err instanceof Error ? err.message : String(err);
+    if (state.sessionId) {
+      await CancellationScope.nonCancellable(async () => {
+        await abortSession(config, state.sessionId!);
+      });
+    }
     state.phase = "failed";
     state.error = errorMsg;
     return makeResult("failed", state, startTime);
