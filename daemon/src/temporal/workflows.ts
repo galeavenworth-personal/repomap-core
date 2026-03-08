@@ -273,7 +273,7 @@ export async function agentTaskWorkflow(
       config,
       sessionId,
       input.pollIntervalMs ?? 10_000,
-      input.timeoutMs ?? 1_800_000,
+      input.timeoutMs ?? 7_200_000,
     );
 
     state.totalParts = result.totalParts;
@@ -296,23 +296,7 @@ export async function agentTaskWorkflow(
       thinking: result.activeLeaf.thinking,
     };
 
-    // Step 6: Cost budget enforcement (if Dolt config is provided and not disabled)
-    if (input.doltConfig && !input.disableCostBudget) {
-      state.phase = "cost_budget_check";
-      const budgetResult = await quickActivities.checkCostBudget(
-        input.doltConfig,
-        sessionId,
-        input.costBudget,
-      );
-      if (budgetResult.intervention) {
-        state.phase = "budget_exceeded";
-        state.error = `Cost budget exceeded: ${budgetResult.intervention.reason} (action: ${budgetResult.intervention.action})`;
-        state.totalCost = budgetResult.sessionCost;
-        return makeResult("budget_exceeded", state, startTime, result);
-      }
-    }
-
-    // Step 7: Validate punch card (if configured)
+    // Step 6: Validate punch card (if configured)
     if (input.doltConfig && input.cardId) {
       state.phase = "validating";
       const validation = await quickActivities.validateTaskPunchCard(
@@ -328,7 +312,7 @@ export async function agentTaskWorkflow(
       }
     }
 
-    // Step 8: Post-workflow session audit (if Dolt config provided and not disabled)
+    // Step 7: Post-workflow session audit (if Dolt config provided and not disabled)
     let auditSummary: AuditSummary | null = null;
     if (input.doltConfig && !input.disableAudit) {
       state.phase = "auditing";
