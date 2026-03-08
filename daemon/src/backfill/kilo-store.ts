@@ -291,6 +291,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const taskStoreArg = process.argv[2];
   const result = await runBackfill(taskStoreArg);
   console.log(
-    `Backfill complete: ${result.sessions} sessions, ${result.messages} messages, ${result.toolCalls} tool_calls ingested`
+    `Fallback import complete: ${result.sessions} sessions, ${result.messages} messages, ${result.toolCalls} tool_calls ingested`
   );
 }

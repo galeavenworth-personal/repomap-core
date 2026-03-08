@@ -84,6 +84,60 @@ function pickTimestamp(record: Record<string, unknown>): number {
   return Date.now();
 }
 
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (value !== null && typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>)
+      .sort((a, b) => a.localeCompare(b))
+      .reduce<Record<string, unknown>>((acc, key) => {
+        acc[key] = sortKeysDeep((value as Record<string, unknown>)[key]);
+        return acc;
+      }, {});
+  }
+  return value;
+}
+
+function computeRawEventSourceHash(event: RawEvent): string {
+  const canonical = JSON.stringify(
+    sortKeysDeep({
+      type: event.type,
+      properties: event.properties,
+    })
+  );
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+function extractRawEventSessionId(event: RawEvent): string {
+  const properties = asRecord(event.properties);
+  if (event.type === "message.part.updated") {
+    const part = asRecord(properties.part);
+    return pickString(part, "sessionID", "sessionId", "taskId") ?? "unknown";
+  }
+  if (event.type.startsWith("session.")) {
+    const info = asRecord(properties.info);
+    return pickString(info, "id", "sessionId", "taskId") ?? "unknown";
+  }
+  return pickString(properties, "sessionId", "taskId") ?? "unknown";
+}
+
+function extractRawEventTs(event: RawEvent): Date | undefined {
+  const properties = asRecord(event.properties);
+  const direct = pickDate(properties, "ts", "timestamp", "createdAt", "updatedAt");
+  if (direct) return direct;
+
+  if (event.type === "message.part.updated") {
+    const part = asRecord(properties.part);
+    return new Date(pickTimestamp(part));
+  }
+
+  if (event.type.startsWith("session.")) {
+    const info = asRecord(properties.info);
+    return pickDate(info, "updatedAt", "createdAt", "startedAt", "completedAt");
+  }
+
+  return undefined;
+}
+
 function summarizeArgs(args: unknown): string | undefined {
   if (typeof args === "string") return args;
   if (args) return JSON.stringify(args).slice(0, 1024);
@@ -251,6 +305,31 @@ async function recordSessionChildren(
   }
 }
 
+async function projectSessionEvent(writer: DoltWriter, rawEvent: RawEvent): Promise<void> {
+  if (rawEvent.type !== "session.created" && rawEvent.type !== "session.updated") return;
+
+  const properties = asRecord(rawEvent.properties);
+  const info = asRecord(properties.info);
+  const sessionId =
+    pickString(info, "id", "sessionId", "taskId") ?? extractRawEventSessionId(rawEvent);
+  const tokens = asRecord(info.tokens);
+
+  await writer.writeSession({
+    sessionId,
+    taskId: pickString(info, "taskId", "id"),
+    mode: pickString(info, "mode"),
+    model: pickString(info, "model", "inferenceModel"),
+    status: pickString(info, "status"),
+    totalCost: pickNumber(info, "totalCost", "cost", "costUsd"),
+    tokensIn: pickNumber(info, "tokensIn") ?? pickNumber(tokens, "input"),
+    tokensOut: pickNumber(info, "tokensOut") ?? pickNumber(tokens, "output"),
+    tokensReasoning: pickNumber(info, "tokensReasoning") ?? pickNumber(tokens, "reasoning"),
+    startedAt: pickDate(info, "startedAt", "createdAt"),
+    completedAt: pickDate(info, "completedAt"),
+    outcome: pickString(info, "outcome"),
+  });
+}
+
 /** Process a single SSE event through the classify → write pipeline. */
 async function processEvent(
   client: OcClient,
@@ -259,31 +338,34 @@ async function processEvent(
   event: unknown
 ): Promise<void> {
   const rawEvent = event as RawEvent;
+  const observedAt = new Date();
+  const rawEventWriter = writer as DoltWriter & {
+    writeRawEvent?: (event: {
+      sourceHash: string;
+      sessionId: string;
+      eventType: string;
+      eventTs?: Date;
+      observedAt: Date;
+      payloadJson: string;
+    }) => Promise<void>;
+  };
+  if (typeof rawEventWriter.writeRawEvent === "function") {
+    await rawEventWriter.writeRawEvent({
+      sourceHash: computeRawEventSourceHash(rawEvent),
+      sessionId: extractRawEventSessionId(rawEvent),
+      eventType: rawEvent.type,
+      eventTs: extractRawEventTs(rawEvent),
+      observedAt,
+      payloadJson: JSON.stringify(rawEvent),
+    });
+  }
+  await projectSessionEvent(writer, rawEvent);
+
   const punch = classifyEvent(rawEvent);
   if (!punch) return;
 
   await writer.writePunch(punch);
   const properties = asRecord(rawEvent.properties);
-
-  if (rawEvent.type === "session.created" || rawEvent.type === "session.updated") {
-    const info = asRecord(properties.info);
-    const sessionId = pickString(info, "id", "sessionId", "taskId") ?? punch.taskId;
-    const tokens = asRecord(info.tokens);
-    await writer.writeSession({
-      sessionId,
-      taskId: pickString(info, "taskId", "id"),
-      mode: pickString(info, "mode"),
-      model: pickString(info, "model", "inferenceModel"),
-      status: pickString(info, "status"),
-      totalCost: pickNumber(info, "totalCost", "cost", "costUsd"),
-      tokensIn: pickNumber(info, "tokensIn") ?? pickNumber(tokens, "input"),
-      tokensOut: pickNumber(info, "tokensOut") ?? pickNumber(tokens, "output"),
-      tokensReasoning: pickNumber(info, "tokensReasoning") ?? pickNumber(tokens, "reasoning"),
-      startedAt: pickDate(info, "startedAt", "createdAt"),
-      completedAt: pickDate(info, "completedAt"),
-      outcome: pickString(info, "outcome"),
-    });
-  }
 
   const part = asRecord(properties.part);
   const partType = pickString(part, "type");
