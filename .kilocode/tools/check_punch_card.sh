@@ -17,8 +17,9 @@ die() {
 }
 
 PARENT_SESSION=""
+ENFORCED_ONLY=0
 
-# Parse optional --parent-session flag
+# Parse optional flags
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --parent-session)
@@ -27,6 +28,10 @@ while [[ $# -gt 0 ]]; do
       fi
       PARENT_SESSION="$2"
       shift 2
+      ;;
+    --enforced-only)
+      ENFORCED_ONLY=1
+      shift 1
       ;;
     -*)
       die "unknown option: $1"
@@ -133,7 +138,12 @@ normalize_bool() {
 SESSION_SQL="$(sql_escape "$SESSION_ID")"
 CARD_SQL="$(sql_escape "$CARD_ID")"
 
-REQ_QUERY="SELECT forbidden, required, punch_type, punch_key_pattern, COALESCE(description, '') FROM punch_cards WHERE card_id = '${CARD_SQL}' ORDER BY forbidden DESC, required DESC, punch_type, punch_key_pattern"
+ENFORCED_CLAUSE=""
+if [[ "$ENFORCED_ONLY" -eq 1 ]]; then
+  ENFORCED_CLAUSE=" AND enforced = TRUE"
+fi
+
+REQ_QUERY="SELECT forbidden, required, punch_type, punch_key_pattern, COALESCE(description, '') FROM punch_cards WHERE card_id = '${CARD_SQL}'${ENFORCED_CLAUSE} ORDER BY forbidden DESC, required DESC, punch_type, punch_key_pattern"
 
 set +e
 REQ_RAW="$(run_sql "$REQ_QUERY" 2>&1)"
@@ -155,6 +165,9 @@ echo "Punch Card Check"
 echo "- Session: ${SESSION_ID}"
 echo "- Card: ${CARD_ID}"
 echo "- Engine: ${SQL_ENGINE}"
+if [[ "$ENFORCED_ONLY" -eq 1 ]]; then
+  echo "- Mode: enforced-only (exit gate)"
+fi
 if [[ -n "$PARENT_SESSION" ]]; then
   echo "- Parent Session: ${PARENT_SESSION}"
 fi

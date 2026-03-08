@@ -10,6 +10,7 @@
  * Temporal adds: retry, durability, observability. Nothing else.
  */
 
+import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { heartbeat, log } from "@temporalio/activity";
 
 import {
@@ -17,6 +18,7 @@ import {
   resolveCardExitPrompt,
 } from "../optimization/prompt-injection.js";
 import type { DoltConfig } from "../writer/index.js";
+import type { AgentTaskHeartbeatProgress } from "./workflows.js";
 
 export interface KiloConfig {
   kiloHost: string;
@@ -41,6 +43,17 @@ export interface ProgressSnapshot {
   tokensOutput: number;
 }
 
+export interface ActiveLeafProgress {
+  sessionId: string;
+  label: string;
+  phase: "thinking" | "tools_running" | "working" | "idle";
+  runningTools: number;
+  completedTools: number;
+  lastToolName: string | null;
+  done: boolean;
+  thinking: boolean;
+}
+
 export interface AgentResult {
   sessionId: string;
   totalParts: number;
@@ -49,6 +62,17 @@ export interface AgentResult {
   totalCost: number;
   tokensInput: number;
   tokensOutput: number;
+  childCount: number;
+  idleConfirmations: number;
+  requiredIdleConfirmations: number;
+  lastProgressAt: string;
+  activeLeaf: ActiveLeafProgress;
+}
+
+function createKiloClient(config: KiloConfig) {
+  return createOpencodeClient({
+    baseUrl: `http://${config.kiloHost}:${config.kiloPort}`,
+  });
 }
 
 function kiloUrl(config: KiloConfig, path: string): string {
@@ -230,6 +254,24 @@ function logActiveLeafProgress(
   );
 }
 
+function buildActiveLeafProgress(
+  rootSessionId: string,
+  activeLeafSessionId: string,
+  leafSnap: ProgressSnapshot,
+  phase: ActiveLeafProgress["phase"],
+): ActiveLeafProgress {
+  return {
+    sessionId: activeLeafSessionId,
+    label: activeLeafSessionId === rootSessionId ? "self" : activeLeafSessionId.slice(0, 16),
+    phase,
+    runningTools: leafSnap.runningTools,
+    completedTools: leafSnap.completedTools,
+    lastToolName: leafSnap.lastToolName,
+    done: leafSnap.done,
+    thinking: leafSnap.thinking,
+  };
+}
+
 function shouldComplete(
   consecutiveIdleCount: number,
   requiredIdleConfirmations: number,
@@ -237,12 +279,41 @@ function shouldComplete(
   return consecutiveIdleCount >= requiredIdleConfirmations;
 }
 
+function buildHeartbeatProgress(
+  elapsedMs: number,
+  tree: {
+    totalCost: number;
+    tokensInput: number;
+    tokensOutput: number;
+    totalParts: number;
+    toolCalls: number;
+    childCount: number;
+  },
+  idleConfirmations: number,
+  requiredIdleConfirmations: number,
+  activeLeaf: ActiveLeafProgress,
+): AgentTaskHeartbeatProgress {
+  return {
+    elapsedMs,
+    totalParts: tree.totalParts,
+    toolCalls: tree.toolCalls,
+    childCount: tree.childCount,
+    totalCost: tree.totalCost,
+    tokensInput: tree.tokensInput,
+    tokensOutput: tree.tokensOutput,
+    idleConfirmations,
+    requiredIdleConfirmations,
+    lastProgressAt: new Date().toISOString(),
+    activeLeaf,
+  };
+}
+
 /**
  * Collect aggregate cost/token stats for an entire session tree.
  */
 async function getTreeStats(
   config: KiloConfig,
-  sessionId: string,
+  sessionId: string
 ): Promise<{ totalCost: number; tokensInput: number; tokensOutput: number; totalParts: number; toolCalls: number; childCount: number }> {
   const snap = await getProgressSnapshot(config, sessionId);
   const children = await getChildSessionIds(config, sessionId);
@@ -294,6 +365,7 @@ export async function pollUntilDone(
   while (true) {
     const elapsed = Date.now() - startTime;
     if (elapsed > timeoutMs) {
+      await abortSession(config, sessionId);
       throw new Error(
         `Session ${sessionId} timed out after ${Math.round(elapsed / 1000)}s`
       );
@@ -306,6 +378,21 @@ export async function pollUntilDone(
     // ── Aggregate tree stats for heartbeat/reporting ──
     const tree = await getTreeStats(config, sessionId);
 
+    // ── Determine if the active leaf is truly idle ──
+    const leafIsActive =
+      leafSnap.thinking || leafSnap.runningTools > 0 || !leafSnap.done;
+    const leafPhase = leafIsActive ? classifyLeafPhase(leafSnap) : "idle";
+    const leafLabel = activeLeaf === sessionId ? "" : ` | leaf: ${activeLeaf.slice(0, 16)}`;
+    const elapsedSec = Math.round(elapsed / 1000);
+    const activeLeafProgress = buildActiveLeafProgress(sessionId, activeLeaf, leafSnap, leafPhase);
+    const heartbeatProgress = buildHeartbeatProgress(
+      elapsed,
+      tree,
+      consecutiveIdleCount,
+      REQUIRED_IDLE_CONFIRMATIONS,
+      activeLeafProgress,
+    );
+
     // Heartbeat with progress — Temporal uses this to detect liveness
     heartbeat({
       elapsed: Math.round(elapsed / 1000),
@@ -314,13 +401,13 @@ export async function pollUntilDone(
       cost: tree.totalCost,
       children: tree.childCount,
       activeLeaf: activeLeaf === sessionId ? "self" : activeLeaf.slice(0, 16),
+      leafPhase,
+      runningTools: leafSnap.runningTools,
+      completedTools: leafSnap.completedTools,
+      idleConfirmations: consecutiveIdleCount,
+      requiredIdleConfirmations: REQUIRED_IDLE_CONFIRMATIONS,
+      progress: heartbeatProgress,
     });
-
-    // ── Determine if the active leaf is truly idle ──
-    const leafIsActive =
-      leafSnap.thinking || leafSnap.runningTools > 0 || !leafSnap.done;
-    const leafLabel = activeLeaf === sessionId ? "" : ` | leaf: ${activeLeaf.slice(0, 16)}`;
-    const elapsedSec = Math.round(elapsed / 1000);
 
     if (leafIsActive) {
       consecutiveIdleCount = 0;
@@ -335,7 +422,20 @@ export async function pollUntilDone(
 
       if (shouldComplete(consecutiveIdleCount, REQUIRED_IDLE_CONFIRMATIONS)) {
         log.info(`Session tree completed: root ${sessionId} + ${tree.childCount} children | $${tree.totalCost.toFixed(2)} total | ${elapsedSec}s`);
-        return { sessionId, totalParts: tree.totalParts, toolCalls: tree.toolCalls, durationMs: elapsed, totalCost: tree.totalCost, tokensInput: tree.tokensInput, tokensOutput: tree.tokensOutput };
+        return {
+          sessionId,
+          totalParts: tree.totalParts,
+          toolCalls: tree.toolCalls,
+          durationMs: elapsed,
+          totalCost: tree.totalCost,
+          tokensInput: tree.tokensInput,
+          tokensOutput: tree.tokensOutput,
+          childCount: tree.childCount,
+          idleConfirmations: consecutiveIdleCount,
+          requiredIdleConfirmations: REQUIRED_IDLE_CONFIRMATIONS,
+          lastProgressAt: new Date().toISOString(),
+          activeLeaf: buildActiveLeafProgress(sessionId, activeLeaf, leafSnap, "idle"),
+        };
       }
 
       log.info(`[${elapsedSec}s] idle (${consecutiveIdleCount}/${REQUIRED_IDLE_CONFIRMATIONS}) | parts: ${tree.totalParts}, tools: ${tree.toolCalls} | $${tree.totalCost.toFixed(2)}${leafLabel}`);
@@ -457,61 +557,203 @@ async function getProgressSnapshot(
   config: KiloConfig,
   sessionId: string
 ): Promise<ProgressSnapshot> {
-  // Raw HTTP (activities.ts was ported from SDK in ab95f6c to fix sync prompt() blocking)
-  const url = `http://${config.kiloHost}:${config.kiloPort}/session/${sessionId}/message`;
   const empty: ProgressSnapshot = { totalParts: 0, toolCalls: 0, completedTools: 0, runningTools: 0, lastToolName: null, done: false, thinking: false, totalCost: 0, tokensInput: 0, tokensOutput: 0 };
-  let messages: unknown;
   try {
-    const res = await fetch(url);
-    if (!res.ok) {
-      log.warn(`getProgressSnapshot: ${res.status} for session ${sessionId}`);
+    const client = createKiloClient(config);
+    const { data: messages } = await client.session.messages({
+      path: { id: sessionId },
+    });
+    if (!messages) {
       return empty;
     }
-    messages = await res.json();
+
+    const acc: PartAccumulator = {
+      totalParts: 0,
+      toolCalls: 0,
+      completedTools: 0,
+      runningTools: 0,
+      lastToolName: null,
+      lastPartType: null,
+      openSteps: 0,
+      totalCost: 0,
+      tokensInput: 0,
+      tokensOutput: 0,
+    };
+
+    for (const part of flattenMessageParts(messages)) {
+      accumulatePart(acc, part);
+    }
+
+    return {
+      totalParts: acc.totalParts,
+      toolCalls: acc.toolCalls,
+      completedTools: acc.completedTools,
+      runningTools: acc.runningTools,
+      lastToolName: acc.lastToolName,
+      done: isSessionDone(acc),
+      thinking: acc.openSteps > 0,
+      totalCost: acc.totalCost,
+      tokensInput: acc.tokensInput,
+      tokensOutput: acc.tokensOutput,
+    };
   } catch (err) {
     log.warn(`getProgressSnapshot fetch failed for session ${sessionId}: ${err}`);
     return empty;
   }
-
-  const acc: PartAccumulator = {
-    totalParts: 0,
-    toolCalls: 0,
-    completedTools: 0,
-    runningTools: 0,
-    lastToolName: null,
-    lastPartType: null,
-    openSteps: 0,
-    totalCost: 0,
-    tokensInput: 0,
-    tokensOutput: 0,
-  };
-
-  for (const part of flattenMessageParts(messages)) {
-    accumulatePart(acc, part);
-  }
-
-  return {
-    totalParts: acc.totalParts,
-    toolCalls: acc.toolCalls,
-    completedTools: acc.completedTools,
-    runningTools: acc.runningTools,
-    lastToolName: acc.lastToolName,
-    done: isSessionDone(acc),
-    thinking: acc.openSteps > 0,
-    totalCost: acc.totalCost,
-    tokensInput: acc.tokensInput,
-    tokensOutput: acc.tokensOutput,
-  };
 }
 
 /**
  * Validate punch card for a completed task.
  * Called after pollUntilDone to verify the task meets its card requirements.
+ *
+ * When enforcedOnly is true, only requirements marked as enforced=TRUE in the
+ * punch_cards table are checked. This is the exit gate mode — non-enforced
+ * (observational) requirements are skipped.
  */
+/**
+ * Check cost budget enforcement for a session via Dolt punch data.
+ *
+ * Queries real-time cost accumulation from the punches table and evaluates
+ * against configurable thresholds. Returns a governor intervention directive
+ * if any threshold is breached.
+ *
+ * This activity is designed to be called periodically during the poll loop
+ * (e.g. every Nth poll cycle) to enforce cost budgets in real-time.
+ */
+export async function checkCostBudget(
+  doltConfig: Omit<DoltConfig, "password">,
+  sessionId: string,
+  budgetOverrides?: {
+    maxSessionCostUsd?: number;
+    maxSessionSteps?: number;
+    maxTreeCostUsd?: number;
+  },
+): Promise<{
+  status: "ok" | "warning" | "breach";
+  sessionCost: number;
+  sessionSteps: number;
+  treeCost: number;
+  treeSessionCount: number;
+  intervention: {
+    action: string;
+    reason: string;
+    classification: string;
+    targetSessionId: string;
+  } | null;
+}> {
+  const fullConfig: DoltConfig = {
+    ...doltConfig,
+    password: process.env.DOLT_DB_PASSWORD,
+  };
+  const { CostBudgetMonitor } = await import("../governor/cost-budget-monitor.js");
+  const monitor = new CostBudgetMonitor(fullConfig, budgetOverrides);
+  try {
+    await monitor.connect();
+    const result = await monitor.checkBudget(sessionId);
+    return {
+      status: result.status,
+      sessionCost: result.sessionSnapshot.totalCost,
+      sessionSteps: result.sessionSnapshot.stepCount,
+      treeCost: result.treeSnapshot.totalCost,
+      treeSessionCount: result.treeSnapshot.sessionCount,
+      intervention: result.intervention
+        ? {
+            action: result.intervention.action,
+            reason: result.intervention.reason,
+            classification: result.intervention.classification,
+            targetSessionId: result.intervention.targetSessionId,
+          }
+        : null,
+    };
+  } finally {
+    await monitor.disconnect();
+  }
+}
+
+/**
+ * Run post-workflow session audit on Dolt punch data.
+ *
+ * Queries punch data for a completed session and runs all anomaly detectors:
+ *   1. Missing quality gate punches
+ *   2. Cost anomalies
+ *   3. Loop signatures
+ *   4. Tool adherence deviation
+ *   5. Incomplete subtask trees
+ *   6. Stall detection
+ *
+ * Returns a structured audit report with findings, severity, and evidence.
+ * Designed to be called after pollUntilDone completes.
+ */
+export async function runSessionAudit(
+  doltConfig: Omit<DoltConfig, "password">,
+  sessionId: string,
+  auditOverrides?: {
+    cheapZonePercentileUsd?: number;
+    costAnomalyThresholdUsd?: number;
+    maxExpectedSteps?: number;
+    maxPunchGapSeconds?: number;
+    expectedEditRange?: [number, number];
+    requiredQualityGates?: string[];
+  },
+): Promise<{
+  verdict: "pass" | "warn" | "fail";
+  findingCount: number;
+  criticalCount: number;
+  warningCount: number;
+  infoCount: number;
+  findings: Array<{
+    type: string;
+    severity: string;
+    message: string;
+    evidence: Record<string, unknown>;
+  }>;
+  metrics: {
+    totalCost: number;
+    stepCount: number;
+    punchCount: number;
+    durationMs: number;
+    childCount: number;
+  };
+}> {
+  const fullConfig: DoltConfig = {
+    ...doltConfig,
+    password: process.env.DOLT_DB_PASSWORD,
+  };
+  const { SessionAudit } = await import("../governor/session-audit.js");
+  const audit = new SessionAudit(fullConfig, auditOverrides);
+  try {
+    await audit.connect();
+    const report = await audit.runAudit(sessionId);
+    return {
+      verdict: report.verdict,
+      findingCount: report.findings.length,
+      criticalCount: report.findings.filter((f) => f.severity === "critical").length,
+      warningCount: report.findings.filter((f) => f.severity === "warning").length,
+      infoCount: report.findings.filter((f) => f.severity === "info").length,
+      findings: report.findings.map((f) => ({
+        type: f.type,
+        severity: f.severity,
+        message: f.message,
+        evidence: f.evidence,
+      })),
+      metrics: {
+        totalCost: report.metrics.totalCost,
+        stepCount: report.metrics.stepCount,
+        punchCount: report.metrics.punchCount,
+        durationMs: report.metrics.durationMs,
+        childCount: report.metrics.childCount,
+      },
+    };
+  } finally {
+    await audit.disconnect();
+  }
+}
+
 export async function validateTaskPunchCard(
   doltConfig: Omit<DoltConfig, "password">,
   taskId: string,
   cardId: string,
+  enforcedOnly?: boolean,
 ): Promise<{ status: "pass" | "fail"; missing: string[]; violations: string[] }> {
   const fullConfig: DoltConfig = {
     ...doltConfig,
@@ -521,7 +763,9 @@ export async function validateTaskPunchCard(
   const validator = new PunchCardValidator(fullConfig);
   try {
     await validator.connect();
-    const result = await validator.validatePunchCard(taskId, cardId);
+    const result = await validator.validatePunchCard(taskId, cardId, {
+      enforcedOnly: enforcedOnly ?? false,
+    });
     return {
       status: result.status,
       missing: result.missing.map((m) => `${m.punchType}:${m.punchKeyPattern}`),
