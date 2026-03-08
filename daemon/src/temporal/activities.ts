@@ -610,6 +610,66 @@ async function getProgressSnapshot(
  * punch_cards table are checked. This is the exit gate mode — non-enforced
  * (observational) requirements are skipped.
  */
+/**
+ * Check cost budget enforcement for a session via Dolt punch data.
+ *
+ * Queries real-time cost accumulation from the punches table and evaluates
+ * against configurable thresholds. Returns a governor intervention directive
+ * if any threshold is breached.
+ *
+ * This activity is designed to be called periodically during the poll loop
+ * (e.g. every Nth poll cycle) to enforce cost budgets in real-time.
+ */
+export async function checkCostBudget(
+  doltConfig: Omit<DoltConfig, "password">,
+  sessionId: string,
+  budgetOverrides?: {
+    maxSessionCostUsd?: number;
+    maxSessionSteps?: number;
+    maxTreeCostUsd?: number;
+  },
+): Promise<{
+  status: "ok" | "warning" | "breach";
+  sessionCost: number;
+  sessionSteps: number;
+  treeCost: number;
+  treeSessionCount: number;
+  intervention: {
+    action: string;
+    reason: string;
+    classification: string;
+    targetSessionId: string;
+  } | null;
+}> {
+  const fullConfig: DoltConfig = {
+    ...doltConfig,
+    password: process.env.DOLT_DB_PASSWORD,
+  };
+  const { CostBudgetMonitor } = await import("../governor/cost-budget-monitor.js");
+  const monitor = new CostBudgetMonitor(fullConfig, budgetOverrides);
+  try {
+    await monitor.connect();
+    const result = await monitor.checkBudget(sessionId);
+    return {
+      status: result.status,
+      sessionCost: result.sessionSnapshot.totalCost,
+      sessionSteps: result.sessionSnapshot.stepCount,
+      treeCost: result.treeSnapshot.totalCost,
+      treeSessionCount: result.treeSnapshot.sessionCount,
+      intervention: result.intervention
+        ? {
+            action: result.intervention.action,
+            reason: result.intervention.reason,
+            classification: result.intervention.classification,
+            targetSessionId: result.intervention.targetSessionId,
+          }
+        : null,
+    };
+  } finally {
+    await monitor.disconnect();
+  }
+}
+
 export async function validateTaskPunchCard(
   doltConfig: Omit<DoltConfig, "password">,
   taskId: string,

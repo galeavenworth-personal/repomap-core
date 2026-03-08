@@ -124,10 +124,19 @@ export interface AgentTaskInput {
   punchCardTaskId?: string;
   /** When true, only enforced punch card requirements block completion. */
   enforcedOnly?: boolean;
+  /** Cost budget overrides for governor enforcement.
+   *  When doltConfig is provided, cost budget checks run automatically during polling. */
+  costBudget?: {
+    maxSessionCostUsd?: number;
+    maxSessionSteps?: number;
+    maxTreeCostUsd?: number;
+  };
+  /** Disable cost budget enforcement (default: false). */
+  disableCostBudget?: boolean;
 }
 
 export interface AgentTaskResult {
-  status: "completed" | "aborted" | "failed" | "validation_failed";
+  status: "completed" | "aborted" | "failed" | "validation_failed" | "budget_exceeded";
   sessionId: string | null;
   totalParts: number;
   toolCalls: number;
@@ -259,7 +268,23 @@ export async function agentTaskWorkflow(
       thinking: result.activeLeaf.thinking,
     };
 
-    // Step 6: Validate punch card (if configured)
+    // Step 6: Cost budget enforcement (if Dolt config is provided and not disabled)
+    if (input.doltConfig && !input.disableCostBudget) {
+      state.phase = "cost_budget_check";
+      const budgetResult = await quickActivities.checkCostBudget(
+        input.doltConfig,
+        sessionId,
+        input.costBudget,
+      );
+      if (budgetResult.intervention) {
+        state.phase = "budget_exceeded";
+        state.error = `Cost budget exceeded: ${budgetResult.intervention.reason} (action: ${budgetResult.intervention.action})`;
+        state.totalCost = budgetResult.sessionCost;
+        return makeResult("budget_exceeded", state, startTime, result);
+      }
+    }
+
+    // Step 7: Validate punch card (if configured)
     if (input.doltConfig && input.cardId) {
       state.phase = "validating";
       const validation = await quickActivities.validateTaskPunchCard(
