@@ -50,6 +50,11 @@ export {
   type BudgetStatus,
 } from "./cost-budget-monitor.js";
 export {
+  SessionAudit,
+  loadAuditConfig,
+  DEFAULT_AUDIT_CONFIG,
+} from "./session-audit.js";
+export {
   type LoopClassification,
   type LoopDetection,
   type SessionMetrics,
@@ -65,4 +70,9 @@ export {
   type ValidationResult,
   type ToolAdherenceResult,
   type SubtaskValidation,
+  type AuditSeverity,
+  type AuditAnomalyType,
+  type AuditFinding,
+  type SessionAuditConfig,
+  type SessionAuditReport,
 } from "./types.js";

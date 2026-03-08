@@ -200,3 +200,74 @@ export interface SubtaskValidation {
   children: Array<{ childId: string; validation: ValidationResult }>;
   allChildrenValid: boolean;
 }
+
+// ── Session Audit ──
+
+/** Severity of an audit finding. */
+export type AuditSeverity = "info" | "warning" | "critical";
+
+/** Classification of audit anomaly types. */
+export type AuditAnomalyType =
+  | "missing_quality_gate"
+  | "cost_anomaly"
+  | "loop_signature"
+  | "tool_adherence_deviation"
+  | "incomplete_subtask_tree"
+  | "stall_detected";
+
+/** A single audit finding with evidence. */
+export interface AuditFinding {
+  /** Which anomaly type this finding belongs to. */
+  type: AuditAnomalyType;
+  /** Severity level. */
+  severity: AuditSeverity;
+  /** Human-readable description of the anomaly. */
+  message: string;
+  /** Structured evidence supporting the finding. */
+  evidence: Record<string, unknown>;
+}
+
+/** Configurable thresholds for session audit. */
+export interface SessionAuditConfig {
+  /** Maximum cost per 100k tokens before flagging as anomalous (default: $0.42). */
+  cheapZonePercentileUsd: number;
+  /** Absolute cost threshold above which a session is flagged (default: $1.00). */
+  costAnomalyThresholdUsd: number;
+  /** Maximum step count for bounded tasks before flagging (default: 50). */
+  maxExpectedSteps: number;
+  /** Minimum repeated pattern length for loop detection (default: 2). */
+  loopMinPatternLength: number;
+  /** Maximum repeated pattern length for loop detection (default: 6). */
+  loopMaxPatternLength: number;
+  /** Minimum repetitions of a pattern to flag as a loop (default: 3). */
+  loopMinRepetitions: number;
+  /** Expected edit count range [min, max] for tool adherence check. */
+  expectedEditRange: [number, number];
+  /** Maximum gap in seconds between punches before flagging a stall (default: 60). */
+  maxPunchGapSeconds: number;
+  /** Quality gate punch types that must be present. */
+  requiredQualityGates: string[];
+}
+
+/** Complete audit report for a session. */
+export interface SessionAuditReport {
+  /** The session that was audited. */
+  sessionId: string;
+  /** When the audit was performed. */
+  auditedAt: Date;
+  /** Overall audit verdict: pass (no findings), warn (info/warning only), fail (critical). */
+  verdict: "pass" | "warn" | "fail";
+  /** All findings from the audit. */
+  findings: AuditFinding[];
+  /** Summary metrics about the session at audit time. */
+  metrics: {
+    totalCost: number;
+    stepCount: number;
+    punchCount: number;
+    tokensInput: number;
+    tokensOutput: number;
+    tokensReasoning: number;
+    durationMs: number;
+    childCount: number;
+  };
+}

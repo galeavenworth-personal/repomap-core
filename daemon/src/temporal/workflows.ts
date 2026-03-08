@@ -133,6 +133,32 @@ export interface AgentTaskInput {
   };
   /** Disable cost budget enforcement (default: false). */
   disableCostBudget?: boolean;
+  /** Post-workflow session audit configuration.
+   *  When doltConfig is provided and audit is not disabled, runs automatically after workflow completion. */
+  auditConfig?: {
+    cheapZonePercentileUsd?: number;
+    costAnomalyThresholdUsd?: number;
+    maxExpectedSteps?: number;
+    maxPunchGapSeconds?: number;
+    expectedEditRange?: [number, number];
+    requiredQualityGates?: string[];
+  };
+  /** Disable post-workflow session audit (default: false). */
+  disableAudit?: boolean;
+}
+
+/** Summary of a post-workflow session audit. */
+export interface AuditSummary {
+  verdict: "pass" | "warn" | "fail";
+  findingCount: number;
+  criticalCount: number;
+  warningCount: number;
+  infoCount: number;
+  findings: Array<{
+    type: string;
+    severity: string;
+    message: string;
+  }>;
 }
 
 export interface AgentTaskResult {
@@ -145,6 +171,8 @@ export interface AgentTaskResult {
   tokensInput: number;
   tokensOutput: number;
   error: string | null;
+  /** Post-workflow session audit summary (null if audit was skipped or not configured). */
+  audit: AuditSummary | null;
 }
 
 // ── Workflow ──
@@ -300,8 +328,31 @@ export async function agentTaskWorkflow(
       }
     }
 
+    // Step 8: Post-workflow session audit (if Dolt config provided and not disabled)
+    let auditSummary: AuditSummary | null = null;
+    if (input.doltConfig && !input.disableAudit) {
+      state.phase = "auditing";
+      const auditResult = await quickActivities.runSessionAudit(
+        input.doltConfig,
+        sessionId,
+        input.auditConfig,
+      );
+      auditSummary = {
+        verdict: auditResult.verdict,
+        findingCount: auditResult.findingCount,
+        criticalCount: auditResult.criticalCount,
+        warningCount: auditResult.warningCount,
+        infoCount: auditResult.infoCount,
+        findings: auditResult.findings.map((f) => ({
+          type: f.type,
+          severity: f.severity,
+          message: f.message,
+        })),
+      };
+    }
+
     state.phase = "completed";
-    return makeResult("completed", state, startTime, result);
+    return makeResult("completed", state, startTime, result, auditSummary);
   } catch (err: unknown) {
     // On cancellation, abort the kilo serve session so it stops burning tokens
     if (isCancellation(err) && state.sessionId) {
@@ -327,7 +378,8 @@ function makeResult(
   status: AgentTaskResult["status"],
   state: AgentTaskStatus,
   startTime: number,
-  agentResult?: { totalCost: number; tokensInput: number; tokensOutput: number }
+  agentResult?: { totalCost: number; tokensInput: number; tokensOutput: number },
+  audit?: AuditSummary | null,
 ): AgentTaskResult {
   return {
     status,
@@ -339,5 +391,6 @@ function makeResult(
     tokensInput: agentResult?.tokensInput ?? 0,
     tokensOutput: agentResult?.tokensOutput ?? 0,
     error: state.error,
+    audit: audit ?? null,
   };
 }

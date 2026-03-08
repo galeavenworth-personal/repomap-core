@@ -670,6 +670,85 @@ export async function checkCostBudget(
   }
 }
 
+/**
+ * Run post-workflow session audit on Dolt punch data.
+ *
+ * Queries punch data for a completed session and runs all anomaly detectors:
+ *   1. Missing quality gate punches
+ *   2. Cost anomalies
+ *   3. Loop signatures
+ *   4. Tool adherence deviation
+ *   5. Incomplete subtask trees
+ *   6. Stall detection
+ *
+ * Returns a structured audit report with findings, severity, and evidence.
+ * Designed to be called after pollUntilDone completes.
+ */
+export async function runSessionAudit(
+  doltConfig: Omit<DoltConfig, "password">,
+  sessionId: string,
+  auditOverrides?: {
+    cheapZonePercentileUsd?: number;
+    costAnomalyThresholdUsd?: number;
+    maxExpectedSteps?: number;
+    maxPunchGapSeconds?: number;
+    expectedEditRange?: [number, number];
+    requiredQualityGates?: string[];
+  },
+): Promise<{
+  verdict: "pass" | "warn" | "fail";
+  findingCount: number;
+  criticalCount: number;
+  warningCount: number;
+  infoCount: number;
+  findings: Array<{
+    type: string;
+    severity: string;
+    message: string;
+    evidence: Record<string, unknown>;
+  }>;
+  metrics: {
+    totalCost: number;
+    stepCount: number;
+    punchCount: number;
+    durationMs: number;
+    childCount: number;
+  };
+}> {
+  const fullConfig: DoltConfig = {
+    ...doltConfig,
+    password: process.env.DOLT_DB_PASSWORD,
+  };
+  const { SessionAudit } = await import("../governor/session-audit.js");
+  const audit = new SessionAudit(fullConfig, auditOverrides);
+  try {
+    await audit.connect();
+    const report = await audit.runAudit(sessionId);
+    return {
+      verdict: report.verdict,
+      findingCount: report.findings.length,
+      criticalCount: report.findings.filter((f) => f.severity === "critical").length,
+      warningCount: report.findings.filter((f) => f.severity === "warning").length,
+      infoCount: report.findings.filter((f) => f.severity === "info").length,
+      findings: report.findings.map((f) => ({
+        type: f.type,
+        severity: f.severity,
+        message: f.message,
+        evidence: f.evidence,
+      })),
+      metrics: {
+        totalCost: report.metrics.totalCost,
+        stepCount: report.metrics.stepCount,
+        punchCount: report.metrics.punchCount,
+        durationMs: report.metrics.durationMs,
+        childCount: report.metrics.childCount,
+      },
+    };
+  } finally {
+    await audit.disconnect();
+  }
+}
+
 export async function validateTaskPunchCard(
   doltConfig: Omit<DoltConfig, "password">,
   taskId: string,
