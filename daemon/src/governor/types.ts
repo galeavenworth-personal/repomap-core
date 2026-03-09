@@ -43,7 +43,7 @@ export interface SessionMetrics {
 export interface GovernorThresholds {
   /** Maximum step count before step_overflow (default: 100). */
   maxSteps: number;
-  /** Maximum cost in USD before cost_overflow (default: 10.00). */
+  /** Maximum cost in USD before cost_overflow (default: 10). */
   maxCostUsd: number;
   /** Minimum cycle length to check for tool_cycle (default: 2). */
   minCycleLength: number;
@@ -59,7 +59,7 @@ export interface GovernorThresholds {
 
 export const DEFAULT_THRESHOLDS: GovernorThresholds = {
   maxSteps: 100,
-  maxCostUsd: 10.0,
+  maxCostUsd: 10,
   minCycleLength: 2,
   maxCycleLength: 6,
   cycleRepetitions: 3,
@@ -93,7 +93,7 @@ export type DiagnosisCategory =
 export interface DiagnosisReport {
   sessionId: string;
   category: DiagnosisCategory;
-  /** 0.0–1.0 confidence in the classification. */
+  /** 0–1 confidence in the classification. */
   confidence: number;
   /** Human-readable summary. */
   summary: string;
@@ -206,6 +206,9 @@ export interface SubtaskValidation {
 /** Severity of an audit finding. */
 export type AuditSeverity = "info" | "warning" | "critical";
 
+/** Overall audit verdict. */
+export type AuditVerdict = "pass" | "warn" | "fail";
+
 /** Classification of audit anomaly types. */
 export type AuditAnomalyType =
   | "missing_quality_gate"
@@ -256,7 +259,7 @@ export interface SessionAuditReport {
   /** When the audit was performed. */
   auditedAt: Date;
   /** Overall audit verdict: pass (no findings), warn (info/warning only), fail (critical). */
-  verdict: "pass" | "warn" | "fail";
+  verdict: AuditVerdict;
   /** All findings from the audit. */
   findings: AuditFinding[];
   /** Summary metrics about the session at audit time. */

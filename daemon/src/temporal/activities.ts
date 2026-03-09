@@ -603,22 +603,14 @@ async function getProgressSnapshot(
 }
 
 /**
- * Validate punch card for a completed task.
- * Called after pollUntilDone to verify the task meets its card requirements.
- *
- * When enforcedOnly is true, only requirements marked as enforced=TRUE in the
- * punch_cards table are checked. This is the exit gate mode — non-enforced
- * (observational) requirements are skipped.
- */
-/**
  * Check cost budget enforcement for a session via Dolt punch data.
  *
  * Queries real-time cost accumulation from the punches table and evaluates
  * against configurable thresholds. Returns a governor intervention directive
  * if any threshold is breached.
  *
- * This activity is designed to be called periodically during the poll loop
- * (e.g. every Nth poll cycle) to enforce cost budgets in real-time.
+ * This activity is designed to be called after pollUntilDone completes
+ * for post-completion budget validation.
  */
 export async function checkCostBudget(
   doltConfig: Omit<DoltConfig, "password">,

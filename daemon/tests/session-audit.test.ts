@@ -32,9 +32,7 @@ import {
   DEFAULT_AUDIT_CONFIG,
 } from "../src/governor/session-audit.js";
 import type {
-  AuditFinding,
   SessionAuditConfig,
-  SessionAuditReport,
 } from "../src/governor/types.js";
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -106,7 +104,7 @@ describe("loadAuditConfig", () => {
 
     const config = loadAuditConfig();
     expect(config.cheapZonePercentileUsd).toBe(0.55);
-    expect(config.costAnomalyThresholdUsd).toBe(2.0);
+    expect(config.costAnomalyThresholdUsd).toBe(2);
     expect(config.maxExpectedSteps).toBe(100);
     expect(config.maxPunchGapSeconds).toBe(120);
   });
@@ -136,7 +134,7 @@ describe("loadAuditConfig", () => {
   });
 
   it("default cost anomaly threshold is $1.00", () => {
-    expect(DEFAULT_AUDIT_CONFIG.costAnomalyThresholdUsd).toBe(1.0);
+    expect(DEFAULT_AUDIT_CONFIG.costAnomalyThresholdUsd).toBe(1);
   });
 
   it("default max expected steps is 50", () => {
@@ -149,10 +147,10 @@ describe("loadAuditConfig", () => {
 
   it("default required quality gates include typecheck, lint, test, build", () => {
     expect(DEFAULT_AUDIT_CONFIG.requiredQualityGates).toEqual([
-      "quality_gate:typecheck",
-      "quality_gate:lint",
-      "quality_gate:test",
-      "quality_gate:build",
+      "gate_pass:typecheck",
+      "gate_pass:lint",
+      "gate_pass:test",
+      "gate_pass:build",
     ]);
   });
 
@@ -171,13 +169,13 @@ describe("loadAuditConfig", () => {
       loopMaxPatternLength: 8,
       loopMinRepetitions: 5,
       expectedEditRange: [2, 50],
-      requiredQualityGates: ["quality_gate:typecheck"],
+      requiredQualityGates: ["gate_pass:typecheck"],
     });
     expect(config.loopMinPatternLength).toBe(3);
     expect(config.loopMaxPatternLength).toBe(8);
     expect(config.loopMinRepetitions).toBe(5);
     expect(config.expectedEditRange).toEqual([2, 50]);
-    expect(config.requiredQualityGates).toEqual(["quality_gate:typecheck"]);
+    expect(config.requiredQualityGates).toEqual(["gate_pass:typecheck"]);
   });
 });
 
@@ -189,7 +187,7 @@ describe("SessionAudit — detectMissingQualityGates", () => {
   it("returns critical finding for each missing quality gate", async () => {
     // All gates return count=0 → all missing
     const { audit } = createMockAudit((sql) => {
-      if (sql.includes("COUNT(*)")) return [{ count: "0" }];
+      if (sql.includes("COUNT(*)") && sql.includes("gate_pass")) return [{ count: "0" }];
       return [];
     });
 
@@ -206,7 +204,7 @@ describe("SessionAudit — detectMissingQualityGates", () => {
 
   it("returns no findings when all quality gates are present", async () => {
     const { audit } = createMockAudit((sql) => {
-      if (sql.includes("COUNT(*)")) return [{ count: "1" }];
+      if (sql.includes("COUNT(*)") && sql.includes("gate_pass")) return [{ count: "1" }];
       return [];
     });
 
@@ -217,7 +215,7 @@ describe("SessionAudit — detectMissingQualityGates", () => {
   it("returns findings only for the gates that are missing", async () => {
     let callCount = 0;
     const { audit } = createMockAudit((sql) => {
-      if (sql.includes("COUNT(*)")) {
+      if (sql.includes("COUNT(*)") && sql.includes("gate_pass")) {
         callCount++;
         // First two gates present, last two missing
         return [{ count: callCount <= 2 ? "1" : "0" }];
@@ -227,22 +225,22 @@ describe("SessionAudit — detectMissingQualityGates", () => {
 
     const findings = await audit.detectMissingQualityGates("session-1");
     expect(findings).toHaveLength(2);
-    expect(findings[0].message).toContain("quality_gate:test");
-    expect(findings[1].message).toContain("quality_gate:build");
+    expect(findings[0].message).toContain("gate_pass:test");
+    expect(findings[1].message).toContain("gate_pass:build");
   });
 
   it("respects custom requiredQualityGates config", async () => {
     const { audit } = createMockAudit(
       (sql) => {
-        if (sql.includes("COUNT(*)")) return [{ count: "0" }];
+        if (sql.includes("COUNT(*)") && sql.includes("gate_pass")) return [{ count: "0" }];
         return [];
       },
-      { requiredQualityGates: ["quality_gate:typecheck"] },
+      { requiredQualityGates: ["gate_pass:typecheck"] },
     );
 
     const findings = await audit.detectMissingQualityGates("session-1");
     expect(findings).toHaveLength(1);
-    expect(findings[0].message).toContain("quality_gate:typecheck");
+    expect(findings[0].message).toContain("gate_pass:typecheck");
   });
 });
 
@@ -318,7 +316,7 @@ describe("SessionAudit — detectCostAnomalies", () => {
     const { audit } = createMockAudit(() => []);
 
     const findings = await audit.detectCostAnomalies("session-1", {
-      totalCost: 0.0,
+      totalCost: 0,
       stepCount: 0,
       tokensInput: 0,
       tokensOutput: 0,
@@ -447,7 +445,7 @@ describe("SessionAudit — detectLoopSignatures", () => {
 
     const loopFinding = findings.find((f) => f.severity === "warning");
     expect(loopFinding).toBeDefined();
-    expect((loopFinding!.evidence as Record<string, unknown>).patternLength).toBe(3);
+    expect(loopFinding!.evidence.patternLength).toBe(3);
   });
 
   it("does not flag patterns with insufficient repetitions", async () => {
@@ -567,7 +565,7 @@ describe("SessionAudit — detectIncompleteSubtaskTree", () => {
   it("returns critical finding for child with zero punches", async () => {
     const { audit } = createMockAudit((sql, params) => {
       if (sql.includes("child_rels")) return [{ child_id: "child-1" }];
-      if (sql.includes("COUNT(*)") && params?.[0] === "child-1") {
+      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && params?.[0] === "child-1") {
         return [{ punch_count: "0", has_quality_gate: "0" }];
       }
       return [];
@@ -585,7 +583,7 @@ describe("SessionAudit — detectIncompleteSubtaskTree", () => {
   it("returns warning for child with punches but no quality gate", async () => {
     const { audit } = createMockAudit((sql, params) => {
       if (sql.includes("child_rels")) return [{ child_id: "child-1" }];
-      if (sql.includes("COUNT(*)") && params?.[0] === "child-1") {
+      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && params?.[0] === "child-1") {
         return [{ punch_count: "10", has_quality_gate: "0" }];
       }
       return [];
@@ -602,7 +600,7 @@ describe("SessionAudit — detectIncompleteSubtaskTree", () => {
   it("returns no findings when children are healthy", async () => {
     const { audit } = createMockAudit((sql, params) => {
       if (sql.includes("child_rels")) return [{ child_id: "child-1" }];
-      if (sql.includes("COUNT(*)") && params?.[0] === "child-1") {
+      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && params?.[0] === "child-1") {
         return [{ punch_count: "15", has_quality_gate: "2" }];
       }
       return [];
@@ -617,7 +615,7 @@ describe("SessionAudit — detectIncompleteSubtaskTree", () => {
       if (sql.includes("child_rels")) {
         return [{ child_id: "child-1" }, { child_id: "child-2" }, { child_id: "child-3" }];
       }
-      if (sql.includes("COUNT(*)")) {
+      if (sql.includes("COUNT(*)") && sql.includes("gate_pass")) {
         const taskId = params?.[0] as string;
         if (taskId === "child-1") return [{ punch_count: "10", has_quality_gate: "1" }]; // healthy
         if (taskId === "child-2") return [{ punch_count: "0", has_quality_gate: "0" }];  // critical
@@ -769,66 +767,67 @@ describe("SessionAudit — detectStalls", () => {
 // 8. Integration: runAudit verdict logic
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe("SessionAudit — runAudit verdict", () => {
-  /**
-   * Build a full mock query handler for runAudit.
-   * Controls responses for metrics, timestamps, child_rels, quality gates,
-   * punches list, and tool adherence queries.
-   */
-  function createFullMockHandler(opts: {
-    costRow?: Record<string, unknown>;
-    timestampRow?: Record<string, unknown>;
-    children?: Array<{ child_id: string }>;
-    qualityGateCount?: number;
-    punches?: unknown[];
-    editCount?: number;
-    childStatusRows?: Map<string, { punch_count: string; has_quality_gate: string }>;
-  }) {
-    const {
-      costRow = zeroCostRow(),
-      timestampRow = zeroTimestampRow(),
-      children = [],
-      qualityGateCount = 1,
-      punches = [],
-      editCount = 5,
-      childStatusRows = new Map(),
-    } = opts;
+/**
+ * Build a full mock query handler for runAudit.
+ * Controls responses for metrics, timestamps, child_rels, quality gates,
+ * punches list, and tool adherence queries.
+ */
+function createFullMockHandler(opts: {
+  costRow?: Record<string, unknown>;
+  timestampRow?: Record<string, unknown>;
+  children?: Array<{ child_id: string }>;
+  qualityGateCount?: number;
+  punches?: unknown[];
+  editCount?: number;
+  childStatusRows?: Map<string, { punch_count: string; has_quality_gate: string }>;
+}) {
+  const {
+    costRow = zeroCostRow(),
+    timestampRow = zeroTimestampRow(),
+    children = [],
+    qualityGateCount = 1,
+    punches = [],
+    editCount = 5,
+    childStatusRows = new Map(),
+  } = opts;
 
-    return (sql: string, params?: unknown[]): unknown[] => {
-      // Session metrics aggregation (SUM cost, step_count, etc.)
-      if (sql.includes("SUM(cost)") || sql.includes("COALESCE(SUM(cost)")) {
-        return [costRow];
-      }
-      // Timestamps for duration
-      if (sql.includes("MIN(observed_at)")) {
-        return [timestampRow];
-      }
-      // Child relations
-      if (sql.includes("child_rels")) {
-        return children;
-      }
-      // Quality gate count
-      if (sql.includes("COUNT(*)") && sql.includes("punch_type") && sql.includes("punch_key LIKE")) {
-        return [{ count: String(qualityGateCount) }];
-      }
-      // Tool adherence (edit count) — must come before generic COUNT(*)
-      if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) {
-        return [{ count: String(editCount) }];
-      }
-      // Child status (incomplete subtask tree)
-      if (sql.includes("COUNT(*)") && sql.includes("punch_type = 'quality_gate'")) {
-        const taskId = params?.[0] as string;
-        const row = childStatusRows.get(taskId);
-        if (row) return [row];
-        return [{ punch_count: "10", has_quality_gate: "1" }];
-      }
-      // Punch list for loop/stall detection
-      if (sql.includes("ORDER BY observed_at")) {
-        return punches;
-      }
-      return [];
-    };
-  }
+  return (sql: string, params?: unknown[]): unknown[] => {
+    // Session metrics aggregation (SUM cost, step_count, etc.)
+    if (sql.includes("SUM(cost)") || sql.includes("COALESCE(SUM(cost)")) {
+      return [costRow];
+    }
+    // Timestamps for duration
+    if (sql.includes("MIN(observed_at)")) {
+      return [timestampRow];
+    }
+    // Child relations
+    if (sql.includes("child_rels")) {
+      return children;
+    }
+    // Quality gate count — matches the IN ('gate_pass', 'gate_fail') query
+    if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) {
+      return [{ count: String(qualityGateCount) }];
+    }
+    // Tool adherence (edit count) — must come before generic COUNT(*)
+    if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) {
+      return [{ count: String(editCount) }];
+    }
+    // Child status (incomplete subtask tree) — matches IN ('gate_pass', 'gate_fail')
+    if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("gate_fail")) {
+      const taskId = params?.[0] as string;
+      const row = childStatusRows.get(taskId);
+      if (row) return [row];
+      return [{ punch_count: "10", has_quality_gate: "1" }];
+    }
+    // Punch list for loop/stall detection
+    if (sql.includes("ORDER BY observed_at")) {
+      return punches;
+    }
+    return [];
+  };
+}
+
+describe("SessionAudit — runAudit verdict", () => {
 
   it("returns verdict=pass when no findings exist", async () => {
     const handler = createFullMockHandler({
@@ -1014,7 +1013,7 @@ describe("SessionAudit — edge cases", () => {
         return [zeroTimestampRow()];
       }
       if (sql.includes("child_rels")) return [];
-      if (sql.includes("COUNT(*)") && sql.includes("punch_key LIKE")) {
+      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) {
         return [{ count: "1" }]; // gates present to avoid missing_quality_gate noise
       }
       if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) {
@@ -1044,7 +1043,7 @@ describe("SessionAudit — edge cases", () => {
         return [zeroTimestampRow()];
       }
       if (sql.includes("child_rels")) return [];
-      if (sql.includes("COUNT(*)") && sql.includes("punch_key LIKE")) {
+      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) {
         return [{ count: "0" }]; // no quality gates
       }
       if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) {
@@ -1083,7 +1082,7 @@ describe("SessionAudit — edge cases", () => {
         return [{ min_at: null, max_at: null }];
       }
       if (sql.includes("child_rels")) return [];
-      if (sql.includes("COUNT(*)") && sql.includes("punch_key LIKE")) {
+      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) {
         return [{ count: "1" }];
       }
       if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) {
@@ -1121,7 +1120,7 @@ describe("SessionAudit — edge cases", () => {
         }];
       }
       if (sql.includes("child_rels")) return [];
-      if (sql.includes("COUNT(*)") && sql.includes("punch_key LIKE")) {
+      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) {
         return [{ count: "1" }];
       }
       if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) {

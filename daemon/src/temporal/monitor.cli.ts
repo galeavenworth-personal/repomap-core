@@ -200,6 +200,26 @@ async function handleStatus(client: Client, workflowId: string): Promise<void> {
   console.log(formatStatus(status));
 }
 
+/** Terminal workflow phases (from workflow state) and Temporal execution statuses. */
+const TERMINAL_PHASES = new Set([
+  "completed", "failed", "aborted", "validation_failed", "budget_exceeded",
+]);
+const TERMINAL_WORKFLOW_STATUSES = new Set([
+  "COMPLETED", "FAILED", "CANCELLED", "TERMINATED", "TIMED_OUT",
+]);
+
+/** Check if the workflow has reached a terminal state using handle.describe(). */
+async function isWorkflowTerminal(client: Client, workflowId: string): Promise<boolean> {
+  try {
+    const handle = client.workflow.getHandle(workflowId);
+    const described = await handle.describe();
+    const rawStatus = described.status?.name ?? "";
+    return TERMINAL_WORKFLOW_STATUSES.has(rawStatus);
+  } catch {
+    return false;
+  }
+}
+
 async function handleWatch(client: Client, workflowId: string, intervalMs: number): Promise<void> {
   let lastRendered = "";
   while (true) {
@@ -211,11 +231,16 @@ async function handleWatch(client: Client, workflowId: string, intervalMs: numbe
         console.log(rendered);
         lastRendered = rendered;
       }
-      if (["completed", "failed", "aborted", "validation_failed"].includes(status.phase)) {
+      // Check both workflow phase strings AND the authoritative Temporal execution status
+      if (TERMINAL_PHASES.has(status.phase) || await isWorkflowTerminal(client, workflowId)) {
         return;
       }
     } catch (err) {
       console.error(`[monitor] Query failed: ${err instanceof Error ? err.message : String(err)}`);
+      // If the workflow query itself fails, check if it's because the workflow is terminal
+      if (await isWorkflowTerminal(client, workflowId)) {
+        return;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
@@ -260,7 +285,9 @@ async function main(): Promise<void> {
   usage();
 }
 
-main().catch((err) => {
+try {
+  await main();
+} catch (err) {
   console.error("[monitor] Fatal error:", err);
   process.exit(1);
-});
+}

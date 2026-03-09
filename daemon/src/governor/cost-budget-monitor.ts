@@ -29,20 +29,20 @@ import type { LoopClassification, LoopDetection, SessionMetrics } from "./types.
 
 /** Configurable cost budget thresholds. */
 export interface CostBudgetConfig {
-  /** Maximum cost in USD per session before intervention (default: $1.00). */
+  /** Maximum cost in USD per session before intervention (default: $1). */
   maxSessionCostUsd: number;
   /** Maximum step count per session before intervention (default: 50). */
   maxSessionSteps: number;
-  /** Maximum aggregate cost in USD across a subtask tree (default: $5.00). */
+  /** Maximum aggregate cost in USD across a subtask tree (default: $5). */
   maxTreeCostUsd: number;
-  /** Warning threshold as fraction of max cost (0.0–1.0) (default: 0.8). */
+  /** Warning threshold as fraction of max cost, 0–1 inclusive (default: 0.8). */
   warningThresholdRatio: number;
 }
 
 export const DEFAULT_COST_BUDGET_CONFIG: CostBudgetConfig = {
-  maxSessionCostUsd: 1.0,
+  maxSessionCostUsd: 1,
   maxSessionSteps: 50,
-  maxTreeCostUsd: 5.0,
+  maxTreeCostUsd: 5,
   warningThresholdRatio: 0.8,
 };
 
@@ -50,10 +50,10 @@ export const DEFAULT_COST_BUDGET_CONFIG: CostBudgetConfig = {
  * Load cost budget config from environment variables, falling back to defaults.
  *
  * Environment variables:
- *   GOVERNOR_MAX_SESSION_COST_USD  — per-session cost cap (default: 1.00)
+ *   GOVERNOR_MAX_SESSION_COST_USD  — per-session cost cap (default: 1)
  *   GOVERNOR_MAX_SESSION_STEPS     — per-session step cap (default: 50)
- *   GOVERNOR_MAX_TREE_COST_USD     — per-subtask-tree cost cap (default: 5.00)
- *   GOVERNOR_WARNING_THRESHOLD     — warning ratio 0.0-1.0 (default: 0.80)
+ *   GOVERNOR_MAX_TREE_COST_USD     — per-subtask-tree cost cap (default: 5)
+ *   GOVERNOR_WARNING_THRESHOLD     — warning ratio 0–1 inclusive (default: 0.80)
  */
 export function loadCostBudgetConfig(
   overrides?: Partial<CostBudgetConfig>,
@@ -74,6 +74,14 @@ export function loadCostBudgetConfig(
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
   };
 
+  /** Parse a ratio that must be in [0, 1]. */
+  const parseRatio = (key: string, fallback: number): number => {
+    const raw = env[key];
+    if (raw == null || raw === "") return fallback;
+    const parsed = Number.parseFloat(raw);
+    return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
+  };
+
   return {
     maxSessionCostUsd: overrides?.maxSessionCostUsd
       ?? parseFloat_("GOVERNOR_MAX_SESSION_COST_USD", DEFAULT_COST_BUDGET_CONFIG.maxSessionCostUsd),
@@ -82,7 +90,7 @@ export function loadCostBudgetConfig(
     maxTreeCostUsd: overrides?.maxTreeCostUsd
       ?? parseFloat_("GOVERNOR_MAX_TREE_COST_USD", DEFAULT_COST_BUDGET_CONFIG.maxTreeCostUsd),
     warningThresholdRatio: overrides?.warningThresholdRatio
-      ?? parseFloat_("GOVERNOR_WARNING_THRESHOLD", DEFAULT_COST_BUDGET_CONFIG.warningThresholdRatio),
+      ?? parseRatio("GOVERNOR_WARNING_THRESHOLD", DEFAULT_COST_BUDGET_CONFIG.warningThresholdRatio),
   };
 }
 
@@ -154,21 +162,24 @@ export interface GovernorIntervention {
 
 // ── Monitor Implementation ──
 
+/** MySQL2 returns numeric columns as string | number | null depending on driver config. */
+type MysqlNumeric = string | number | null;
+
 /** Row shape from Dolt cost aggregation queries. */
 interface CostAggRow {
-  total_cost: string | number | null;
-  step_count: string | number | null;
-  tokens_input: string | number | null;
-  tokens_output: string | number | null;
-  tokens_reasoning: string | number | null;
-  punch_count: string | number | null;
+  total_cost: MysqlNumeric;
+  step_count: MysqlNumeric;
+  tokens_input: MysqlNumeric;
+  tokens_output: MysqlNumeric;
+  tokens_reasoning: MysqlNumeric;
+  punch_count: MysqlNumeric;
 }
 
 interface ChildRow {
   child_id: string;
 }
 
-function toNumber(value: string | number | null | undefined): number {
+function toNumber(value: MysqlNumeric | undefined): number {
   if (value == null) return 0;
   if (typeof value === "number") return value;
   const parsed = Number(value);
@@ -315,94 +326,11 @@ export class CostBudgetMonitor {
   async checkBudget(sessionId: string): Promise<CostBudgetCheckResult> {
     const sessionSnapshot = await this.getSessionCost(sessionId);
     const treeSnapshot = await this.getTreeCost(sessionId);
-    const breaches: CostBreach[] = [];
+    const breaches = this.detectBreaches(sessionSnapshot, treeSnapshot);
 
-    // Check per-session cost cap
-    if (sessionSnapshot.totalCost > this.budgetConfig.maxSessionCostUsd) {
-      breaches.push({
-        type: "session_cost",
-        current: sessionSnapshot.totalCost,
-        limit: this.budgetConfig.maxSessionCostUsd,
-        reason: `Session cost $${sessionSnapshot.totalCost.toFixed(2)} exceeds cap $${this.budgetConfig.maxSessionCostUsd.toFixed(2)}`,
-      });
-    }
-
-    // Check per-session step cap
-    if (sessionSnapshot.stepCount > this.budgetConfig.maxSessionSteps) {
-      breaches.push({
-        type: "session_steps",
-        current: sessionSnapshot.stepCount,
-        limit: this.budgetConfig.maxSessionSteps,
-        reason: `Session step count ${sessionSnapshot.stepCount} exceeds cap ${this.budgetConfig.maxSessionSteps}`,
-      });
-    }
-
-    // Check per-tree cost cap (aggregate)
-    if (treeSnapshot.totalCost > this.budgetConfig.maxTreeCostUsd) {
-      breaches.push({
-        type: "tree_cost",
-        current: treeSnapshot.totalCost,
-        limit: this.budgetConfig.maxTreeCostUsd,
-        reason: `Subtask tree cost $${treeSnapshot.totalCost.toFixed(2)} exceeds cap $${this.budgetConfig.maxTreeCostUsd.toFixed(2)} (${treeSnapshot.sessionCount} sessions)`,
-      });
-    }
-
-    // Determine status
-    let status: BudgetStatus = "ok";
-    let intervention: GovernorIntervention | null = null;
-
-    if (breaches.length > 0) {
-      status = "breach";
-      const primaryBreach = breaches[0];
-      const classification: LoopClassification =
-        primaryBreach.type === "session_steps" ? "step_overflow" : "cost_overflow";
-      const action: GovernorIntervention["action"] =
-        primaryBreach.type === "tree_cost" ? "abort_tree" : "kill_session";
-
-      const metrics: SessionMetrics = {
-        stepCount: sessionSnapshot.stepCount,
-        totalCost: sessionSnapshot.totalCost,
-        toolCalls: sessionSnapshot.punchCount,
-        recentTools: [],
-        uniqueSourceHashes: 0,
-        elapsedMs: 0,
-      };
-
-      const detection: LoopDetection = {
-        sessionId,
-        classification,
-        reason: breaches.map((b) => b.reason).join("; "),
-        metrics,
-        detectedAt: new Date(),
-      };
-
-      intervention = {
-        action,
-        classification,
-        reason: detection.reason,
-        targetSessionId: sessionId,
-        detection,
-      };
-    } else {
-      // Check for warning threshold
-      const sessionCostRatio = this.budgetConfig.maxSessionCostUsd > 0
-        ? sessionSnapshot.totalCost / this.budgetConfig.maxSessionCostUsd
-        : 0;
-      const treeCostRatio = this.budgetConfig.maxTreeCostUsd > 0
-        ? treeSnapshot.totalCost / this.budgetConfig.maxTreeCostUsd
-        : 0;
-      const stepRatio = this.budgetConfig.maxSessionSteps > 0
-        ? sessionSnapshot.stepCount / this.budgetConfig.maxSessionSteps
-        : 0;
-
-      if (
-        sessionCostRatio >= this.budgetConfig.warningThresholdRatio ||
-        treeCostRatio >= this.budgetConfig.warningThresholdRatio ||
-        stepRatio >= this.budgetConfig.warningThresholdRatio
-      ) {
-        status = "warning";
-      }
-    }
+    const { status, intervention } = breaches.length > 0
+      ? this.buildBreachResult(sessionId, sessionSnapshot, breaches)
+      : this.evaluateWarningStatus(sessionSnapshot, treeSnapshot);
 
     return {
       status,
@@ -410,6 +338,110 @@ export class CostBudgetMonitor {
       sessionSnapshot,
       treeSnapshot,
       intervention,
+    };
+  }
+
+  /** Evaluate all threshold conditions and return any breaches. */
+  private detectBreaches(
+    session: SessionCostSnapshot,
+    tree: TreeCostSnapshot,
+  ): CostBreach[] {
+    const breaches: CostBreach[] = [];
+
+    if (session.totalCost > this.budgetConfig.maxSessionCostUsd) {
+      breaches.push({
+        type: "session_cost",
+        current: session.totalCost,
+        limit: this.budgetConfig.maxSessionCostUsd,
+        reason: `Session cost $${session.totalCost.toFixed(2)} exceeds cap $${this.budgetConfig.maxSessionCostUsd.toFixed(2)}`,
+      });
+    }
+
+    if (session.stepCount > this.budgetConfig.maxSessionSteps) {
+      breaches.push({
+        type: "session_steps",
+        current: session.stepCount,
+        limit: this.budgetConfig.maxSessionSteps,
+        reason: `Session step count ${session.stepCount} exceeds cap ${this.budgetConfig.maxSessionSteps}`,
+      });
+    }
+
+    if (tree.totalCost > this.budgetConfig.maxTreeCostUsd) {
+      breaches.push({
+        type: "tree_cost",
+        current: tree.totalCost,
+        limit: this.budgetConfig.maxTreeCostUsd,
+        reason: `Subtask tree cost $${tree.totalCost.toFixed(2)} exceeds cap $${this.budgetConfig.maxTreeCostUsd.toFixed(2)} (${tree.sessionCount} sessions)`,
+      });
+    }
+
+    return breaches;
+  }
+
+  /** Build the intervention directive for a breach. */
+  private buildBreachResult(
+    sessionId: string,
+    session: SessionCostSnapshot,
+    breaches: CostBreach[],
+  ): { status: BudgetStatus; intervention: GovernorIntervention } {
+    const primaryBreach = breaches[0];
+    const classification: LoopClassification =
+      primaryBreach.type === "session_steps" ? "step_overflow" : "cost_overflow";
+    const action: GovernorIntervention["action"] =
+      primaryBreach.type === "tree_cost" ? "abort_tree" : "kill_session";
+
+    const metrics: SessionMetrics = {
+      stepCount: session.stepCount,
+      totalCost: session.totalCost,
+      toolCalls: session.punchCount,
+      recentTools: [],
+      uniqueSourceHashes: 0,
+      elapsedMs: 0,
+    };
+
+    const detection: LoopDetection = {
+      sessionId,
+      classification,
+      reason: breaches.map((b) => b.reason).join("; "),
+      metrics,
+      detectedAt: new Date(),
+    };
+
+    return {
+      status: "breach",
+      intervention: {
+        action,
+        classification,
+        reason: detection.reason,
+        targetSessionId: sessionId,
+        detection,
+      },
+    };
+  }
+
+  /** Check if any metric is approaching the warning threshold. */
+  private evaluateWarningStatus(
+    session: SessionCostSnapshot,
+    tree: TreeCostSnapshot,
+  ): { status: BudgetStatus; intervention: null } {
+    const sessionCostRatio = this.budgetConfig.maxSessionCostUsd > 0
+      ? session.totalCost / this.budgetConfig.maxSessionCostUsd
+      : 0;
+    const treeCostRatio = this.budgetConfig.maxTreeCostUsd > 0
+      ? tree.totalCost / this.budgetConfig.maxTreeCostUsd
+      : 0;
+    const stepRatio = this.budgetConfig.maxSessionSteps > 0
+      ? session.stepCount / this.budgetConfig.maxSessionSteps
+      : 0;
+
+    const approachingThreshold =
+      sessionCostRatio >= this.budgetConfig.warningThresholdRatio ||
+      treeCostRatio >= this.budgetConfig.warningThresholdRatio ||
+      stepRatio >= this.budgetConfig.warningThresholdRatio;
+
+    return {
+      status: approachingThreshold ? "warning" : "ok",
+      intervention: null,
     };
   }
 }

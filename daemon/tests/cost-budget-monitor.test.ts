@@ -15,18 +15,14 @@
  *   7. Integration with existing governor types
  */
 
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 
 import {
   CostBudgetMonitor,
   loadCostBudgetConfig,
   DEFAULT_COST_BUDGET_CONFIG,
   type CostBudgetConfig,
-  type SessionCostSnapshot,
-  type TreeCostSnapshot,
-  type CostBudgetCheckResult,
 } from "../src/governor/cost-budget-monitor.js";
-import type { LoopClassification } from "../src/governor/types.js";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 1. Configuration Loading
@@ -54,15 +50,15 @@ describe("loadCostBudgetConfig", () => {
     const config = loadCostBudgetConfig();
     expect(config.maxSessionCostUsd).toBe(2.5);
     expect(config.maxSessionSteps).toBe(75);
-    expect(config.maxTreeCostUsd).toBe(10.0);
+    expect(config.maxTreeCostUsd).toBe(10);
     expect(config.warningThresholdRatio).toBe(0.9);
   });
 
   it("overrides take precedence over env vars", () => {
     process.env.GOVERNOR_MAX_SESSION_COST_USD = "2.50";
 
-    const config = loadCostBudgetConfig({ maxSessionCostUsd: 3.0 });
-    expect(config.maxSessionCostUsd).toBe(3.0);
+    const config = loadCostBudgetConfig({ maxSessionCostUsd: 3 });
+    expect(config.maxSessionCostUsd).toBe(3);
   });
 
   it("ignores invalid env values and uses defaults", () => {
@@ -77,7 +73,7 @@ describe("loadCostBudgetConfig", () => {
   });
 
   it("default per-session cost cap is $1.00", () => {
-    expect(DEFAULT_COST_BUDGET_CONFIG.maxSessionCostUsd).toBe(1.0);
+    expect(DEFAULT_COST_BUDGET_CONFIG.maxSessionCostUsd).toBe(1);
   });
 
   it("default per-session step cap is 50", () => {
@@ -85,7 +81,7 @@ describe("loadCostBudgetConfig", () => {
   });
 
   it("default per-tree cost cap is $5.00", () => {
-    expect(DEFAULT_COST_BUDGET_CONFIG.maxTreeCostUsd).toBe(5.0);
+    expect(DEFAULT_COST_BUDGET_CONFIG.maxTreeCostUsd).toBe(5);
   });
 
   it("default warning threshold is 0.8 (80%)", () => {
@@ -328,64 +324,65 @@ describe("CostBudgetMonitor — getTreeCost", () => {
 
 // ── Budget Check — Breaches ──
 
-describe("CostBudgetMonitor — checkBudget breaches", () => {
-  function createBudgetMonitor(
-    sessionCost: number,
-    sessionSteps: number,
-    treeCost: number,
-    treeSessionCount: number,
-    budgetConfig?: Partial<CostBudgetConfig>,
-  ) {
-    const mockConn = {
-      execute: vi.fn(async (sql: string, params?: unknown[]) => {
-        if (sql.includes("FROM child_rels")) {
-          // Return additional child sessions to make tree bigger
-          if (treeSessionCount > 1 && params?.[0] === "test-session") {
-            const children = [];
-            for (let i = 1; i < treeSessionCount; i++) {
-              children.push({ child_id: `child-${i}` });
-            }
-            return [children];
+function createBudgetMonitor(
+  sessionCost: number,
+  sessionSteps: number,
+  treeCost: number,
+  treeSessionCount: number,
+  budgetConfig?: Partial<CostBudgetConfig>,
+) {
+  const mockConn = {
+    execute: vi.fn(async (sql: string, params?: unknown[]) => {
+      if (sql.includes("FROM child_rels")) {
+        // Return additional child sessions to make tree bigger
+        if (treeSessionCount > 1 && params?.[0] === "test-session") {
+          const children = [];
+          for (let i = 1; i < treeSessionCount; i++) {
+            children.push({ child_id: `child-${i}` });
           }
-          return [[]];
-        }
-        if (sql.includes("FROM punches")) {
-          const taskId = params?.[0] as string;
-          if (taskId === "test-session") {
-            return [[{
-              total_cost: String(sessionCost),
-              step_count: String(sessionSteps),
-              tokens_input: "10000",
-              tokens_output: "5000",
-              tokens_reasoning: "2000",
-              punch_count: "50",
-            }]];
-          }
-          // Children share the remaining tree cost equally
-          const childCost = treeSessionCount > 1
-            ? (treeCost - sessionCost) / (treeSessionCount - 1)
-            : 0;
-          return [[{
-            total_cost: String(childCost),
-            step_count: "5",
-            tokens_input: "5000",
-            tokens_output: "2500",
-            tokens_reasoning: "1000",
-            punch_count: "20",
-          }]];
+          return [children];
         }
         return [[]];
-      }),
-      end: vi.fn(async () => {}),
-    };
+      }
+      if (sql.includes("FROM punches")) {
+        const taskId = params?.[0] as string;
+        if (taskId === "test-session") {
+          return [[{
+            total_cost: String(sessionCost),
+            step_count: String(sessionSteps),
+            tokens_input: "10000",
+            tokens_output: "5000",
+            tokens_reasoning: "2000",
+            punch_count: "50",
+          }]];
+        }
+        // Children share the remaining tree cost equally
+        const childCost = treeSessionCount > 1
+          ? (treeCost - sessionCost) / (treeSessionCount - 1)
+          : 0;
+        return [[{
+          total_cost: String(childCost),
+          step_count: "5",
+          tokens_input: "5000",
+          tokens_output: "2500",
+          tokens_reasoning: "1000",
+          punch_count: "20",
+        }]];
+      }
+      return [[]];
+    }),
+    end: vi.fn(async () => {}),
+  };
 
-    const monitor = new CostBudgetMonitor(
-      { host: "127.0.0.1", port: 3307, database: "test_db" },
-      budgetConfig,
-    );
-    (monitor as unknown as { connection: unknown }).connection = mockConn;
-    return monitor;
-  }
+  const monitor = new CostBudgetMonitor(
+    { host: "127.0.0.1", port: 3307, database: "test_db" },
+    budgetConfig,
+  );
+  (monitor as unknown as { connection: unknown }).connection = mockConn;
+  return monitor;
+}
+
+describe("CostBudgetMonitor — checkBudget breaches", () => {
 
   it("triggers intervention when session cost exceeds cap", async () => {
     // Session cost $1.50 exceeds default $1.00 cap
@@ -396,7 +393,7 @@ describe("CostBudgetMonitor — checkBudget breaches", () => {
     expect(result.breaches.length).toBeGreaterThanOrEqual(1);
     expect(result.breaches[0].type).toBe("session_cost");
     expect(result.breaches[0].current).toBe(1.50);
-    expect(result.breaches[0].limit).toBe(1.0);
+    expect(result.breaches[0].limit).toBe(1);
     expect(result.intervention).not.toBeNull();
     expect(result.intervention!.action).toBe("kill_session");
     expect(result.intervention!.classification).toBe("cost_overflow");
@@ -449,7 +446,7 @@ describe("CostBudgetMonitor — checkBudget breaches", () => {
     expect(detection.classification).toBe("cost_overflow");
     expect(typeof detection.reason).toBe("string");
     expect(detection.metrics).toBeDefined();
-    expect(detection.metrics.totalCost).toBe(2.0);
+    expect(detection.metrics.totalCost).toBe(2);
     expect(detection.detectedAt).toBeInstanceOf(Date);
   });
 
@@ -458,7 +455,7 @@ describe("CostBudgetMonitor — checkBudget breaches", () => {
     const monitor = createBudgetMonitor(0.30, 5, 0.30, 1, {
       maxSessionCostUsd: 0.25,
       maxSessionSteps: 100,
-      maxTreeCostUsd: 1.0,
+      maxTreeCostUsd: 1,
     });
     const result = await monitor.checkBudget("test-session");
 
@@ -577,10 +574,10 @@ describe("CostBudgetMonitor — getConfig", () => {
   it("returns the current budget configuration", () => {
     const monitor = new CostBudgetMonitor(
       { host: "127.0.0.1", port: 3307, database: "test_db" },
-      { maxSessionCostUsd: 2.0 },
+      { maxSessionCostUsd: 2 },
     );
     const config = monitor.getConfig();
-    expect(config.maxSessionCostUsd).toBe(2.0);
+    expect(config.maxSessionCostUsd).toBe(2);
     expect(config.maxSessionSteps).toBe(50); // default
   });
 });

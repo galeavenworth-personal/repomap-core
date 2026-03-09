@@ -17,10 +17,15 @@
  *   --poll <ms>          Poll interval in ms (default: 10000)
  *   --no-wait            Start workflow and exit (fire-and-forget)
  *   --workflow-id <id>   Custom workflow ID (default: auto-generated)
+ *   --enforce            Enable enforced punch card exit gate (requires card)
+ *   --card-id <id>       Punch card ID (overrides mode-card-map.json lookup)
  *
  * Environment:
  *   TEMPORAL_ADDRESS     Temporal server gRPC address (default: localhost:7233)
  *   TEMPORAL_NAMESPACE   Temporal namespace (default: default)
+ *   DOLT_HOST            Dolt server host (default: 127.0.0.1)
+ *   DOLT_PORT            Dolt server port (default: 3307)
+ *   DOLT_DATABASE        Dolt database name (default: beads_repomap-core)
  */
 
 import { Client, Connection } from "@temporalio/client";
@@ -297,6 +302,15 @@ async function main() {
 
   // ── Resolve punch card enforcement config ──
   const resolvedCardId = parsed.cardId ?? loadModeCardMap()[agent] ?? undefined;
+  if (enforce && !resolvedCardId) {
+    console.error(
+      `[dispatch] ERROR: --enforce requested but no punch card ID resolvable for agent '${agent}'.`,
+    );
+    console.error(
+      "[dispatch] Provide --card-id <id> or add an entry in .kilocode/mode-card-map.json.",
+    );
+    process.exit(1);
+  }
   const doltConfig = resolvedCardId
     ? { host: doltHost, port: doltPort, database: doltDatabase, user: "root" }
     : undefined;

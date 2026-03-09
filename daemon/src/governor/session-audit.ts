@@ -24,9 +24,9 @@ import mysql, { type Connection } from "mysql2/promise";
 
 import type { DoltConfig } from "../writer/index.js";
 import type {
-  AuditAnomalyType,
   AuditFinding,
   AuditSeverity,
+  AuditVerdict,
   SessionAuditConfig,
   SessionAuditReport,
 } from "./types.js";
@@ -35,7 +35,7 @@ import type {
 
 export const DEFAULT_AUDIT_CONFIG: SessionAuditConfig = {
   cheapZonePercentileUsd: 0.42,
-  costAnomalyThresholdUsd: 1.0,
+  costAnomalyThresholdUsd: 1,
   maxExpectedSteps: 50,
   loopMinPatternLength: 2,
   loopMaxPatternLength: 6,
@@ -43,10 +43,10 @@ export const DEFAULT_AUDIT_CONFIG: SessionAuditConfig = {
   expectedEditRange: [1, 30],
   maxPunchGapSeconds: 60,
   requiredQualityGates: [
-    "quality_gate:typecheck",
-    "quality_gate:lint",
-    "quality_gate:test",
-    "quality_gate:build",
+    "gate_pass:typecheck",
+    "gate_pass:lint",
+    "gate_pass:test",
+    "gate_pass:build",
   ],
 };
 
@@ -102,20 +102,23 @@ export function loadAuditConfig(
 
 // ── Row Types ──
 
+/** MySQL2 returns numeric columns as string | number | null depending on driver config. */
+type MysqlNumeric = string | number | null;
+
 interface CostAggRow {
-  total_cost: string | number | null;
-  step_count: string | number | null;
-  tokens_input: string | number | null;
-  tokens_output: string | number | null;
-  tokens_reasoning: string | number | null;
-  punch_count: string | number | null;
+  total_cost: MysqlNumeric;
+  step_count: MysqlNumeric;
+  tokens_input: MysqlNumeric;
+  tokens_output: MysqlNumeric;
+  tokens_reasoning: MysqlNumeric;
+  punch_count: MysqlNumeric;
 }
 
 interface PunchRow {
   punch_type: string;
   punch_key: string;
   observed_at: string | Date;
-  cost: string | number | null;
+  cost: MysqlNumeric;
 }
 
 interface ChildRow {
@@ -124,8 +127,8 @@ interface ChildRow {
 
 interface ChildStatusRow {
   child_id: string;
-  punch_count: string | number | null;
-  has_quality_gate: string | number | null;
+  punch_count: MysqlNumeric;
+  has_quality_gate: MysqlNumeric;
 }
 
 interface TimestampRow {
@@ -133,7 +136,7 @@ interface TimestampRow {
   max_at: string | Date | null;
 }
 
-function toNumber(value: string | number | null | undefined): number {
+function toNumber(value: MysqlNumeric | undefined): number {
   if (value == null) return 0;
   if (typeof value === "number") return value;
   const parsed = Number(value);
@@ -231,7 +234,12 @@ export class SessionAudit {
     // Determine verdict
     const hasCritical = findings.some((f) => f.severity === "critical");
     const hasWarningOrInfo = findings.length > 0;
-    const verdict = hasCritical ? "fail" : hasWarningOrInfo ? "warn" : "pass";
+    let verdict: AuditVerdict = "pass";
+    if (hasCritical) {
+      verdict = "fail";
+    } else if (hasWarningOrInfo) {
+      verdict = "warn";
+    }
 
     return {
       sessionId,
@@ -321,18 +329,21 @@ export class SessionAudit {
     const findings: AuditFinding[] = [];
 
     for (const gate of this.auditConfig.requiredQualityGates) {
-      // Parse "quality_gate:typecheck" → punch_type="quality_gate", punch_key pattern
+      // Parse "gate_pass:typecheck" → punch_type="gate_pass", punch_key pattern
+      // Also accepts "gate_fail:typecheck" for checking presence of either outcome.
       const colonIdx = gate.indexOf(":");
       const punchType = colonIdx > 0 ? gate.substring(0, colonIdx) : gate;
       const punchKeyPattern = colonIdx > 0 ? `${gate.substring(colonIdx + 1)}%` : "%";
 
+      // Check for both gate_pass and gate_fail with the same key pattern,
+      // since either outcome means the quality gate was executed.
       const [rowsUnknown] = await conn.execute(
         `SELECT COUNT(*) AS count
          FROM punches
          WHERE task_id = ?
-           AND punch_type = ?
+           AND punch_type IN ('gate_pass', 'gate_fail')
            AND punch_key LIKE ?`,
-        [sessionId, punchType, punchKeyPattern],
+        [sessionId, punchKeyPattern],
       );
 
       const rows = rowsUnknown as Array<{ count: string | number }>;
@@ -555,7 +566,7 @@ export class SessionAudit {
       const [rowsUnknown] = await conn.execute(
         `SELECT
            COUNT(*) AS punch_count,
-           SUM(CASE WHEN punch_type = 'quality_gate' THEN 1 ELSE 0 END) AS has_quality_gate
+           SUM(CASE WHEN punch_type IN ('gate_pass', 'gate_fail') THEN 1 ELSE 0 END) AS has_quality_gate
          FROM punches
          WHERE task_id = ?`,
         [childId],
