@@ -22,16 +22,14 @@ const path = require("path");
 const SCRIPT_DIR = __dirname;
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "../..");
 const DAEMON_DIR = path.join(REPO_ROOT, "daemon");
-const OC_DAEMON_DIR =
-  process.env.OC_DAEMON_DIR || path.resolve(REPO_ROOT, "..", "oc-daemon");
 
 module.exports = {
   apps: [
     {
       name: "oc-daemon",
-      cwd: OC_DAEMON_DIR,
+      cwd: DAEMON_DIR,
       script: "src/index.ts",
-      interpreter: path.join(OC_DAEMON_DIR, "node_modules/.bin/tsx"),
+      interpreter: path.join(DAEMON_DIR, "node_modules/.bin/tsx"),
       env: {
         KILO_HOST: process.env.KILO_HOST || "127.0.0.1",
         KILO_PORT: process.env.KILO_PORT || "4096",

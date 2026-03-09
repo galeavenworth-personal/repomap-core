@@ -132,6 +132,17 @@ PYTHON3=$(resolve_bin python3 /usr/bin/python3)
 PGREP=$(resolve_bin pgrep /usr/bin/pgrep /bin/pgrep)
 SS=$(resolve_bin ss /usr/bin/ss /usr/sbin/ss)
 GREP=$(resolve_bin grep /usr/bin/grep /bin/grep)
+PM2="$REPO_ROOT/daemon/node_modules/.bin/pm2"
+
+is_pm2_app_online() {
+    local app_name="$1"
+    if [[ ! -x "$PM2" ]]; then
+        return 1
+    fi
+    "$PM2" jlist 2>/dev/null \
+        | "$GREP" -q "\"name\":\"${app_name}\".*\"status\":\"online\""
+    return $?
+}
 
 # ─── Phase 0: Optional kilo serve reload ─────────────────────────────────────
 # Reload only when explicitly requested. Dispatch should not bounce healthy
@@ -186,8 +197,7 @@ else
 fi
 
 # 3. oc-daemon (flight recorder)
-if "$PGREP" -f "oc-daemon.*src/index.ts" >/dev/null 2>&1 || \
-   "$PGREP" -f "oc-daemon.*build/index.js" >/dev/null 2>&1; then
+if is_pm2_app_online "oc-daemon"; then
     log "$(timestamp)   ✅ oc-daemon (SSE → Dolt)"
 else
     PREFLIGHT_OK=false
@@ -204,7 +214,7 @@ else
 fi
 
 # 5. Temporal worker
-if "$PGREP" -f "tsx.*src/temporal/worker.ts" >/dev/null 2>&1; then
+if is_pm2_app_online "temporal-worker"; then
     log "$(timestamp)   ✅ Temporal worker"
 else
     PREFLIGHT_OK=false
