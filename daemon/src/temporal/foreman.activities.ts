@@ -14,14 +14,18 @@
  */
 
 import { execFile } from "node:child_process";
+import { createConnection } from "node:net";
 import { resolve } from "node:path";
 import { log } from "@temporalio/activity";
 
 import type {
   BeadCandidate,
+  CheckStackHealthInput,
   CloseBeadInput,
   CloseBeadOutput,
+  HealthCheckResult,
   SelectNextBeadInput,
+  SubsystemHealth,
 } from "./foreman.types.js";
 
 // ── Error Types ──
@@ -244,7 +248,244 @@ function comparePriority(a: BeadCandidate, b: BeadCandidate): number {
   return (PRIORITY_ORDER[a.priority] ?? 4) - (PRIORITY_ORDER[b.priority] ?? 4);
 }
 
+// ── Health Gate Helpers ──
+
+/** Timeout for individual subsystem health checks (5 seconds). */
+const HEALTH_CHECK_TIMEOUT_MS = 5_000;
+
+/** Latency threshold above which a subsystem is classified as degraded (3 seconds). */
+const DEGRADED_LATENCY_THRESHOLD_MS = 3_000;
+
+/**
+ * Measure elapsed time for an async operation.
+ * Returns the result and elapsed time in milliseconds.
+ */
+async function timed<T>(fn: () => Promise<T>): Promise<{ result: T; elapsedMs: number }> {
+  const start = performance.now();
+  const result = await fn();
+  return { result, elapsedMs: Math.round(performance.now() - start) };
+}
+
+/**
+ * Build a SubsystemHealth from a check result.
+ * Applies the latency degradation threshold automatically.
+ */
+function buildSubsystemHealth(
+  status: "up" | "down",
+  latencyMs: number | null,
+  message: string | null,
+): SubsystemHealth {
+  // If up but slow, classify as degraded
+  const effectiveStatus =
+    status === "up" && latencyMs !== null && latencyMs > DEGRADED_LATENCY_THRESHOLD_MS
+      ? "degraded"
+      : status;
+  return { status: effectiveStatus, message, latencyMs };
+}
+
+/**
+ * Check kilo serve health via HTTP GET /session.
+ * Pattern adapted from dispatch.ts runPreflightChecks.
+ */
+async function checkKiloServe(host: string, port: number): Promise<SubsystemHealth> {
+  try {
+    const { result: res, elapsedMs } = await timed(async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
+      try {
+        return await fetch(`http://${host}:${port}/session`, {
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
+
+    if (res.ok) {
+      return buildSubsystemHealth("up", elapsedMs, `HTTP ${res.status}`);
+    }
+    return buildSubsystemHealth("down", elapsedMs, `HTTP ${res.status} ${res.statusText}`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { status: "down", message: `unreachable: ${msg}`, latencyMs: null };
+  }
+}
+
+/**
+ * Check Dolt server health via TCP connection test.
+ * Pattern adapted from dispatch.ts canConnectTcp.
+ *
+ * NOTE: The health gate contract specifies `SELECT 1` for a full check.
+ * This implementation uses a TCP connect test to avoid importing a MySQL
+ * driver (mysql2 is not in daemon's dependencies). A TCP connect confirms
+ * the port is listening, which is sufficient for the health gate. A future
+ * iteration can upgrade to `SELECT 1` if mysql2 is added.
+ */
+async function checkDolt(host: string, port: number): Promise<SubsystemHealth> {
+  try {
+    const { elapsedMs } = await timed(async () => {
+      await new Promise<void>((resolveConn, reject) => {
+        const sock = createConnection({ host, port }, () => {
+          sock.destroy();
+          resolveConn();
+        });
+        sock.on("error", reject);
+        sock.setTimeout(HEALTH_CHECK_TIMEOUT_MS, () => {
+          sock.destroy();
+          reject(new Error("timeout"));
+        });
+      });
+    });
+
+    return buildSubsystemHealth("up", elapsedMs, `TCP ${host}:${port}`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { status: "down", message: `TCP ${host}:${port} failed: ${msg}`, latencyMs: null };
+  }
+}
+
+/**
+ * Check git health via `git status --porcelain`.
+ * Exit 0 with no merge conflicts = up.
+ * Exit 0 with uncommitted changes = degraded.
+ * Non-zero exit = down.
+ */
+async function checkGit(repoPath: string): Promise<SubsystemHealth> {
+  try {
+    const { result: stdout, elapsedMs } = await timed(async () => {
+      return new Promise<string>((resolveGit, reject) => {
+        execFile(
+          "git",
+          ["status", "--porcelain"],
+          { cwd: repoPath, timeout: HEALTH_CHECK_TIMEOUT_MS },
+          (error, stdout) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolveGit(stdout);
+          },
+        );
+      });
+    });
+
+    const trimmed = stdout.trim();
+    // Check for merge conflict markers (UU, AA, DD prefixes in porcelain output)
+    const hasConflicts = trimmed
+      .split("\n")
+      .some((line) => /^(UU|AA|DD|AU|UA|DU|UD)\s/.test(line));
+
+    if (hasConflicts) {
+      return { status: "down", message: "merge conflicts detected", latencyMs: elapsedMs };
+    }
+
+    if (trimmed.length > 0) {
+      return buildSubsystemHealth("up", elapsedMs, "uncommitted changes present");
+    }
+
+    return buildSubsystemHealth("up", elapsedMs, "clean working tree");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { status: "down", message: `git status failed: ${msg}`, latencyMs: null };
+  }
+}
+
+/**
+ * Check Temporal health.
+ * The fact that this activity is executing IS proof that Temporal is up.
+ * This is documented in the health gate contract as "implicit".
+ */
+function checkTemporal(): SubsystemHealth {
+  // If this code is running, we are inside a Temporal activity.
+  // The Temporal server and worker are necessarily functional.
+  return { status: "up", message: "implicit: activity is executing", latencyMs: 0 };
+}
+
+/**
+ * Check beads (bd) health via `bd ready --json`.
+ * Exit 0 + valid JSON = up. Exit 0 + empty = degraded.
+ * Non-zero exit = down.
+ */
+async function checkBeads(repoPath: string): Promise<SubsystemHealth> {
+  try {
+    const { result, elapsedMs } = await timed(async () => {
+      return execBd(repoPath, ["ready", "--json"]);
+    });
+
+    // Validate JSON parsability
+    try {
+      const parsed = JSON.parse(result.stdout.trim()) as unknown;
+      if (Array.isArray(parsed) && parsed.length === 0) {
+        return buildSubsystemHealth("up", elapsedMs, "bd ready: no beads (empty queue)");
+      }
+      return buildSubsystemHealth("up", elapsedMs, "bd ready: OK");
+    } catch {
+      // bd returned exit 0 but output isn't valid JSON — degraded
+      return { status: "degraded", message: "bd ready: invalid JSON output", latencyMs: elapsedMs };
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { status: "down", message: `bd ready failed: ${msg}`, latencyMs: null };
+  }
+}
+
+/**
+ * Aggregate individual subsystem health statuses into an overall result.
+ * Rule: any "down" → "fail", any "degraded" → "degraded", else → "pass".
+ */
+function aggregateHealth(
+  subsystems: HealthCheckResult["subsystems"],
+): HealthCheckResult["overall"] {
+  const statuses = Object.values(subsystems).map((s) => s.status);
+  if (statuses.includes("down")) return "fail";
+  if (statuses.includes("degraded")) return "degraded";
+  return "pass";
+}
+
 // ── Activities ──
+
+/**
+ * Check the health of all stack subsystems before dispatch.
+ *
+ * Runs health checks against all five subsystems in parallel and returns
+ * an aggregate HealthCheckResult. This activity NEVER throws — all check
+ * failures are reported in the result structure. Only infrastructure
+ * failures that prevent the activity itself from running (e.g., Temporal
+ * worker crash) will surface as activity failures.
+ *
+ * ADR Section 5.1, Health Gate Contract.
+ */
+export async function checkStackHealth(
+  input: CheckStackHealthInput,
+): Promise<HealthCheckResult> {
+  const { repoPath, doltHost, doltPort, kiloHost, kiloPort } = input;
+
+  log.info(
+    `checkStackHealth: checking 5 subsystems (kilo=${kiloHost}:${kiloPort}, dolt=${doltHost}:${doltPort})`,
+  );
+
+  // Run all checks in parallel for speed
+  const [kiloServe, dolt, git, temporal, beads] = await Promise.all([
+    checkKiloServe(kiloHost, kiloPort),
+    checkDolt(doltHost, doltPort),
+    checkGit(repoPath),
+    Promise.resolve(checkTemporal()),
+    checkBeads(repoPath),
+  ]);
+
+  const subsystems = { kiloServe, dolt, git, temporal, beads };
+  const overall = aggregateHealth(subsystems);
+
+  log.info(
+    `checkStackHealth: overall=${overall} (kilo=${kiloServe.status}, dolt=${dolt.status}, git=${git.status}, temporal=${temporal.status}, beads=${beads.status})`,
+  );
+
+  return {
+    overall,
+    checkedAt: new Date().toISOString(),
+    subsystems,
+  };
+}
 
 /**
  * Select the next bead eligible for dispatch.

@@ -14,7 +14,7 @@
  *   7. Error classification — transient vs contract errors
  */
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 
 // Mock @temporalio/activity before importing activities
 vi.mock("@temporalio/activity", () => ({
@@ -31,7 +31,13 @@ vi.mock("node:child_process", () => ({
   execFile: vi.fn(),
 }));
 
+// Mock node:net for health check TCP tests
+vi.mock("node:net", () => ({
+  createConnection: vi.fn(),
+}));
+
 import { execFile } from "node:child_process";
+import { createConnection } from "node:net";
 import {
   execBd,
   parseBdJson,
@@ -39,10 +45,15 @@ import {
   getBeadDetail,
   updateBeadStatus,
   closeBead,
+  checkStackHealth,
   BeadsTransientError,
   BeadsContractError,
 } from "../src/temporal/foreman.activities.js";
-import type { SelectNextBeadInput, CloseBeadInput } from "../src/temporal/foreman.types.js";
+import type {
+  SelectNextBeadInput,
+  CloseBeadInput,
+  CheckStackHealthInput,
+} from "../src/temporal/foreman.types.js";
 
 // ── Test helpers ──
 
@@ -560,5 +571,329 @@ describe("error classification", () => {
   it("both error types extend Error", () => {
     expect(new BeadsTransientError("t", 1, "")).toBeInstanceOf(Error);
     expect(new BeadsContractError("c", "")).toBeInstanceOf(Error);
+  });
+});
+
+// ── 8. checkStackHealth ──
+
+describe("checkStackHealth", () => {
+  const baseInput: CheckStackHealthInput = {
+    repoPath: REPO_PATH,
+    doltHost: "127.0.0.1",
+    doltPort: 3307,
+    doltDatabase: "beads_test",
+    kiloHost: "127.0.0.1",
+    kiloPort: 4096,
+  };
+
+  // Helper: mock fetch globally
+  function mockFetchSuccess(status = 200, statusText = "OK") {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: status >= 200 && status < 300,
+        status,
+        statusText,
+      }),
+    );
+  }
+
+  function mockFetchFailure(errorMessage = "Connection refused") {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error(errorMessage)),
+    );
+  }
+
+  // Helper: mock createConnection (TCP) for Dolt check
+  function mockTcpSuccess() {
+    const mockSocket = {
+      destroy: vi.fn(),
+      on: vi.fn(),
+      setTimeout: vi.fn(),
+    };
+    vi.mocked(createConnection).mockImplementation(
+      ((_opts: unknown, cb: unknown) => {
+        // Call the connect callback on next tick to simulate async connect
+        const callback = cb as () => void;
+        setTimeout(() => callback(), 0);
+        return mockSocket;
+      }) as typeof createConnection,
+    );
+  }
+
+  function mockTcpFailure(errorMessage = "ECONNREFUSED") {
+    const mockSocket = {
+      destroy: vi.fn(),
+      on: vi.fn().mockImplementation((event: string, handler: (err: Error) => void) => {
+        if (event === "error") {
+          setTimeout(() => handler(new Error(errorMessage)), 0);
+        }
+        return mockSocket;
+      }),
+      setTimeout: vi.fn(),
+    };
+    vi.mocked(createConnection).mockImplementation(
+      ((_opts: unknown, _cb: unknown) => {
+        return mockSocket;
+      }) as typeof createConnection,
+    );
+  }
+
+  // Helper: mock execFile for git and bd checks
+  // The mock needs to handle multiple sequential calls (git status + bd ready)
+  function mockExecFileSequence(
+    calls: Array<{
+      stdout: string;
+      stderr?: string;
+      error?: Error | null;
+    }>,
+  ) {
+    const mock = vi.mocked(execFile);
+    let callIndex = 0;
+    mock.mockImplementation(
+      ((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
+        const call = calls[callIndex] ?? calls[calls.length - 1];
+        callIndex++;
+        const callback = cb as (
+          error: Error | null,
+          stdout: string,
+          stderr: string,
+        ) => void;
+        if (call.error) {
+          callback(call.error, "", call.stderr ?? "");
+        } else {
+          callback(null, call.stdout, call.stderr ?? "");
+        }
+      }) as typeof execFile,
+    );
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns 'pass' when all subsystems are healthy", async () => {
+    mockFetchSuccess();
+    mockTcpSuccess();
+    // execFile is called for: git status (clean) and bd ready (valid JSON array)
+    mockExecFileSequence([
+      { stdout: "" },              // git status --porcelain: clean
+      { stdout: '[{"id":"b1"}]' }, // bd ready --json: valid
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    expect(result.overall).toBe("pass");
+    expect(result.subsystems.kiloServe.status).toBe("up");
+    expect(result.subsystems.dolt.status).toBe("up");
+    expect(result.subsystems.git.status).toBe("up");
+    expect(result.subsystems.temporal.status).toBe("up");
+    expect(result.subsystems.beads.status).toBe("up");
+    expect(result.checkedAt).toBeTruthy();
+  });
+
+  it("returns 'fail' when kilo serve is down", async () => {
+    mockFetchFailure("Connection refused");
+    mockTcpSuccess();
+    mockExecFileSequence([
+      { stdout: "" },
+      { stdout: "[]" },
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    expect(result.overall).toBe("fail");
+    expect(result.subsystems.kiloServe.status).toBe("down");
+    expect(result.subsystems.kiloServe.message).toContain("unreachable");
+  });
+
+  it("returns 'fail' when Dolt is down", async () => {
+    mockFetchSuccess();
+    mockTcpFailure("ECONNREFUSED");
+    mockExecFileSequence([
+      { stdout: "" },
+      { stdout: "[]" },
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    expect(result.overall).toBe("fail");
+    expect(result.subsystems.dolt.status).toBe("down");
+    expect(result.subsystems.dolt.message).toContain("ECONNREFUSED");
+  });
+
+  it("returns 'fail' when git has merge conflicts", async () => {
+    mockFetchSuccess();
+    mockTcpSuccess();
+    mockExecFileSequence([
+      { stdout: "UU conflicted-file.ts\n" }, // merge conflict
+      { stdout: "[]" },
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    expect(result.overall).toBe("fail");
+    expect(result.subsystems.git.status).toBe("down");
+    expect(result.subsystems.git.message).toContain("merge conflicts");
+  });
+
+  it("returns 'pass' with git uncommitted changes (not conflicts)", async () => {
+    mockFetchSuccess();
+    mockTcpSuccess();
+    mockExecFileSequence([
+      { stdout: " M src/changed.ts\n" }, // modified file, no conflict
+      { stdout: "[]" },
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    // git is "up" (uncommitted changes don't make it down), overall is pass
+    expect(result.subsystems.git.status).toBe("up");
+    expect(result.subsystems.git.message).toContain("uncommitted changes");
+    expect(result.overall).toBe("pass");
+  });
+
+  it("returns 'fail' when beads CLI fails", async () => {
+    mockFetchSuccess();
+    mockTcpSuccess();
+
+    // git succeeds, then bd fails
+    const gitError = null;
+    const bdError = new Error("bd: database not available") as Error & {
+      code: number;
+      killed: boolean;
+    };
+    bdError.code = 1;
+    bdError.killed = false;
+
+    mockExecFileSequence([
+      { stdout: "" },                                          // git: clean
+      { stdout: "", stderr: "database not available", error: bdError }, // bd: fails
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    expect(result.overall).toBe("fail");
+    expect(result.subsystems.beads.status).toBe("down");
+  });
+
+  it("temporal is always 'up' (implicit check)", async () => {
+    mockFetchSuccess();
+    mockTcpSuccess();
+    mockExecFileSequence([
+      { stdout: "" },
+      { stdout: "[]" },
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    expect(result.subsystems.temporal.status).toBe("up");
+    expect(result.subsystems.temporal.message).toContain("implicit");
+  });
+
+  it("never throws — returns fail result instead", async () => {
+    // All subsystems fail
+    mockFetchFailure("ECONNREFUSED");
+    mockTcpFailure("ECONNREFUSED");
+
+    const gitError = new Error("not a git repo") as Error & {
+      code: number;
+      killed: boolean;
+    };
+    gitError.code = 128;
+    gitError.killed = false;
+
+    const bdError = new Error("bd not found") as Error & {
+      code: number;
+      killed: boolean;
+    };
+    bdError.code = 127;
+    bdError.killed = false;
+
+    mockExecFileSequence([
+      { stdout: "", stderr: "not a git repo", error: gitError },
+      { stdout: "", stderr: "bd not found", error: bdError },
+    ]);
+
+    // Should NOT throw
+    const result = await checkStackHealth(baseInput);
+
+    expect(result.overall).toBe("fail");
+    // At minimum kilo, dolt, git, beads are down; temporal is always up
+    expect(result.subsystems.kiloServe.status).toBe("down");
+    expect(result.subsystems.dolt.status).toBe("down");
+    expect(result.subsystems.git.status).toBe("down");
+    expect(result.subsystems.temporal.status).toBe("up");
+    expect(result.subsystems.beads.status).toBe("down");
+  });
+
+  it("returns correct ISO 8601 checkedAt timestamp", async () => {
+    mockFetchSuccess();
+    mockTcpSuccess();
+    mockExecFileSequence([
+      { stdout: "" },
+      { stdout: "[]" },
+    ]);
+
+    const before = new Date().toISOString();
+    const result = await checkStackHealth(baseInput);
+    const after = new Date().toISOString();
+
+    expect(result.checkedAt >= before).toBe(true);
+    expect(result.checkedAt <= after).toBe(true);
+  });
+
+  it("classifies HTTP non-200 as down", async () => {
+    mockFetchSuccess(503, "Service Unavailable");
+    mockTcpSuccess();
+    mockExecFileSequence([
+      { stdout: "" },
+      { stdout: "[]" },
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    expect(result.subsystems.kiloServe.status).toBe("down");
+    expect(result.subsystems.kiloServe.message).toContain("503");
+  });
+
+  it("reports latencyMs for successful checks", async () => {
+    mockFetchSuccess();
+    mockTcpSuccess();
+    mockExecFileSequence([
+      { stdout: "" },
+      { stdout: "[]" },
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    // All successful checks should have latencyMs >= 0
+    expect(result.subsystems.kiloServe.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(result.subsystems.dolt.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(result.subsystems.git.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(result.subsystems.temporal.latencyMs).toBe(0);
+    expect(result.subsystems.beads.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("reports null latencyMs for failed checks", async () => {
+    mockFetchFailure("ECONNREFUSED");
+    mockTcpFailure("ECONNREFUSED");
+
+    const error = new Error("fail") as Error & { code: number; killed: boolean };
+    error.code = 1;
+    error.killed = false;
+
+    mockExecFileSequence([
+      { stdout: "", error },
+      { stdout: "", error },
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    expect(result.subsystems.kiloServe.latencyMs).toBeNull();
+    expect(result.subsystems.dolt.latencyMs).toBeNull();
+    expect(result.subsystems.git.latencyMs).toBeNull();
+    expect(result.subsystems.beads.latencyMs).toBeNull();
   });
 });
