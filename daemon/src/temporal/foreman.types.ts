@@ -30,7 +30,9 @@ export type ForemanPhase =
   | "escalating"
   | "idle"
   | "paused"
-  | "shutting_down";
+  | "shutting_down"
+  | "awaiting_intervention"
+  | "awaiting_approval";
 
 // ââ Workflow Input (S4.1) ââ
 
@@ -70,6 +72,9 @@ export interface ForemanInput {
   maxRetriesPerBead: number;
   retryBackoffMs: number;
 
+  // Exception handling config
+  healthFailureThreshold: number; // Consecutive health failures before intervention (default: 5)
+
   // Carried-forward state (set by continue-as-new, null on fresh start)
   carriedState: ForemanContinueAsNewState | null;
 }
@@ -100,6 +105,11 @@ export interface ForemanContinueAsNewState {
   // Operator state
   pauseRequested: boolean;
   shutdownRequested: boolean;
+
+  // Intervention / exception state
+  consecutiveHealthFailures: number;
+  interventionReason: string | null;
+  awaitingInterventionSince: string | null; // ISO 8601
 
   // Timing
   foremanStartedAt: string; // ISO 8601, original start time
@@ -225,7 +235,12 @@ export type ForemanSignal =
   | { type: "shutdown"; reason: string }
   | { type: "forceDispatch"; beadId: string }
   | { type: "skipBead"; beadId: string; reason: string }
-  | { type: "updateConfig"; config: Partial<ForemanInput> };
+  | { type: "updateConfig"; config: Partial<ForemanInput> }
+  | { type: "approveOutcome"; beadId: string; decision: ApprovalDecision }
+  | { type: "approveDispatch"; beadId: string };
+
+/** Operator decision for an ambiguous outcome requiring approval. */
+export type ApprovalDecision = "close" | "retry" | "skip";
 
 // ââ Operator Queries (S4.9) ââ
 
@@ -246,6 +261,10 @@ export interface ForemanStatus {
   retryLedger: RetryLedgerEntry[];
   paused: boolean;
   shuttingDown: boolean;
+
+  // Intervention state (populated when phase is awaiting_intervention or awaiting_approval)
+  interventionReason: string | null;
+  awaitingInterventionSince: string | null; // ISO 8601
 }
 
 // ââ Foreman Result ââ

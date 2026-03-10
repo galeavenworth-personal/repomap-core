@@ -169,6 +169,7 @@ function makeInput(overrides: Partial<ForemanInput> = {}): ForemanInput {
     defaultCostBudgetUsd: 5.0,
     maxRetriesPerBead: 2,
     retryBackoffMs: 30_000,
+    healthFailureThreshold: 5,
     carriedState: null,
     ...overrides,
   };
@@ -400,6 +401,9 @@ describe("shutdown", () => {
         retryLedger: [],
         pauseRequested: false,
         shutdownRequested: true,
+        consecutiveHealthFailures: 0,
+        interventionReason: null,
+        awaitingInterventionSince: null,
         foremanStartedAt: new Date().toISOString(),
         lastContinueAsNewAt: null,
       },
@@ -475,6 +479,9 @@ describe("continue-as-new", () => {
         retryLedger: [],
         pauseRequested: false,
         shutdownRequested: false,
+        consecutiveHealthFailures: 0,
+        interventionReason: null,
+        awaitingInterventionSince: null,
         foremanStartedAt: new Date(Date.now() - 3_600_000).toISOString(),
         lastContinueAsNewAt: null,
       },
@@ -1198,5 +1205,652 @@ describe("outcome reconciliation", () => {
     // Should have escalated immediately (non-retryable)
     expect(createEscalationCalls.length).toBe(1);
     expect(createEscalationCalls[0].reason).toContain("Non-retryable");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Exception and Approval Path Tests (0mp.15)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── 16. Persistent Unhealthy Stack ──
+
+describe("persistent unhealthy stack", () => {
+  it("escalates after consecutive health failures exceed threshold", async () => {
+    let healthCallCount = 0;
+    let createEscalationCalls: Array<{ beadId: string; reason: string }> = [];
+
+    setMockActivity("checkStackHealth", () => {
+      healthCallCount++;
+      return makeHealthResult("fail");
+    });
+    setMockActivity("createEscalation", (input: unknown) => {
+      const inp = input as { beadId: string; reason: string };
+      createEscalationCalls.push({ beadId: inp.beadId, reason: inp.reason });
+      return { escalationBeadId: "esc-health" };
+    });
+
+    // Set threshold to 3 for faster test and give enough iterations to reach it
+    const input = makeInput({
+      maxIterations: 10,
+      healthFailureThreshold: 3,
+      // Set health check interval to 0 to check every iteration
+      healthCheckIntervalMs: 0,
+    });
+
+    // The workflow will:
+    // 1. Health check → fail (consecutiveHealthFailures = 1) → idle → sleep → iteration++
+    // 2. Health check → fail (consecutiveHealthFailures = 2) → idle → sleep → iteration++
+    // 3. Health check → fail (consecutiveHealthFailures = 3) → threshold hit → awaiting_intervention
+    // 4. condition blocks waiting for resume signal
+
+    const workflowPromise = foremanWorkflow(input);
+
+    // Wait for workflow to reach the condition block
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Verify escalation was created
+    expect(createEscalationCalls.length).toBe(1);
+    expect(createEscalationCalls[0].reason).toContain("Persistent health failure");
+    expect(createEscalationCalls[0].reason).toContain("3 consecutive");
+
+    // Query the status to verify intervention state
+    const statusHandler = queryHandlers.get("foreman.status") as () => ForemanStatus;
+    expect(statusHandler).toBeDefined();
+    const status = statusHandler();
+    expect(status.phase).toBe("awaiting_intervention");
+    expect(status.interventionReason).toContain("Persistent health failure");
+    expect(status.awaitingInterventionSince).not.toBeNull();
+
+    // Fire resume signal — this modifies state.interventionResumed = true
+    const resumeHandler = signalHandlers.get("foreman.resume");
+    expect(resumeHandler).toBeDefined();
+    resumeHandler!();
+
+    // Resolve the condition
+    if (conditionResolver) conditionResolver();
+
+    // After resume, workflow continues and will eventually hit continueAsNew or
+    // keep failing. Trigger shutdown to exit cleanly.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const shutdownHandler = signalHandlers.get("foreman.shutdown");
+    shutdownHandler!({ reason: "test cleanup" });
+
+    // If there's a new condition waiting (pause check), resolve it
+    if (conditionResolver) conditionResolver();
+
+    try {
+      const result = await workflowPromise;
+      // Could be shutdown or continueAsNew
+      if (result) {
+        expect(result.status).toBe("shutdown");
+      }
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      // continueAsNew is also acceptable
+    }
+  });
+
+  it("does not escalate when health failures are below threshold", async () => {
+    let healthCallCount = 0;
+    let createEscalationCalls: Array<{ beadId: string; reason: string }> = [];
+
+    setMockActivity("checkStackHealth", () => {
+      healthCallCount++;
+      // Fail twice then pass
+      if (healthCallCount <= 2) return makeHealthResult("fail");
+      return makeHealthResult("pass");
+    });
+    setMockActivity("selectNextBead", () => null);
+    setMockActivity("createEscalation", (input: unknown) => {
+      const inp = input as { beadId: string; reason: string };
+      createEscalationCalls.push({ beadId: inp.beadId, reason: inp.reason });
+      return { escalationBeadId: "esc-health" };
+    });
+
+    const input = makeInput({
+      maxIterations: 4,
+      healthFailureThreshold: 5,
+      healthCheckIntervalMs: 0,
+    });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+    }
+
+    // No escalation should have been created
+    expect(createEscalationCalls.length).toBe(0);
+  });
+
+  it("resets health failure counter when health passes", async () => {
+    let healthCallCount = 0;
+
+    setMockActivity("checkStackHealth", () => {
+      healthCallCount++;
+      // Fail 2 times, pass once, fail 2 times again — never reaches 5
+      if (healthCallCount <= 2) return makeHealthResult("fail");
+      if (healthCallCount === 3) return makeHealthResult("pass");
+      return makeHealthResult("fail");
+    });
+    setMockActivity("selectNextBead", () => null);
+    setMockActivity("createEscalation", () => ({ escalationBeadId: "esc-health" }));
+
+    const input = makeInput({
+      maxIterations: 6,
+      healthFailureThreshold: 5,
+      healthCheckIntervalMs: 0,
+    });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    // The carried state should show consecutive failures reset after the pass
+    expect(continueAsNewCalled).toBe(true);
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    // After pass at count=3, counter resets to 0, then 2 more fails = 2
+    // But health checks happen once per iteration (healthCheckIntervalMs=0),
+    // and on the pass iteration selectNextBead returns null → idle
+    expect(carriedInput.carriedState!.consecutiveHealthFailures).toBeLessThan(5);
+  });
+});
+
+// ── 17. Irrecoverable CLI/Schema Failures ──
+
+describe("irrecoverable CLI/schema failures", () => {
+  it("enters awaiting_intervention on BeadsContractError during selection", async () => {
+    let selectCallCount = 0;
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCallCount++;
+      if (selectCallCount === 1) {
+        const err = new Error("bd returned malformed JSON: unexpected token");
+        err.name = "BeadsContractError";
+        throw err;
+      }
+      // After resume, return null (no work)
+      return null;
+    });
+
+    const input = makeInput({
+      maxIterations: 5,
+      healthCheckIntervalMs: 0,
+    });
+
+    const workflowPromise = foremanWorkflow(input);
+
+    // Wait for workflow to reach condition block
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Verify the intervention state
+    const statusHandler = queryHandlers.get("foreman.status") as () => ForemanStatus;
+    const status = statusHandler();
+    expect(status.phase).toBe("awaiting_intervention");
+    expect(status.interventionReason).toContain("BeadsContractError");
+
+    // Fire resume signal to clear intervention
+    const resumeHandler = signalHandlers.get("foreman.resume");
+    resumeHandler!();
+    if (conditionResolver) conditionResolver();
+
+    // Let the workflow continue — it should poll again and eventually exit
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Trigger shutdown
+    const shutdownHandler = signalHandlers.get("foreman.shutdown");
+    shutdownHandler!({ reason: "test cleanup" });
+    if (conditionResolver) conditionResolver();
+
+    try {
+      const result = await workflowPromise;
+      if (result) {
+        expect(["shutdown", "failed"]).toContain(result.status);
+      }
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+    }
+
+    // selectNextBead should have been called twice (once before error, once after resume)
+    expect(selectCallCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("re-throws non-contract errors as workflow failure", async () => {
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      throw new Error("random infrastructure error");
+    });
+
+    const input = makeInput({ maxIterations: 2 });
+
+    const result = await foremanWorkflow(input);
+
+    // Non-contract errors should bubble up as workflow failure
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("random infrastructure error");
+  });
+});
+
+// ── 18. Policy-Required Approval Before Dispatch ──
+
+describe("policy-required approval before dispatch", () => {
+  it("blocks dispatch of sensitive beads until operator approves", async () => {
+    let selectCalls = 0;
+    let updateStatusCalls: Array<{ beadId: string; status: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-sensitive",
+          title: "Deploy to production",
+          priority: "P1",
+          labels: ["sensitive"],
+          dependsOn: [],
+          estimatedComplexity: "medium",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", (_rp: unknown, beadId: unknown, status: unknown) => {
+      updateStatusCalls.push({ beadId: beadId as string, status: status as string });
+      return { updated: true, error: null };
+    });
+    setMockActivity("closeBead", () => ({ closed: true, error: null }));
+
+    childResults = [makeAgentResult()];
+
+    const input = makeInput({ maxIterations: 5, healthCheckIntervalMs: 0 });
+
+    const workflowPromise = foremanWorkflow(input);
+
+    // Wait for workflow to reach the approval condition
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Verify we're awaiting approval
+    const statusHandler = queryHandlers.get("foreman.status") as () => ForemanStatus;
+    const status = statusHandler();
+    expect(status.phase).toBe("awaiting_approval");
+    expect(status.interventionReason).toContain("Policy-required approval");
+    expect(status.interventionReason).toContain("sensitive");
+
+    // No child workflows should have been started yet
+    expect(startChildCalls.length).toBe(0);
+
+    // Send approveDispatch signal and resolve condition
+    const approveDispatchHandler = signalHandlers.get("foreman.approveDispatch");
+    expect(approveDispatchHandler).toBeDefined();
+    approveDispatchHandler!({ beadId: "bead-sensitive" });
+    if (conditionResolver) conditionResolver();
+
+    // Wait for workflow to finish (will return after catching internal continueAsNew)
+    await workflowPromise;
+
+    // Child workflow should have been started after approval
+    expect(startChildCalls.length).toBe(1);
+
+    // Bead should have been claimed (in_progress)
+    const claimCall = updateStatusCalls.find((c) => c.status === "in_progress");
+    expect(claimCall).toBeDefined();
+    expect(claimCall!.beadId).toBe("bead-sensitive");
+  });
+
+  it("does not block dispatch of beads without sensitive labels", async () => {
+    let selectCalls = 0;
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-normal",
+          title: "Fix a typo",
+          priority: "P2",
+          labels: ["chore"],
+          dependsOn: [],
+          estimatedComplexity: "trivial",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("closeBead", () => ({ closed: true, error: null }));
+
+    childResults = [makeAgentResult()];
+
+    const input = makeInput({ maxIterations: 3 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+    }
+
+    // Child workflow should have been started without approval
+    expect(startChildCalls.length).toBe(1);
+  });
+
+  it("blocks beads with requires-human label", async () => {
+    let selectCalls = 0;
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-human",
+          title: "Review legal notice",
+          priority: "P1",
+          labels: ["requires-human"],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("closeBead", () => ({ closed: true, error: null }));
+
+    childResults = [makeAgentResult()];
+
+    const input = makeInput({ maxIterations: 5 });
+
+    const workflowPromise = foremanWorkflow(input);
+
+    // Wait for workflow to reach approval condition
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const statusHandler = queryHandlers.get("foreman.status") as () => ForemanStatus;
+    const status = statusHandler();
+    expect(status.phase).toBe("awaiting_approval");
+
+    // Approve dispatch
+    const approveHandler = signalHandlers.get("foreman.approveDispatch");
+    approveHandler!({ beadId: "bead-human" });
+    if (conditionResolver) conditionResolver();
+
+    // Workflow continues and exits via continueAsNew (caught internally)
+    await workflowPromise;
+
+    // Should have dispatched after approval
+    expect(startChildCalls.length).toBe(1);
+  });
+});
+
+// ── 19. Ambiguous Outcome Requiring Operator Approval ──
+
+describe("ambiguous outcome requiring operator approval", () => {
+  it("waits for outcome approval when bead has requires-approval label", async () => {
+    let selectCalls = 0;
+    let closeBeadCalls: Array<{ beadId: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-approval",
+          title: "Deploy schema migration",
+          priority: "P0",
+          labels: ["requires-approval"],
+          dependsOn: [],
+          estimatedComplexity: "large",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("closeBead", (input: unknown) => {
+      const inp = input as { beadId: string };
+      closeBeadCalls.push({ beadId: inp.beadId });
+      return { closed: true, error: null };
+    });
+
+    childResults = [makeAgentResult()];
+
+    const input = makeInput({ maxIterations: 5 });
+
+    const workflowPromise = foremanWorkflow(input);
+
+    // Wait for workflow to reach the pre-dispatch approval condition
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // First we need to approve dispatch (requires-approval triggers both gates)
+    const approveDispatchHandler = signalHandlers.get("foreman.approveDispatch");
+    approveDispatchHandler!({ beadId: "bead-approval" });
+    if (conditionResolver) conditionResolver();
+
+    // Wait for dispatch to complete and reach outcome approval
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Now should be awaiting outcome approval
+    const statusHandler = queryHandlers.get("foreman.status") as () => ForemanStatus;
+    const status = statusHandler();
+    expect(status.phase).toBe("awaiting_approval");
+    expect(status.interventionReason).toContain("Outcome requires approval");
+
+    // closeBead should NOT have been called yet
+    expect(closeBeadCalls.length).toBe(0);
+
+    // Approve with "close" decision
+    const approveOutcomeHandler = signalHandlers.get("foreman.approveOutcome");
+    expect(approveOutcomeHandler).toBeDefined();
+    approveOutcomeHandler!({ beadId: "bead-approval", decision: "close" });
+    if (conditionResolver) conditionResolver();
+
+    // Workflow continues and exits via continueAsNew (caught internally)
+    await workflowPromise;
+
+    // closeBead should have been called after approval
+    expect(closeBeadCalls.length).toBe(1);
+    expect(closeBeadCalls[0].beadId).toBe("bead-approval");
+  });
+
+  it("skips bead when operator approves with skip decision", async () => {
+    let selectCalls = 0;
+    let updateStatusCalls: Array<{ beadId: string; status: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-skip-approval",
+          title: "Questionable task",
+          priority: "P2",
+          labels: ["requires-approval"],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", (_rp: unknown, beadId: unknown, status: unknown) => {
+      updateStatusCalls.push({ beadId: beadId as string, status: status as string });
+      return { updated: true, error: null };
+    });
+    setMockActivity("closeBead", () => ({ closed: true, error: null }));
+
+    childResults = [makeAgentResult()];
+
+    const input = makeInput({ maxIterations: 5 });
+
+    const workflowPromise = foremanWorkflow(input);
+
+    // Approve dispatch first
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const approveDispatchHandler = signalHandlers.get("foreman.approveDispatch");
+    approveDispatchHandler!({ beadId: "bead-skip-approval" });
+    if (conditionResolver) conditionResolver();
+
+    // Wait for outcome approval
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Approve with "skip"
+    const approveOutcomeHandler = signalHandlers.get("foreman.approveOutcome");
+    approveOutcomeHandler!({ beadId: "bead-skip-approval", decision: "skip" });
+    if (conditionResolver) conditionResolver();
+
+    // Workflow continues and exits via continueAsNew (caught internally)
+    await workflowPromise;
+
+    // Bead should have been set back to ready (not closed)
+    const readyCall = updateStatusCalls.find(
+      (c) => c.beadId === "bead-skip-approval" && c.status === "ready",
+    );
+    expect(readyCall).toBeDefined();
+  });
+
+  it("retries bead when operator approves with retry decision", async () => {
+    let selectCalls = 0;
+    let updateStatusCalls: Array<{ beadId: string; status: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-retry-approval",
+          title: "Uncertain result",
+          priority: "P1",
+          labels: ["requires-approval"],
+          dependsOn: [],
+          estimatedComplexity: "medium",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", (_rp: unknown, beadId: unknown, status: unknown) => {
+      updateStatusCalls.push({ beadId: beadId as string, status: status as string });
+      return { updated: true, error: null };
+    });
+    setMockActivity("closeBead", () => ({ closed: true, error: null }));
+
+    childResults = [makeAgentResult()];
+
+    const input = makeInput({ maxIterations: 5 });
+
+    const workflowPromise = foremanWorkflow(input);
+
+    // Approve dispatch first
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const approveDispatchHandler = signalHandlers.get("foreman.approveDispatch");
+    approveDispatchHandler!({ beadId: "bead-retry-approval" });
+    if (conditionResolver) conditionResolver();
+
+    // Wait for outcome approval
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Approve with "retry"
+    const approveOutcomeHandler = signalHandlers.get("foreman.approveOutcome");
+    approveOutcomeHandler!({ beadId: "bead-retry-approval", decision: "retry" });
+    if (conditionResolver) conditionResolver();
+
+    // Workflow continues and exits via continueAsNew (caught internally)
+    await workflowPromise;
+
+    // Bead should have been set back to ready (for re-dispatch)
+    const readyCall = updateStatusCalls.find(
+      (c) => c.beadId === "bead-retry-approval" && c.status === "ready",
+    );
+    expect(readyCall).toBeDefined();
+  });
+});
+
+// ── 20. Signal Registration ──
+
+describe("new signal registration", () => {
+  it("registers approveOutcome and approveDispatch signal handlers", async () => {
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => null);
+
+    const input = makeInput({ maxIterations: 1 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch {
+      // Expected: continueAsNew
+    }
+
+    expect(signalHandlers.has("foreman.approveOutcome")).toBe(true);
+    expect(signalHandlers.has("foreman.approveDispatch")).toBe(true);
+  });
+});
+
+// ── 21. Status Query Enhancement ──
+
+describe("status query with intervention state", () => {
+  it("includes null intervention fields when not in intervention", async () => {
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => null);
+
+    const input = makeInput({ maxIterations: 1 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch {
+      // Expected
+    }
+
+    const statusHandler = queryHandlers.get("foreman.status") as () => ForemanStatus;
+    const status = statusHandler();
+    expect(status.interventionReason).toBeNull();
+    expect(status.awaitingInterventionSince).toBeNull();
+  });
+});
+
+// ── 22. Exception States Are Resumable ──
+
+describe("exception states are resumable", () => {
+  it("intervention state carries across continue-as-new", async () => {
+    // Start with carried state that has intervention fields
+    const input = makeInput({
+      maxIterations: 1,
+      carriedState: {
+        totalIterations: 10,
+        totalDispatches: 5,
+        totalCompletions: 4,
+        totalFailures: 1,
+        totalEscalations: 1,
+        lastHealthCheck: null,
+        lastHealthCheckAt: null,
+        recentOutcomes: [],
+        retryLedger: [],
+        pauseRequested: false,
+        shutdownRequested: false,
+        consecutiveHealthFailures: 3,
+        interventionReason: "Persistent health failure",
+        awaitingInterventionSince: new Date().toISOString(),
+        foremanStartedAt: new Date().toISOString(),
+        lastContinueAsNewAt: null,
+      },
+    });
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => null);
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    expect(continueAsNewCalled).toBe(true);
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    // The intervention fields should be carried (though reset by now since health passed)
+    expect(carriedInput.carriedState!.consecutiveHealthFailures).toBeDefined();
+    expect(carriedInput.carriedState!.interventionReason).toBeDefined();
+    expect(carriedInput.carriedState!.awaitingInterventionSince).toBeDefined();
   });
 });

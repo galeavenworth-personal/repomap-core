@@ -41,6 +41,7 @@ import type {
   DispatchResult,
   RetryLedgerEntry,
   DispatchPlan,
+  ApprovalDecision,
 } from "./foreman.types.js";
 
 import type * as foremanActivities from "./foreman.activities.js";
@@ -80,6 +81,8 @@ export const shutdownSignal = defineSignal<[{ reason: string }]>("foreman.shutdo
 export const forceDispatchSignal = defineSignal<[{ beadId: string }]>("foreman.forceDispatch");
 export const skipBeadSignal = defineSignal<[{ beadId: string; reason: string }]>("foreman.skipBead");
 export const updateConfigSignal = defineSignal<[Partial<ForemanInput>]>("foreman.updateConfig");
+export const approveOutcomeSignal = defineSignal<[{ beadId: string; decision: ApprovalDecision }]>("foreman.approveOutcome");
+export const approveDispatchSignal = defineSignal<[{ beadId: string }]>("foreman.approveDispatch");
 
 // ── Queries ──
 
@@ -165,6 +168,25 @@ function classifyErrorRetryability(error: string): boolean {
 }
 
 /**
+ * Classify whether an error thrown by an activity is a BeadsContractError
+ * (non-retryable schema/CLI failure). In workflow code we cannot import
+ * the activity error class directly, so we classify by error name.
+ *
+ * Temporal wraps activity errors in ApplicationFailure; the original
+ * error name is preserved in the cause chain or message.
+ */
+function isBeadsContractError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  // Direct instance (in test mocks)
+  if (err.name === "BeadsContractError") return true;
+  // Temporal ApplicationFailure wrapping
+  if (err.message?.includes("BeadsContractError")) return true;
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.name === "BeadsContractError") return true;
+  return false;
+}
+
+/**
  * Update the retry ledger for a bead after a failed dispatch.
  * Returns the updated entry.
  */
@@ -240,6 +262,16 @@ interface ForemanState {
   // Health
   lastHealthCheck: HealthCheckResult | null;
   lastHealthCheckAt: string | null;
+  consecutiveHealthFailures: number;
+
+  // Intervention / exception state
+  interventionReason: string | null;
+  awaitingInterventionSince: string | null;
+  interventionResumed: boolean;
+
+  // Approval state
+  approvedDispatchBeadIds: string[];
+  outcomeApproval: { beadId: string; decision: ApprovalDecision } | null;
 
   // History
   recentOutcomes: DispatchOutcome[];
@@ -272,6 +304,14 @@ function initializeState(input: ForemanInput, startTimestamp: number): ForemanSt
 
     lastHealthCheck: carried?.lastHealthCheck ?? null,
     lastHealthCheckAt: carried?.lastHealthCheckAt ?? null,
+    consecutiveHealthFailures: carried?.consecutiveHealthFailures ?? 0,
+
+    interventionReason: carried?.interventionReason ?? null,
+    awaitingInterventionSince: carried?.awaitingInterventionSince ?? null,
+    interventionResumed: false,
+
+    approvedDispatchBeadIds: [],
+    outcomeApproval: null,
 
     recentOutcomes: carried?.recentOutcomes ?? [],
     retryLedger: carried?.retryLedger ?? [],
@@ -295,6 +335,9 @@ function serializeState(state: ForemanState): ForemanContinueAsNewState {
     retryLedger: state.retryLedger,
     pauseRequested: state.pauseRequested,
     shutdownRequested: state.shutdownRequested,
+    consecutiveHealthFailures: state.consecutiveHealthFailures,
+    interventionReason: state.interventionReason,
+    awaitingInterventionSince: state.awaitingInterventionSince,
     foremanStartedAt: state.foremanStartedAt,
     lastContinueAsNewAt: new Date().toISOString(),
   };
@@ -348,6 +391,8 @@ function buildStatusSnapshot(state: ForemanState): ForemanStatus {
     retryLedger: state.retryLedger,
     paused: state.pauseRequested,
     shuttingDown: state.shutdownRequested,
+    interventionReason: state.interventionReason,
+    awaitingInterventionSince: state.awaitingInterventionSince,
   };
 }
 
@@ -448,6 +493,13 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
 
   setHandler(resumeSignal, () => {
     state.pauseRequested = false;
+    // Resume also clears intervention state (operator acknowledging)
+    if (state.phase === "awaiting_intervention") {
+      state.interventionResumed = true;
+      state.interventionReason = null;
+      state.awaitingInterventionSince = null;
+      state.consecutiveHealthFailures = 0;
+    }
   });
 
   setHandler(shutdownSignal, ({ reason }) => {
@@ -469,6 +521,16 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
     // Merge partial config; immutable fields are not overwritten
     const { workflowId: _wf, repoPath: _rp, carriedState: _cs, ...safe } = partial;
     config = { ...config, ...safe };
+  });
+
+  setHandler(approveOutcomeSignal, ({ beadId, decision }) => {
+    state.outcomeApproval = { beadId, decision };
+  });
+
+  setHandler(approveDispatchSignal, ({ beadId }) => {
+    if (!state.approvedDispatchBeadIds.includes(beadId)) {
+      state.approvedDispatchBeadIds.push(beadId);
+    }
   });
 
   // ── Register query handlers ──
@@ -526,8 +588,53 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
         state.lastHealthCheckAt = state.lastHealthCheck.checkedAt;
       }
 
-      // If health gate fails, idle and retry
+      // If health gate fails, track consecutive failures and potentially escalate
       if (state.lastHealthCheck?.overall === "fail") {
+        state.consecutiveHealthFailures++;
+
+        if (state.consecutiveHealthFailures >= config.healthFailureThreshold) {
+          // Persistent unhealthy stack — escalate to operator
+          const failedSubsystems = Object.entries(state.lastHealthCheck.subsystems)
+            .filter(([, sub]) => sub.status === "down")
+            .map(([name]) => name);
+          const reason = `Persistent health failure (${state.consecutiveHealthFailures} consecutive): ${failedSubsystems.join(", ")} down`;
+
+          state.phase = "awaiting_intervention";
+          state.interventionReason = reason;
+          state.awaitingInterventionSince = new Date().toISOString();
+
+          // Create escalation bead for the health failure
+          await durable.createEscalation({
+            repoPath: config.repoPath,
+            beadId: `health-${Date.now()}`,
+            reason,
+            outcomes: [],
+            retryEntry: {
+              beadId: "health-check",
+              attempts: state.consecutiveHealthFailures,
+              maxAttempts: config.healthFailureThreshold,
+              lastAttemptAt: state.lastHealthCheck.checkedAt,
+              lastError: reason,
+              lastResult: { kind: "failed", error: reason, retryable: false },
+              nextRetryAfter: new Date().toISOString(),
+              exhausted: true,
+            },
+          });
+          state.totalEscalations++;
+
+          // Wait for operator resume signal
+          await condition(() => state.interventionResumed || state.shutdownRequested);
+          if (state.shutdownRequested) {
+            return makeResult("shutdown", state, state.shutdownReason);
+          }
+
+          // Operator resumed — clear intervention state, re-check health
+          state.interventionResumed = false;
+          state.phase = "polling";
+          continue;
+        }
+
+        // Below threshold — idle and retry on next iteration
         state.phase = "idle";
         await sleep(config.pollIntervalMs);
         state.iterationCount++;
@@ -535,27 +642,54 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
         continue;
       }
 
+      // Health passed (or no check yet) — reset consecutive failure counter
+      state.consecutiveHealthFailures = 0;
+
       // -- Phase: Select --
       state.phase = "selecting";
       let candidate: BeadCandidate | null = null;
 
-      if (forcedBeadId) {
-        // Force dispatch: fetch the specific bead detail
-        const detail = await quick.getBeadDetail(config.repoPath, forcedBeadId);
-        candidate = {
-          beadId: detail.beadId,
-          title: detail.title,
-          priority: detail.priority,
-          labels: detail.labels,
-          dependsOn: detail.dependsOn,
-          estimatedComplexity: detail.estimatedComplexity,
-        };
-      } else {
-        candidate = await quick.selectNextBead({
-          repoPath: config.repoPath,
-          retryLedger: state.retryLedger,
-          skipList: state.skipList,
-        });
+      try {
+        if (forcedBeadId) {
+          // Force dispatch: fetch the specific bead detail
+          const detail = await quick.getBeadDetail(config.repoPath, forcedBeadId);
+          candidate = {
+            beadId: detail.beadId,
+            title: detail.title,
+            priority: detail.priority,
+            labels: detail.labels,
+            dependsOn: detail.dependsOn,
+            estimatedComplexity: detail.estimatedComplexity,
+          };
+        } else {
+          candidate = await quick.selectNextBead({
+            repoPath: config.repoPath,
+            retryLedger: state.retryLedger,
+            skipList: state.skipList,
+          });
+        }
+      } catch (activityErr: unknown) {
+        if (isBeadsContractError(activityErr)) {
+          // Irrecoverable CLI/schema failure — await operator intervention
+          const errMsg = activityErr instanceof Error ? activityErr.message : String(activityErr);
+          state.phase = "awaiting_intervention";
+          state.interventionReason = `BeadsContractError during selection: ${errMsg}`;
+          state.awaitingInterventionSince = new Date().toISOString();
+          state.totalEscalations++;
+
+          await condition(() => state.interventionResumed || state.shutdownRequested);
+          if (state.shutdownRequested) {
+            return makeResult("shutdown", state, state.shutdownReason);
+          }
+
+          // Operator resumed — retry the failed operation once
+          state.interventionResumed = false;
+          state.interventionReason = null;
+          state.awaitingInterventionSince = null;
+          state.phase = "polling";
+          continue;
+        }
+        throw activityErr; // Re-throw non-contract errors for outer catch
       }
 
       if (!candidate) {
@@ -566,13 +700,62 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
         continue;
       }
 
+      // -- Phase: Pre-dispatch approval gate --
+      // If bead has sensitive/human-required labels, require operator approval
+      const requiresApproval = candidate.labels.some(
+        (l) => l === "requires-human" || l === "sensitive" || l === "requires-approval",
+      );
+
+      if (requiresApproval && !state.approvedDispatchBeadIds.includes(candidate.beadId)) {
+        state.phase = "awaiting_approval";
+        state.interventionReason = `Policy-required approval before dispatch: bead ${candidate.beadId} has labels [${candidate.labels.join(", ")}]`;
+        state.awaitingInterventionSince = new Date().toISOString();
+
+        // Wait for operator approveDispatch signal for this bead
+        await condition(
+          () =>
+            state.approvedDispatchBeadIds.includes(candidate!.beadId) ||
+            state.shutdownRequested,
+        );
+
+        if (state.shutdownRequested) {
+          return makeResult("shutdown", state, state.shutdownReason);
+        }
+
+        // Approval received — clear intervention state and proceed
+        state.interventionReason = null;
+        state.awaitingInterventionSince = null;
+      }
+
       // -- Phase: Dispatch --
       state.phase = "dispatching";
       state.currentBeadId = candidate.beadId;
       const plan = buildDispatchPlan(candidate, config);
 
       // Claim the bead
-      await quick.updateBeadStatus(config.repoPath, candidate.beadId, "in_progress");
+      try {
+        await quick.updateBeadStatus(config.repoPath, candidate.beadId, "in_progress");
+      } catch (claimErr: unknown) {
+        if (isBeadsContractError(claimErr)) {
+          const errMsg = claimErr instanceof Error ? claimErr.message : String(claimErr);
+          state.phase = "awaiting_intervention";
+          state.interventionReason = `BeadsContractError during bead claim: ${errMsg}`;
+          state.awaitingInterventionSince = new Date().toISOString();
+          state.totalEscalations++;
+
+          await condition(() => state.interventionResumed || state.shutdownRequested);
+          if (state.shutdownRequested) {
+            return makeResult("shutdown", state, state.shutdownReason);
+          }
+
+          state.interventionResumed = false;
+          state.interventionReason = null;
+          state.awaitingInterventionSince = null;
+          state.phase = "polling";
+          continue;
+        }
+        throw claimErr;
+      }
 
       // Start child workflow
       const childInput = buildChildInput(plan, config);
@@ -620,20 +803,69 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
       // -- Phase: Outcome Reconciliation --
       // Maps durable child workflow outcomes into correct bead mutations.
       // Rules:
-      //   completed       → bd close (happy path)
+      //   completed       → bd close (happy path), or await approval if requires-approval label
       //   failed/timeout  → annotate + retry or escalate
       //   aborted         → annotate + leave open
       //   validation_failed/budget_exceeded → annotate + escalate or leave open
       switch (dispatchResult.kind) {
         case "completed": {
-          state.phase = "completing";
-          await durable.closeBead({
-            repoPath: config.repoPath,
-            beadId: candidate.beadId,
-            outcome,
-          });
-          state.totalCompletions++;
-          removeFromRetryLedger(state.retryLedger, candidate.beadId);
+          // Check if bead requires operator approval before close
+          const needsOutcomeApproval = candidate.labels.includes("requires-approval");
+
+          if (needsOutcomeApproval) {
+            state.phase = "awaiting_approval";
+            state.interventionReason = `Outcome requires approval before close: bead ${candidate.beadId}`;
+            state.awaitingInterventionSince = new Date().toISOString();
+
+            // Wait for operator approveOutcome signal
+            await condition(
+              () =>
+                (state.outcomeApproval !== null &&
+                  state.outcomeApproval.beadId === candidate!.beadId) ||
+                state.shutdownRequested,
+            );
+
+            if (state.shutdownRequested) {
+              return makeResult("shutdown", state, state.shutdownReason);
+            }
+
+            const approval = state.outcomeApproval!;
+            state.outcomeApproval = null;
+            state.interventionReason = null;
+            state.awaitingInterventionSince = null;
+
+            switch (approval.decision) {
+              case "close":
+                state.phase = "completing";
+                await durable.closeBead({
+                  repoPath: config.repoPath,
+                  beadId: candidate.beadId,
+                  outcome,
+                });
+                state.totalCompletions++;
+                removeFromRetryLedger(state.retryLedger, candidate.beadId);
+                break;
+              case "retry":
+                // Put bead back to ready for re-dispatch on next iteration
+                await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
+                break;
+              case "skip":
+                if (!state.skipList.includes(candidate.beadId)) {
+                  state.skipList.push(candidate.beadId);
+                }
+                await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
+                break;
+            }
+          } else {
+            state.phase = "completing";
+            await durable.closeBead({
+              repoPath: config.repoPath,
+              beadId: candidate.beadId,
+              outcome,
+            });
+            state.totalCompletions++;
+            removeFromRetryLedger(state.retryLedger, candidate.beadId);
+          }
           break;
         }
 
