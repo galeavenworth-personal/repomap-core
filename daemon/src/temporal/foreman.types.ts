@@ -326,6 +326,19 @@ export interface CloseBeadOutput {
   error: string | null;
 }
 
+/** Input for the annotateBead activity. */
+export interface AnnotateBeadInput {
+  repoPath: string;
+  beadId: string;
+  comment: string;
+}
+
+/** Output from the annotateBead activity. */
+export interface AnnotateBeadOutput {
+  annotated: boolean;
+  error: string | null;
+}
+
 /** Input for the createEscalation activity (S5.7). */
 export interface CreateEscalationInput {
   repoPath: string;

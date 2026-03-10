@@ -45,11 +45,15 @@ import {
   getBeadDetail,
   updateBeadStatus,
   closeBead,
+  annotateBead,
+  createEscalation,
   checkStackHealth,
   BeadsTransientError,
   BeadsContractError,
 } from "../src/temporal/foreman.activities.js";
 import type {
+  AnnotateBeadInput,
+  CreateEscalationInput,
   SelectNextBeadInput,
   CloseBeadInput,
   CheckStackHealthInput,
@@ -547,6 +551,164 @@ describe("closeBead", () => {
   it("throws BeadsTransientError on CLI failure (for Temporal retry)", async () => {
     mockExecFileFailure(1, "cannot close");
     await expect(closeBead(baseInput)).rejects.toThrow(BeadsTransientError);
+  });
+
+  it("treats already-closed bead as success (idempotent)", async () => {
+    mockExecFileFailure(1, "already closed");
+    const result = await closeBead(baseInput);
+    expect(result.closed).toBe(true);
+    expect(result.error).toBeNull();
+  });
+});
+
+// ── 6b. annotateBead ──
+
+describe("annotateBead", () => {
+  const baseInput: AnnotateBeadInput = {
+    repoPath: REPO_PATH,
+    beadId: "bead-annotate",
+    comment: "[foreman] Dispatch outcome: failed | Error: connection refused",
+  };
+
+  it("returns annotated=true on success", async () => {
+    mockExecFileSuccess("Comment added\n");
+    const result = await annotateBead(baseInput);
+    expect(result.annotated).toBe(true);
+    expect(result.error).toBeNull();
+  });
+
+  it("passes correct args to bd comments add", async () => {
+    mockExecFileSuccess("");
+    await annotateBead(baseInput);
+
+    const mock = vi.mocked(execFile);
+    const [, args] = mock.mock.calls[0] as [string, string[]];
+    expect(args).toEqual([
+      "comments",
+      "add",
+      "bead-annotate",
+      "[foreman] Dispatch outcome: failed | Error: connection refused",
+    ]);
+  });
+
+  it("throws BeadsTransientError on CLI failure (for Temporal retry)", async () => {
+    mockExecFileFailure(1, "db locked");
+    await expect(annotateBead(baseInput)).rejects.toThrow(BeadsTransientError);
+  });
+
+  it("returns annotated=false on non-transient error", async () => {
+    // Simulate a non-BeadsTransientError (e.g., something unexpected)
+    const mock = vi.mocked(execFile);
+    mock.mockImplementation(
+      ((_file: unknown, _args: unknown, _opts: unknown, _cb: unknown) => {
+        throw new Error("Unexpected sync error");
+      }) as typeof execFile,
+    );
+
+    const result = await annotateBead(baseInput);
+    expect(result.annotated).toBe(false);
+    expect(result.error).toContain("Unexpected sync error");
+  });
+});
+
+// ── 6c. createEscalation ──
+
+describe("createEscalation", () => {
+  const baseInput: CreateEscalationInput = {
+    repoPath: REPO_PATH,
+    beadId: "bead-esc",
+    reason: "Retry exhaustion",
+    outcomes: [
+      {
+        beadId: "bead-esc",
+        workflowId: "wf-esc-1",
+        sessionId: "sess-esc-1",
+        startedAt: "2026-03-09T10:00:00.000Z",
+        completedAt: "2026-03-09T10:05:00.000Z",
+        durationMs: 300000,
+        totalCost: 2.5,
+        tokensInput: 5000,
+        tokensOutput: 2000,
+        result: { kind: "failed", error: "ECONNREFUSED", retryable: true },
+        audit: null,
+        attempt: 1,
+      },
+      {
+        beadId: "bead-esc",
+        workflowId: "wf-esc-2",
+        sessionId: "sess-esc-2",
+        startedAt: "2026-03-09T10:10:00.000Z",
+        completedAt: "2026-03-09T10:15:00.000Z",
+        durationMs: 300000,
+        totalCost: 3.0,
+        tokensInput: 6000,
+        tokensOutput: 2500,
+        result: { kind: "failed", error: "ECONNREFUSED", retryable: true },
+        audit: null,
+        attempt: 2,
+      },
+    ],
+    retryEntry: {
+      beadId: "bead-esc",
+      attempts: 2,
+      maxAttempts: 2,
+      lastAttemptAt: "2026-03-09T10:15:00.000Z",
+      lastError: "ECONNREFUSED",
+      lastResult: { kind: "failed", error: "ECONNREFUSED", retryable: true },
+      nextRetryAfter: "2026-03-09T10:15:30.000Z",
+      exhausted: true,
+    },
+  };
+
+  it("returns escalation bead ID on success", async () => {
+    mockExecFileSuccess(JSON.stringify({ id: "esc-bead-42" }));
+    const result = await createEscalation(baseInput);
+    expect(result.escalationBeadId).toBe("esc-bead-42");
+  });
+
+  it("passes correct args to bd create", async () => {
+    mockExecFileSuccess(JSON.stringify({ id: "esc-bead-1" }));
+    await createEscalation(baseInput);
+
+    const mock = vi.mocked(execFile);
+    const [, args] = mock.mock.calls[0] as [string, string[]];
+    expect(args[0]).toBe("create");
+    expect(args[1]).toContain("Escalation:");
+    expect(args[1]).toContain("bead-esc");
+    expect(args).toContain("--label");
+    expect(args).toContain("escalation");
+    expect(args).toContain("human-required");
+    expect(args).toContain("--json");
+  });
+
+  it("includes description with dispatch history", async () => {
+    mockExecFileSuccess(JSON.stringify({ id: "esc-bead-1" }));
+    await createEscalation(baseInput);
+
+    const mock = vi.mocked(execFile);
+    const [, args] = mock.mock.calls[0] as [string, string[]];
+    // Find the -d flag and its value
+    const descIdx = args.indexOf("-d");
+    expect(descIdx).toBeGreaterThan(-1);
+    const description = args[descIdx + 1];
+    expect(description).toContain("Escalation Summary");
+    expect(description).toContain("bead-esc");
+    expect(description).toContain("Retry exhaustion");
+    expect(description).toContain("Attempt 1");
+    expect(description).toContain("Attempt 2");
+    expect(description).toContain("Retry Ledger");
+    expect(description).toContain("$5.50"); // total cost 2.5 + 3.0
+  });
+
+  it("throws BeadsTransientError on CLI failure (for Temporal retry)", async () => {
+    mockExecFileFailure(1, "database locked");
+    await expect(createEscalation(baseInput)).rejects.toThrow(BeadsTransientError);
+  });
+
+  it("returns 'unknown' when created bead ID is missing from response", async () => {
+    mockExecFileSuccess(JSON.stringify({ title: "created but no id" }));
+    const result = await createEscalation(baseInput);
+    expect(result.escalationBeadId).toBe("unknown");
   });
 });
 

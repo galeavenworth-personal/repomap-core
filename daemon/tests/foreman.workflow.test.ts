@@ -505,6 +505,7 @@ describe("continue-as-new", () => {
 describe("retry and escalation", () => {
   it("records a failed dispatch in the retry ledger", async () => {
     let selectCalls = 0;
+    let annotateBeadCalls: Array<{ beadId: string; comment: string }> = [];
 
     setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
     setMockActivity("selectNextBead", () => {
@@ -523,6 +524,12 @@ describe("retry and escalation", () => {
     });
     setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
     setMockActivity("closeBead", () => ({ closed: true, error: null }));
+    setMockActivity("annotateBead", (input: unknown) => {
+      const inp = input as { beadId: string; comment: string };
+      annotateBeadCalls.push({ beadId: inp.beadId, comment: inp.comment });
+      return { annotated: true, error: null };
+    });
+    setMockActivity("createEscalation", () => ({ escalationBeadId: "esc-1" }));
 
     // Child workflow returns a retryable failure
     childResults = [
@@ -551,11 +558,17 @@ describe("retry and escalation", () => {
     expect(ledger[0].beadId).toBe("bead-fail");
     expect(ledger[0].attempts).toBe(1);
     expect(ledger[0].exhausted).toBe(false);
+
+    // Should have annotated the bead with the failure
+    expect(annotateBeadCalls.length).toBe(1);
+    expect(annotateBeadCalls[0].beadId).toBe("bead-fail");
+    expect(annotateBeadCalls[0].comment).toContain("failed");
   });
 
   it("escalates when a non-retryable failure occurs", async () => {
     let selectCalls = 0;
     let updateStatusCalls: Array<{ beadId: string; status: string }> = [];
+    let createEscalationCalls: Array<{ beadId: string; reason: string }> = [];
 
     setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
     setMockActivity("selectNextBead", () => {
@@ -575,6 +588,12 @@ describe("retry and escalation", () => {
     setMockActivity("updateBeadStatus", (_repoPath: unknown, beadId: unknown, status: unknown) => {
       updateStatusCalls.push({ beadId: beadId as string, status: status as string });
       return { updated: true, error: null };
+    });
+    setMockActivity("annotateBead", () => ({ annotated: true, error: null }));
+    setMockActivity("createEscalation", (input: unknown) => {
+      const inp = input as { beadId: string; reason: string };
+      createEscalationCalls.push({ beadId: inp.beadId, reason: inp.reason });
+      return { escalationBeadId: "esc-1" };
     });
 
     // Child workflow returns budget_exceeded (non-retryable)
@@ -600,6 +619,11 @@ describe("retry and escalation", () => {
     const unclaimCall = updateStatusCalls.find((c) => c.status === "ready");
     expect(unclaimCall).toBeDefined();
     expect(unclaimCall!.beadId).toBe("bead-nonretry");
+
+    // Should have created an escalation bead
+    expect(createEscalationCalls.length).toBe(1);
+    expect(createEscalationCalls[0].beadId).toBe("bead-nonretry");
+    expect(createEscalationCalls[0].reason).toContain("Budget exceeded");
 
     // Escalation counter should be incremented
     const args = continueAsNewArgs as unknown[];
@@ -765,9 +789,10 @@ describe("error handling", () => {
 // ── 14. Aborted dispatch ──
 
 describe("aborted dispatch", () => {
-  it("unclaims bead when child workflow is aborted", async () => {
+  it("unclaims bead and annotates when child workflow is aborted", async () => {
     let selectCalls = 0;
     let updateStatusCalls: Array<{ beadId: string; status: string }> = [];
+    let annotateBeadCalls: Array<{ beadId: string; comment: string }> = [];
 
     setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
     setMockActivity("selectNextBead", () => {
@@ -787,6 +812,11 @@ describe("aborted dispatch", () => {
     setMockActivity("updateBeadStatus", (_repoPath: unknown, beadId: unknown, status: unknown) => {
       updateStatusCalls.push({ beadId: beadId as string, status: status as string });
       return { updated: true, error: null };
+    });
+    setMockActivity("annotateBead", (input: unknown) => {
+      const inp = input as { beadId: string; comment: string };
+      annotateBeadCalls.push({ beadId: inp.beadId, comment: inp.comment });
+      return { annotated: true, error: null };
     });
 
     childResults = [
@@ -809,5 +839,364 @@ describe("aborted dispatch", () => {
       (c) => c.beadId === "bead-abort" && c.status === "ready",
     );
     expect(unclaimCall).toBeDefined();
+
+    // Should have annotated the bead with abort reason
+    expect(annotateBeadCalls.length).toBe(1);
+    expect(annotateBeadCalls[0].beadId).toBe("bead-abort");
+    expect(annotateBeadCalls[0].comment).toContain("aborted");
+  });
+});
+
+// ── 15. Outcome Reconciliation ──
+
+describe("outcome reconciliation", () => {
+  it("annotates bead on timeout and enters retry path", async () => {
+    let selectCalls = 0;
+    let annotateBeadCalls: Array<{ beadId: string; comment: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-timeout",
+          title: "Will timeout",
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "medium",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("annotateBead", (input: unknown) => {
+      const inp = input as { beadId: string; comment: string };
+      annotateBeadCalls.push({ beadId: inp.beadId, comment: inp.comment });
+      return { annotated: true, error: null };
+    });
+    setMockActivity("createEscalation", () => ({ escalationBeadId: "esc-1" }));
+
+    // Simulate a timeout result by returning a "failed" status with timeout error
+    // (AgentTaskResult doesn't have a "timeout" status; timeouts manifest as "failed"
+    // with timeout-containing error strings)
+    childResults = [
+      makeAgentResult({
+        status: "failed",
+        error: "timed out waiting for session completion",
+      }),
+    ];
+
+    const input = makeInput({ maxIterations: 3, maxRetriesPerBead: 2 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    // Should have annotated the bead
+    expect(annotateBeadCalls.length).toBe(1);
+    expect(annotateBeadCalls[0].beadId).toBe("bead-timeout");
+    expect(annotateBeadCalls[0].comment).toContain("failed");
+
+    // Should be in retry (not exhausted, retryable)
+    expect(continueAsNewCalled).toBe(true);
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    const ledger = carriedInput.carriedState!.retryLedger;
+    expect(ledger.length).toBe(1);
+    expect(ledger[0].beadId).toBe("bead-timeout");
+    expect(ledger[0].exhausted).toBe(false);
+    // Should NOT have escalated
+    expect(carriedInput.carriedState!.totalEscalations).toBe(0);
+  });
+
+  it("annotates and escalates on validation_failed after retries exhausted", async () => {
+    let selectCalls = 0;
+    let annotateBeadCalls: Array<{ beadId: string; comment: string }> = [];
+    let createEscalationCalls: Array<{ beadId: string; reason: string }> = [];
+    let updateStatusCalls: Array<{ beadId: string; status: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-valfail",
+          title: "Validation fail",
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", (_rp: unknown, beadId: unknown, status: unknown) => {
+      updateStatusCalls.push({ beadId: beadId as string, status: status as string });
+      return { updated: true, error: null };
+    });
+    setMockActivity("annotateBead", (input: unknown) => {
+      const inp = input as { beadId: string; comment: string };
+      annotateBeadCalls.push({ beadId: inp.beadId, comment: inp.comment });
+      return { annotated: true, error: null };
+    });
+    setMockActivity("createEscalation", (input: unknown) => {
+      const inp = input as { beadId: string; reason: string };
+      createEscalationCalls.push({ beadId: inp.beadId, reason: inp.reason });
+      return { escalationBeadId: "esc-valfail" };
+    });
+
+    // Validation failed result
+    childResults = [
+      makeAgentResult({
+        status: "validation_failed",
+        error: "punch card not satisfied",
+      }),
+    ];
+
+    // maxRetriesPerBead = 0 means max 1 attempt → immediately exhausted
+    const input = makeInput({ maxIterations: 3, maxRetriesPerBead: 0 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    // Should have annotated the bead
+    expect(annotateBeadCalls.length).toBe(1);
+    expect(annotateBeadCalls[0].beadId).toBe("bead-valfail");
+
+    // Should have created an escalation (retries exhausted)
+    expect(createEscalationCalls.length).toBe(1);
+    expect(createEscalationCalls[0].beadId).toBe("bead-valfail");
+    expect(createEscalationCalls[0].reason).toContain("Retry exhaustion");
+
+    // Bead should be unclaimed
+    const unclaimCall = updateStatusCalls.find(
+      (c) => c.beadId === "bead-valfail" && c.status === "ready",
+    );
+    expect(unclaimCall).toBeDefined();
+
+    // Counters
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    expect(carriedInput.carriedState!.totalEscalations).toBe(1);
+    expect(carriedInput.carriedState!.totalFailures).toBe(1);
+  });
+
+  it("annotates budget_exceeded bead and creates escalation", async () => {
+    let selectCalls = 0;
+    let annotateBeadCalls: Array<{ beadId: string; comment: string }> = [];
+    let createEscalationCalls: Array<{ beadId: string; reason: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-budget",
+          title: "Expensive bead",
+          priority: "P2",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "large",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("annotateBead", (input: unknown) => {
+      const inp = input as { beadId: string; comment: string };
+      annotateBeadCalls.push({ beadId: inp.beadId, comment: inp.comment });
+      return { annotated: true, error: null };
+    });
+    setMockActivity("createEscalation", (input: unknown) => {
+      const inp = input as { beadId: string; reason: string };
+      createEscalationCalls.push({ beadId: inp.beadId, reason: inp.reason });
+      return { escalationBeadId: "esc-budget" };
+    });
+
+    childResults = [
+      makeAgentResult({
+        status: "budget_exceeded",
+        totalCost: 15.0,
+        error: "Cost budget exceeded: $15.00 > $5.00",
+      }),
+    ];
+
+    const input = makeInput({ maxIterations: 3 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    // Should have annotated the bead with budget info
+    expect(annotateBeadCalls.length).toBe(1);
+    expect(annotateBeadCalls[0].beadId).toBe("bead-budget");
+    expect(annotateBeadCalls[0].comment).toContain("budget_exceeded");
+
+    // Should have escalated
+    expect(createEscalationCalls.length).toBe(1);
+    expect(createEscalationCalls[0].beadId).toBe("bead-budget");
+    expect(createEscalationCalls[0].reason).toContain("Budget exceeded");
+  });
+
+  it("does not annotate on successful completion", async () => {
+    let selectCalls = 0;
+    let annotateBeadCalls: Array<{ beadId: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-success",
+          title: "Clean success",
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("closeBead", () => ({ closed: true, error: null }));
+    setMockActivity("annotateBead", (input: unknown) => {
+      const inp = input as { beadId: string };
+      annotateBeadCalls.push({ beadId: inp.beadId });
+      return { annotated: true, error: null };
+    });
+
+    childResults = [makeAgentResult()]; // completed
+
+    const input = makeInput({ maxIterations: 3 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+    }
+
+    // Should NOT have annotated (success path skips annotation)
+    expect(annotateBeadCalls.length).toBe(0);
+  });
+
+  it("retryable failure with exhausted retries creates escalation", async () => {
+    let selectCalls = 0;
+    let createEscalationCalls: Array<{ beadId: string; reason: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-exhausted-retry",
+          title: "Exhausted retries",
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("annotateBead", () => ({ annotated: true, error: null }));
+    setMockActivity("createEscalation", (input: unknown) => {
+      const inp = input as { beadId: string; reason: string };
+      createEscalationCalls.push({ beadId: inp.beadId, reason: inp.reason });
+      return { escalationBeadId: "esc-exhausted" };
+    });
+
+    // Retryable failure but maxRetries=0 → exhausted immediately
+    childResults = [
+      makeAgentResult({
+        status: "failed",
+        error: "ECONNREFUSED: connection refused",
+      }),
+    ];
+
+    const input = makeInput({ maxIterations: 3, maxRetriesPerBead: 0 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    // Should have escalated because retries are exhausted
+    expect(createEscalationCalls.length).toBe(1);
+    expect(createEscalationCalls[0].beadId).toBe("bead-exhausted-retry");
+    expect(createEscalationCalls[0].reason).toContain("Retry exhaustion");
+
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    expect(carriedInput.carriedState!.totalEscalations).toBe(1);
+    expect(carriedInput.carriedState!.totalFailures).toBe(1);
+  });
+
+  it("non-retryable failed dispatch skips retry and escalates immediately", async () => {
+    let selectCalls = 0;
+    let createEscalationCalls: Array<{ beadId: string; reason: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-nonretry-fail",
+          title: "Structural failure",
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("annotateBead", () => ({ annotated: true, error: null }));
+    setMockActivity("createEscalation", (input: unknown) => {
+      const inp = input as { beadId: string; reason: string };
+      createEscalationCalls.push({ beadId: inp.beadId, reason: inp.reason });
+      return { escalationBeadId: "esc-nonretry" };
+    });
+
+    // Non-retryable failure (structural error, no timeout/network keywords)
+    childResults = [
+      makeAgentResult({
+        status: "failed",
+        error: "invalid prompt: missing required context",
+      }),
+    ];
+
+    // Even with retries available, non-retryable should escalate immediately
+    const input = makeInput({ maxIterations: 3, maxRetriesPerBead: 5 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    // Should have escalated immediately (non-retryable)
+    expect(createEscalationCalls.length).toBe(1);
+    expect(createEscalationCalls[0].reason).toContain("Non-retryable");
   });
 });

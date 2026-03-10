@@ -352,6 +352,46 @@ function buildStatusSnapshot(state: ForemanState): ForemanStatus {
 }
 
 /**
+ * Build a human-readable annotation string for a dispatch outcome.
+ * Used by outcome reconciliation to annotate beads with failure/abort/budget context.
+ */
+function buildOutcomeAnnotation(result: DispatchResult, outcome: DispatchOutcome): string {
+  const parts: string[] = [
+    `[foreman] Dispatch outcome: ${result.kind}`,
+    `Attempt: ${outcome.attempt}`,
+    `Duration: ${outcome.durationMs}ms`,
+    `Cost: $${outcome.totalCost.toFixed(2)}`,
+    `Workflow: ${outcome.workflowId}`,
+  ];
+
+  switch (result.kind) {
+    case "failed":
+      parts.push(`Error: ${result.error}`);
+      parts.push(`Retryable: ${result.retryable}`);
+      break;
+    case "timeout":
+      parts.push(`Elapsed: ${result.elapsedMs}ms / Timeout: ${result.timeoutMs}ms`);
+      break;
+    case "validation_failed":
+      if (result.missing.length > 0) parts.push(`Missing: ${result.missing.join(", ")}`);
+      if (result.violations.length > 0) parts.push(`Violations: ${result.violations.join(", ")}`);
+      break;
+    case "budget_exceeded":
+      parts.push(`Actual cost: $${result.actualCost.toFixed(2)} / Budget: $${result.budgetUsd.toFixed(2)}`);
+      break;
+    case "aborted":
+      parts.push(`Reason: ${result.reason}`);
+      break;
+  }
+
+  if (outcome.audit) {
+    parts.push(`Audit verdict: ${outcome.audit.verdict} (${outcome.audit.findingCount} findings)`);
+  }
+
+  return parts.join(" | ");
+}
+
+/**
  * Build AgentTaskInput from a DispatchPlan + ForemanInput.
  * ADR Section 11.2.
  */
@@ -577,7 +617,13 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
       state.currentWorkflowId = null;
       state.totalDispatches++;
 
-      // -- Phase: Handle Outcome --
+      // -- Phase: Outcome Reconciliation --
+      // Maps durable child workflow outcomes into correct bead mutations.
+      // Rules:
+      //   completed       → bd close (happy path)
+      //   failed/timeout  → annotate + retry or escalate
+      //   aborted         → annotate + leave open
+      //   validation_failed/budget_exceeded → annotate + escalate or leave open
       switch (dispatchResult.kind) {
         case "completed": {
           state.phase = "completing";
@@ -595,6 +641,15 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
         case "timeout":
         case "validation_failed": {
           state.phase = "failing";
+
+          // Annotate the bead with failure context for audit trail
+          const failAnnotation = buildOutcomeAnnotation(dispatchResult, outcome);
+          await durable.annotateBead({
+            repoPath: config.repoPath,
+            beadId: candidate.beadId,
+            comment: failAnnotation,
+          });
+
           const retryEntry = updateRetryLedger(
             state.retryLedger,
             candidate.beadId,
@@ -610,6 +665,26 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
             // the bead will be skipped by selectNextBead until backoff expires
           } else {
             state.phase = "escalating";
+
+            // Collect all outcomes for this bead across attempts
+            const beadOutcomes = state.recentOutcomes.filter(
+              (o) => o.beadId === candidate!.beadId,
+            );
+
+            // Determine escalation reason
+            const escalationReason = retryEntry.exhausted
+              ? "Retry exhaustion"
+              : `Non-retryable ${dispatchResult.kind}`;
+
+            // Create escalation bead for human intervention
+            await durable.createEscalation({
+              repoPath: config.repoPath,
+              beadId: candidate.beadId,
+              reason: escalationReason,
+              outcomes: beadOutcomes,
+              retryEntry,
+            });
+
             // Unclaim the bead so human can re-trigger
             await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
             state.totalFailures++;
@@ -620,6 +695,39 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
 
         case "budget_exceeded": {
           state.phase = "escalating";
+
+          // Annotate with budget exceeded details
+          const budgetAnnotation = buildOutcomeAnnotation(dispatchResult, outcome);
+          await durable.annotateBead({
+            repoPath: config.repoPath,
+            beadId: candidate.beadId,
+            comment: budgetAnnotation,
+          });
+
+          // Collect all outcomes for this bead
+          const beadOutcomes = state.recentOutcomes.filter(
+            (o) => o.beadId === candidate!.beadId,
+          );
+
+          // Budget exceeded is non-retryable — always escalate
+          // Build a synthetic retry entry for the escalation
+          const budgetRetryEntry = updateRetryLedger(
+            state.retryLedger,
+            candidate.beadId,
+            dispatchResult,
+            config.maxRetriesPerBead,
+            config.retryBackoffMs,
+            dispatchCompletedAt,
+          );
+
+          await durable.createEscalation({
+            repoPath: config.repoPath,
+            beadId: candidate.beadId,
+            reason: "Budget exceeded",
+            outcomes: beadOutcomes,
+            retryEntry: budgetRetryEntry,
+          });
+
           await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
           state.totalFailures++;
           state.totalEscalations++;
@@ -627,6 +735,14 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
         }
 
         case "aborted": {
+          // Annotate with abort reason, leave bead open for manual intervention
+          const abortAnnotation = buildOutcomeAnnotation(dispatchResult, outcome);
+          await durable.annotateBead({
+            repoPath: config.repoPath,
+            beadId: candidate.beadId,
+            comment: abortAnnotation,
+          });
+
           await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
           break;
         }

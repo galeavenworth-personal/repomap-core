@@ -19,10 +19,14 @@ import { resolve } from "node:path";
 import { log } from "@temporalio/activity";
 
 import type {
+  AnnotateBeadInput,
+  AnnotateBeadOutput,
   BeadCandidate,
   CheckStackHealthInput,
   CloseBeadInput,
   CloseBeadOutput,
+  CreateEscalationInput,
+  CreateEscalationOutput,
   HealthCheckResult,
   SelectNextBeadInput,
   SubsystemHealth,
@@ -637,6 +641,7 @@ export async function updateBeadStatus(
  * Close a bead after durable success.
  *
  * Runs `bd close <beadId>` in the repository directory.
+ * Idempotent: if the bead is already closed, treats as success.
  *
  * ADR Section 5.6.
  */
@@ -652,11 +657,131 @@ export async function closeBead(
     return { closed: true, error: null };
   } catch (e) {
     if (e instanceof BeadsTransientError) {
+      // Idempotency: if bead is already closed, treat as success
+      const msg = e.message.toLowerCase();
+      if (msg.includes("already closed") || msg.includes("already_closed")) {
+        log.info(`closeBead: ${beadId} already closed — treating as success`);
+        return { closed: true, error: null };
+      }
       log.warn(`closeBead: ${beadId} failed (transient): ${e.message}`);
       throw e; // Let Temporal retry
     }
     const msg = e instanceof Error ? e.message : String(e);
     log.warn(`closeBead: ${beadId} failed: ${msg}`);
     return { closed: false, error: msg };
+  }
+}
+
+/**
+ * Annotate a bead with a comment preserving the audit trail.
+ *
+ * Runs `bd comments add <beadId> "<comment>"` in the repository directory.
+ * Used to record outcome reasons (failure, timeout, budget exceeded, etc.)
+ * on beads that are NOT being closed.
+ *
+ * Throws BeadsTransientError on CLI failure (Temporal will retry).
+ */
+export async function annotateBead(
+  input: AnnotateBeadInput,
+): Promise<AnnotateBeadOutput> {
+  const { repoPath, beadId, comment } = input;
+
+  log.info(`annotateBead: bd comments add ${beadId}`);
+  try {
+    await execBd(repoPath, ["comments", "add", beadId, comment]);
+    log.info(`annotateBead: ${beadId} annotated successfully`);
+    return { annotated: true, error: null };
+  } catch (e) {
+    if (e instanceof BeadsTransientError) {
+      log.warn(`annotateBead: ${beadId} failed (transient): ${e.message}`);
+      throw e; // Let Temporal retry
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    log.warn(`annotateBead: ${beadId} failed: ${msg}`);
+    return { annotated: false, error: msg };
+  }
+}
+
+/**
+ * Create an escalation bead for human intervention.
+ *
+ * Runs `bd create "Escalation: <title>" --label escalation --label human-required`
+ * with a structured description body. This is the foreman's mechanism for
+ * requesting human help when autonomous recovery has failed.
+ *
+ * ADR Section 5.7, Escalation Contract.
+ */
+export async function createEscalation(
+  input: CreateEscalationInput,
+): Promise<CreateEscalationOutput> {
+  const { repoPath, beadId, reason, outcomes, retryEntry } = input;
+
+  const title = `Escalation: ${beadId} — ${reason}`;
+  const totalCost = outcomes.reduce((sum, o) => sum + o.totalCost, 0);
+
+  // Build structured description body
+  const lines: string[] = [
+    `## Escalation Summary`,
+    ``,
+    `- **Original bead:** ${beadId}`,
+    `- **Exception class:** ${reason}`,
+    `- **Total attempts:** ${retryEntry.attempts}`,
+    `- **Total cost incurred:** $${totalCost.toFixed(2)}`,
+    ``,
+    `## Dispatch History`,
+    ``,
+  ];
+
+  for (const outcome of outcomes) {
+    lines.push(`### Attempt ${outcome.attempt}`);
+    lines.push(`- **Started:** ${outcome.startedAt}`);
+    lines.push(`- **Duration:** ${outcome.durationMs}ms`);
+    lines.push(`- **Cost:** $${outcome.totalCost.toFixed(2)}`);
+    lines.push(`- **Result:** ${outcome.result.kind}`);
+    if ("error" in outcome.result) {
+      lines.push(`- **Error:** ${(outcome.result as { error: string }).error}`);
+    }
+    lines.push(`- **Session ID:** ${outcome.sessionId ?? "n/a"}`);
+    lines.push(`- **Workflow ID:** ${outcome.workflowId}`);
+    lines.push(``);
+  }
+
+  lines.push(`## Retry Ledger`);
+  lines.push(`- **Max attempts:** ${retryEntry.maxAttempts}`);
+  lines.push(`- **Last error:** ${retryEntry.lastError}`);
+  lines.push(`- **Exhausted:** ${retryEntry.exhausted ? "yes" : "no"}`);
+
+  const description = lines.join("\n");
+
+  log.info(`createEscalation: creating escalation bead for ${beadId}`);
+  try {
+    const result = await execBd(repoPath, [
+      "create",
+      title,
+      "--label", "escalation",
+      "--label", "human-required",
+      "-d", description,
+      "--json",
+    ]);
+
+    // Parse the created bead ID from JSON output
+    const parsed = parseBdJson<{ id?: string }>(result.stdout, "create escalation");
+    const escalationBeadId = parsed.id ?? "unknown";
+
+    log.info(`createEscalation: created ${escalationBeadId} for ${beadId}`);
+    return { escalationBeadId };
+  } catch (e) {
+    if (e instanceof BeadsTransientError) {
+      log.warn(`createEscalation: ${beadId} failed (transient): ${e.message}`);
+      throw e; // Let Temporal retry
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    log.error(`createEscalation: ${beadId} failed: ${msg}`);
+    // On contract error, still try to return something useful
+    throw new BeadsTransientError(
+      `createEscalation failed: ${msg}`,
+      null,
+      msg,
+    );
   }
 }
