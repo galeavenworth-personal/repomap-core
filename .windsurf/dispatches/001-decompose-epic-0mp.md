@@ -77,6 +77,42 @@ After decomposition, plant-manager is dispatched again in execution mode:
 - One commit per bead on the `repomap-core-0mp` branch
 - Branch becomes the PR when the epic is complete
 
-## Results
+## Results (Attempt 2 — SUCCESS)
 
-_(to be filled after dispatch completes)_
+**Session:** `ses_32a5ce0b9ffeXLCdDPtOTx7XSF`
+**Duration:** 660s (11 minutes)
+**Children:** 3 (discover → explore → prepare, all architect mode)
+**Child sessions:**
+- `ses_32a5c3aceffe57uS8U23te9NPB` (discover)
+- `ses_32a5a4600ffey8jV5EVlZDmjAa` (explore)
+- `ses_32a577cd1ffeiKZ047Y3rBLMuD` (prepare)
+
+### Minted Beads (10 new, execution order by dependency)
+
+| Bead | P | Title | Depends On |
+|------|---|-------|------------|
+| 0mp.1 | P1 | Foreman architecture and control contracts | (none — pre-existing) |
+| 0mp.10 | P1 | Define foreman shared contracts and state model | (none) |
+| 0mp.11 | P1 | Implement foreman Beads activities | 0mp.10 |
+| 0mp.12 | P1 | Implement minimal foreman health gate activities | 0mp.10 |
+| 0mp.13 | P1 | Build the core foreman workflow loop | 0mp.10, 0mp.11, 0mp.12 |
+| 0mp.14 | P1 | Add durable completion and bead outcome reconciliation | 0mp.13 |
+| 0mp.17 | P1 | Wire foreman into Temporal worker exports | 0mp.13 |
+| 0mp.19 | P1 | Add foreman workflow happy-path and control tests | 0mp.13 |
+| 0mp.15 | P2 | Implement foreman exception and approval handling | 0mp.13 |
+| 0mp.16 | P2 | Add foreman operator CLI | 0mp.13 |
+| 0mp.18 | P2 | Add foreman activity contract tests | (none) |
+
+### Graph Quality Assessment
+
+- **Delegation pattern:** ✅ All 3 phases delegated to architect children
+- **Dependency DAG:** ✅ Clean, no cycles. 0mp.10 (types) → 0mp.11/12 (activities) → 0mp.13 (workflow) → 0mp.14-19 (extensions)
+- **Bead descriptions:** ✅ Each bead includes file paths, acceptance criteria, verification commands
+- **Scope discipline:** ✅ All beads within epic acceptance criteria
+- **First ready bead:** `0mp.1` (architecture doc), then `0mp.10` (types/contracts)
+
+### Attempt 1 (FAILED)
+
+The first attempt used a workflow that told the plant-manager to do all thinking itself.
+It created 7 beads in ~4 minutes without child delegation. Beads were deleted, workflow
+rewritten with proper discover/explore/prepare delegation, and re-dispatched.
