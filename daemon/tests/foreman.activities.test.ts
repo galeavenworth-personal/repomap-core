@@ -257,6 +257,23 @@ describe("parseBdJson", () => {
       expect(err.retryable).toBe(false);
     }
   });
+
+  it("throws BeadsContractError on HTML error page output", () => {
+    expect(() =>
+      parseBdJson("<html><body>502 Bad Gateway</body></html>", "test"),
+    ).toThrow(BeadsContractError);
+  });
+
+  it("throws BeadsContractError on truncated JSON array", () => {
+    expect(() =>
+      parseBdJson('[{"id":"bead-1"', "test"),
+    ).toThrow(BeadsContractError);
+  });
+
+  it("parses valid JSON null as a value", () => {
+    const result = parseBdJson<null>("null", "test");
+    expect(result).toBeNull();
+  });
 });
 
 // ── 3. selectNextBead ──
@@ -415,6 +432,49 @@ describe("selectNextBead", () => {
       BeadsTransientError,
     );
   });
+
+  it("throws BeadsContractError when bd returns malformed JSON", async () => {
+    mockExecFileSuccess("<html>502 Bad Gateway</html>");
+    await expect(selectNextBead(baseInput)).rejects.toThrow(
+      BeadsContractError,
+    );
+  });
+
+  it("throws BeadsContractError (not transient) for truncated JSON", async () => {
+    mockExecFileSuccess('[{"id":"bead-1","title":"Trun');
+    try {
+      await selectNextBead(baseInput);
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(BeadsContractError);
+      expect(e).not.toBeInstanceOf(BeadsTransientError);
+      expect((e as BeadsContractError).retryable).toBe(false);
+    }
+  });
+
+  it("throws BeadsTransientError when bd command times out", async () => {
+    mockExecFileTimeout();
+    try {
+      await selectNextBead(baseInput);
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(BeadsTransientError);
+      expect((e as BeadsTransientError).retryable).toBe(true);
+      expect((e as BeadsTransientError).message).toContain("timed out");
+    }
+  });
+
+  it("preserves selection order for equal priorities (stability)", async () => {
+    const output = makeBdReadyOutput([
+      { id: "bead-a", title: "First P1", priority: "P1" },
+      { id: "bead-b", title: "Second P1", priority: "P1" },
+      { id: "bead-c", title: "Third P1", priority: "P1" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const result = await selectNextBead(baseInput);
+    expect(result!.beadId).toBe("bead-a");
+  });
 });
 
 // ── 4. getBeadDetail ──
@@ -508,6 +568,30 @@ describe("updateBeadStatus", () => {
       updateBeadStatus(REPO_PATH, "bead-1", "in_progress"),
     ).rejects.toThrow(BeadsTransientError);
   });
+
+  it("returns updated=false with error on unexpected (non-transient) error", async () => {
+    const mock = vi.mocked(execFile);
+    mock.mockImplementation(
+      ((_file: unknown, _args: unknown, _opts: unknown, _cb: unknown) => {
+        throw new Error("Unexpected sync exception");
+      }) as typeof execFile,
+    );
+
+    const result = await updateBeadStatus(REPO_PATH, "bead-1", "in_progress");
+    expect(result.updated).toBe(false);
+    expect(result.error).toContain("Unexpected sync exception");
+  });
+
+  it("classifies CLI timeout as transient error", async () => {
+    mockExecFileTimeout();
+    try {
+      await updateBeadStatus(REPO_PATH, "bead-1", "in_progress");
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(BeadsTransientError);
+      expect((e as BeadsTransientError).retryable).toBe(true);
+    }
+  });
 });
 
 // ── 6. closeBead ──
@@ -555,6 +639,31 @@ describe("closeBead", () => {
 
   it("treats already-closed bead as success (idempotent)", async () => {
     mockExecFileFailure(1, "already closed");
+    const result = await closeBead(baseInput);
+    expect(result.closed).toBe(true);
+    expect(result.error).toBeNull();
+  });
+
+  it("returns closed=false with error on unexpected (non-transient) error", async () => {
+    const mock = vi.mocked(execFile);
+    mock.mockImplementation(
+      ((_file: unknown, _args: unknown, _opts: unknown, _cb: unknown) => {
+        throw new Error("Unexpected sync exception in close");
+      }) as typeof execFile,
+    );
+
+    const result = await closeBead(baseInput);
+    expect(result.closed).toBe(false);
+    expect(result.error).toContain("Unexpected sync exception in close");
+  });
+
+  it("classifies CLI timeout as transient (retried by Temporal)", async () => {
+    mockExecFileTimeout();
+    await expect(closeBead(baseInput)).rejects.toThrow(BeadsTransientError);
+  });
+
+  it("treats already_closed (underscore variant) as success", async () => {
+    mockExecFileFailure(1, "already_closed");
     const result = await closeBead(baseInput);
     expect(result.closed).toBe(true);
     expect(result.error).toBeNull();
@@ -1057,5 +1166,71 @@ describe("checkStackHealth", () => {
     expect(result.subsystems.dolt.latencyMs).toBeNull();
     expect(result.subsystems.git.latencyMs).toBeNull();
     expect(result.subsystems.beads.latencyMs).toBeNull();
+  });
+
+  it("returns overall 'pass' and beads 'up' when bd returns empty queue", async () => {
+    mockFetchSuccess();
+    mockTcpSuccess();
+    mockExecFileSequence([
+      { stdout: "" },
+      { stdout: "[]" },
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    expect(result.overall).toBe("pass");
+    expect(result.subsystems.beads.status).toBe("up");
+    expect(result.subsystems.beads.message).toContain("empty queue");
+  });
+
+  it("returns beads 'degraded' when bd returns exit 0 but invalid JSON", async () => {
+    mockFetchSuccess();
+    mockTcpSuccess();
+    mockExecFileSequence([
+      { stdout: "" },
+      { stdout: "not-json-at-all" },  // exit 0 but garbage output
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    expect(result.subsystems.beads.status).toBe("degraded");
+    expect(result.subsystems.beads.message).toContain("invalid JSON");
+  });
+
+  it("returns overall 'degraded' when only beads is degraded (no 'down')", async () => {
+    mockFetchSuccess();
+    mockTcpSuccess();
+    mockExecFileSequence([
+      { stdout: "" },
+      { stdout: "not-json" },  // causes beads to be degraded
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    // No subsystem is "down", but beads is "degraded"
+    expect(result.subsystems.beads.status).toBe("degraded");
+    expect(result.subsystems.kiloServe.status).toBe("up");
+    expect(result.subsystems.dolt.status).toBe("up");
+    expect(result.subsystems.git.status).toBe("up");
+    expect(result.subsystems.temporal.status).toBe("up");
+    expect(result.overall).toBe("degraded");
+  });
+
+  it("returns blocked reasons via subsystem messages when components fail", async () => {
+    mockFetchFailure("ECONNREFUSED");
+    mockTcpFailure("ECONNREFUSED");
+    mockExecFileSequence([
+      { stdout: "" },
+      { stdout: "[]" },
+    ]);
+
+    const result = await checkStackHealth(baseInput);
+
+    expect(result.overall).toBe("fail");
+    // Verify failure reasons are present in messages
+    expect(result.subsystems.kiloServe.message).toBeTruthy();
+    expect(result.subsystems.kiloServe.message).toContain("unreachable");
+    expect(result.subsystems.dolt.message).toBeTruthy();
+    expect(result.subsystems.dolt.message).toContain("ECONNREFUSED");
   });
 });
