@@ -15,6 +15,7 @@
 import { NativeConnection, Worker } from "@temporalio/worker";
 import * as activities from "./activities.js";
 import * as depWatchActivities from "./dep-watch.activities.js";
+import * as foremanActivities from "./foreman.activities.js";
 
 export const TASK_QUEUE = "agent-tasks";
 
@@ -31,7 +32,7 @@ async function main() {
     namespace,
     taskQueue: TASK_QUEUE,
     workflowsPath: new URL("./all-workflows.ts", import.meta.url).pathname,
-    activities: { ...activities, ...depWatchActivities },
+    activities: { ...activities, ...depWatchActivities, ...foremanActivities },
     maxConcurrentActivityTaskExecutions: 10,
     maxConcurrentWorkflowTaskExecutions: 5,
   });
