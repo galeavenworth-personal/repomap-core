@@ -5,7 +5,7 @@
  * bundled into a single deterministic sandbox.
  */
 
-export { agentTaskWorkflow, abortSignal, statusQuery } from "./workflows.js";
+export { agentTaskWorkflow, abortSignal, progressSignal, statusQuery } from "./workflows.js";
 export {
   dependencyWatchWorkflow,
   reportQuery,

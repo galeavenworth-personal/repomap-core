@@ -24,6 +24,14 @@ export interface DoltConfig {
 
 export interface DoltWriter {
   connect(): Promise<void>;
+  writeRawEvent(event: {
+    sourceHash: string;
+    sessionId: string;
+    eventType: string;
+    eventTs?: Date;
+    observedAt: Date;
+    payloadJson: string;
+  }): Promise<void>;
   writePunch(punch: {
     taskId: string;
     punchType: string;
@@ -111,6 +119,20 @@ export function createDoltWriter(config: DoltConfig): DoltWriter {
 
       // Ensure telemetry tables exist
       try {
+        await connection.execute(`
+          CREATE TABLE IF NOT EXISTS raw_sse_events (
+            source_hash CHAR(64) NOT NULL PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            event_type VARCHAR(100) NOT NULL,
+            event_ts DATETIME DEFAULT NULL,
+            observed_at DATETIME NOT NULL,
+            payload_json LONGTEXT NOT NULL,
+            INDEX idx_session (session_id),
+            INDEX idx_event_type (event_type),
+            INDEX idx_event_ts (event_ts),
+            INDEX idx_observed_at (observed_at)
+          )
+        `);
         await connection.execute(`
           CREATE TABLE IF NOT EXISTS sessions (
             session_id VARCHAR(128) NOT NULL PRIMARY KEY,
@@ -209,6 +231,27 @@ export function createDoltWriter(config: DoltConfig): DoltWriter {
           }
         }
       }
+    },
+
+    async writeRawEvent(event) {
+      if (!connection) throw new Error("Not connected to Dolt");
+      await connection.execute(
+        `INSERT INTO raw_sse_events (
+          source_hash, session_id, event_type, event_ts, observed_at, payload_json
+        )
+        SELECT ?, ?, ?, ?, ?, ?
+        FROM DUAL
+        WHERE NOT EXISTS (SELECT 1 FROM raw_sse_events WHERE source_hash = ?)`,
+        [
+          event.sourceHash,
+          event.sessionId,
+          event.eventType,
+          event.eventTs ?? null,
+          event.observedAt,
+          event.payloadJson,
+          event.sourceHash,
+        ]
+      );
     },
 
     async writePunch(punch) {

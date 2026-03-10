@@ -1,5 +1,6 @@
 /**
- * Governor — Session loop detection, kill switch, diagnosis, and fitter dispatch.
+ * Governor — Session loop detection, kill switch, diagnosis, fitter dispatch,
+ * and cost budget enforcement.
  *
  * The governor is the enforcement mechanism that detects runaway sessions
  * and dispatches line fitters to recover. It operates on the punch card
@@ -7,6 +8,7 @@
  *
  * Architecture:
  *   Punch Stream → LoopDetector → SessionKiller → DiagnosisEngine → FitterDispatch
+ *   Dolt Punches → CostBudgetMonitor → GovernorIntervention → SessionKiller
  */
 
 export { LoopDetector, type LoopDetectorOptions } from "./loop-detector.js";
@@ -36,6 +38,32 @@ export {
   SubtaskVerifier,
 } from "./subtask-verifier.js";
 export {
+  BaseDoltClient,
+  toNumber,
+  parseEnvFloat,
+  parseEnvInt,
+  type MysqlNumeric,
+  type CostAggRow,
+  type ChildRow,
+} from "./dolt-utils.js";
+export {
+  CostBudgetMonitor,
+  loadCostBudgetConfig,
+  DEFAULT_COST_BUDGET_CONFIG,
+  type CostBudgetConfig,
+  type SessionCostSnapshot,
+  type TreeCostSnapshot,
+  type CostBudgetCheckResult,
+  type CostBreach,
+  type GovernorIntervention,
+  type BudgetStatus,
+} from "./cost-budget-monitor.js";
+export {
+  SessionAudit,
+  loadAuditConfig,
+  DEFAULT_AUDIT_CONFIG,
+} from "./session-audit.js";
+export {
   type LoopClassification,
   type LoopDetection,
   type SessionMetrics,
@@ -51,4 +79,9 @@ export {
   type ValidationResult,
   type ToolAdherenceResult,
   type SubtaskValidation,
+  type AuditSeverity,
+  type AuditAnomalyType,
+  type AuditFinding,
+  type SessionAuditConfig,
+  type SessionAuditReport,
 } from "./types.js";

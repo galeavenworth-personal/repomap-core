@@ -31,7 +31,7 @@ const {
   startToCloseTimeout: "35 minutes",
   heartbeatTimeout: "2 minutes",
   retry: {
-    maximumAttempts: 3,
+    maximumAttempts: 1,
     initialInterval: "5s",
     maximumInterval: "60s",
     backoffCoefficient: 2,
@@ -58,8 +58,20 @@ const quickActivities = proxyActivities<typeof activities>({
 // ── Signals ──
 
 export const abortSignal = defineSignal("abort");
+export const progressSignal = defineSignal<[AgentTaskHeartbeatProgress]>("progress");
 
 // ── Queries ──
+
+export interface AgentTaskLeafStatus {
+  sessionId: string | null;
+  label: string | null;
+  phase: "thinking" | "tools_running" | "working" | "idle" | "unknown";
+  runningTools: number;
+  completedTools: number;
+  lastToolName: string | null;
+  done: boolean;
+  thinking: boolean;
+}
 
 export interface AgentTaskStatus {
   phase: string;
@@ -67,7 +79,29 @@ export interface AgentTaskStatus {
   toolCalls: number;
   totalParts: number;
   elapsedMs: number;
+  childCount: number;
+  totalCost: number;
+  tokensInput: number;
+  tokensOutput: number;
+  idleConfirmations: number;
+  requiredIdleConfirmations: number;
+  lastProgressAt: string | null;
+  leaf: AgentTaskLeafStatus;
   error: string | null;
+}
+
+export interface AgentTaskHeartbeatProgress {
+  elapsedMs: number;
+  totalParts: number;
+  toolCalls: number;
+  childCount: number;
+  totalCost: number;
+  tokensInput: number;
+  tokensOutput: number;
+  idleConfirmations: number;
+  requiredIdleConfirmations: number;
+  lastProgressAt: string;
+  activeLeaf: activities.ActiveLeafProgress;
 }
 
 export const statusQuery = defineQuery<AgentTaskStatus>("status");
@@ -88,10 +122,47 @@ export interface AgentTaskInput {
   cardId?: string;
   /** Task ID for punch card validation (defaults to sessionId). */
   punchCardTaskId?: string;
+  /** When true, only enforced punch card requirements block completion. */
+  enforcedOnly?: boolean;
+  /** Cost budget overrides for governor enforcement.
+   *  When doltConfig is provided, cost budget checks run automatically during polling. */
+  costBudget?: {
+    maxSessionCostUsd?: number;
+    maxSessionSteps?: number;
+    maxTreeCostUsd?: number;
+  };
+  /** Disable cost budget enforcement (default: false). */
+  disableCostBudget?: boolean;
+  /** Post-workflow session audit configuration.
+   *  When doltConfig is provided and audit is not disabled, runs automatically after workflow completion. */
+  auditConfig?: {
+    cheapZonePercentileUsd?: number;
+    costAnomalyThresholdUsd?: number;
+    maxExpectedSteps?: number;
+    maxPunchGapSeconds?: number;
+    expectedEditRange?: [number, number];
+    requiredQualityGates?: string[];
+  };
+  /** Disable post-workflow session audit (default: false). */
+  disableAudit?: boolean;
+}
+
+/** Summary of a post-workflow session audit. */
+export interface AuditSummary {
+  verdict: "pass" | "warn" | "fail";
+  findingCount: number;
+  criticalCount: number;
+  warningCount: number;
+  infoCount: number;
+  findings: Array<{
+    type: string;
+    severity: string;
+    message: string;
+  }>;
 }
 
 export interface AgentTaskResult {
-  status: "completed" | "aborted" | "failed" | "validation_failed";
+  status: "completed" | "aborted" | "failed" | "validation_failed" | "budget_exceeded";
   sessionId: string | null;
   totalParts: number;
   toolCalls: number;
@@ -100,6 +171,8 @@ export interface AgentTaskResult {
   tokensInput: number;
   tokensOutput: number;
   error: string | null;
+  /** Post-workflow session audit summary (null if audit was skipped or not configured). */
+  audit: AuditSummary | null;
 }
 
 // ── Workflow ──
@@ -121,12 +194,50 @@ export async function agentTaskWorkflow(
     toolCalls: 0,
     totalParts: 0,
     elapsedMs: 0,
+    childCount: 0,
+    totalCost: 0,
+    tokensInput: 0,
+    tokensOutput: 0,
+    idleConfirmations: 0,
+    requiredIdleConfirmations: 6,
+    lastProgressAt: null,
+    leaf: {
+      sessionId: null,
+      label: null,
+      phase: "unknown",
+      runningTools: 0,
+      completedTools: 0,
+      lastToolName: null,
+      done: false,
+      thinking: false,
+    },
     error: null,
   };
 
   // Register signal/query handlers
   setHandler(abortSignal, () => {
     aborted = true;
+  });
+  setHandler(progressSignal, (progress) => {
+    state.totalParts = progress.totalParts;
+    state.toolCalls = progress.toolCalls;
+    state.childCount = progress.childCount;
+    state.totalCost = progress.totalCost;
+    state.tokensInput = progress.tokensInput;
+    state.tokensOutput = progress.tokensOutput;
+    state.idleConfirmations = progress.idleConfirmations;
+    state.requiredIdleConfirmations = progress.requiredIdleConfirmations;
+    state.lastProgressAt = progress.lastProgressAt;
+    state.leaf = {
+      sessionId: progress.activeLeaf.sessionId,
+      label: progress.activeLeaf.label,
+      phase: progress.activeLeaf.phase,
+      runningTools: progress.activeLeaf.runningTools,
+      completedTools: progress.activeLeaf.completedTools,
+      lastToolName: progress.activeLeaf.lastToolName,
+      done: progress.activeLeaf.done,
+      thinking: progress.activeLeaf.thinking,
+    };
   });
   setHandler(statusQuery, () => ({
     ...state,
@@ -162,19 +273,39 @@ export async function agentTaskWorkflow(
       config,
       sessionId,
       input.pollIntervalMs ?? 10_000,
-      input.timeoutMs ?? 1_800_000,
+      input.timeoutMs ?? 7_200_000,
     );
 
-    state.totalParts = result.totalParts;
-    state.toolCalls = result.toolCalls;
+    applyAgentResult(state, result);
 
-    // Step 6: Validate punch card (if configured)
+    // Step 6: Post-completion budget check (if Dolt config provided and budget not disabled).
+    // NOTE: This is intentional post-completion budget validation — the check runs
+    // after pollUntilDone returns, not during the poll loop. Real-time budget
+    // enforcement during polling is a future enhancement (requires the monitor
+    // activity to run on a separate timer inside the workflow).
+    if (input.doltConfig && !input.disableCostBudget) {
+      state.phase = "budget_check";
+      const budgetResult = await quickActivities.checkCostBudget(
+        input.doltConfig,
+        sessionId,
+        input.costBudget,
+      );
+      if (budgetResult.status === "breach") {
+        state.phase = "budget_exceeded";
+        state.totalCost = budgetResult.sessionCost;
+        state.error = budgetResult.intervention?.reason ?? "Cost budget exceeded";
+        return makeResult("budget_exceeded", state, startTime);
+      }
+    }
+
+    // Step 7: Validate punch card (if configured)
     if (input.doltConfig && input.cardId) {
       state.phase = "validating";
       const validation = await quickActivities.validateTaskPunchCard(
         input.doltConfig,
         input.punchCardTaskId ?? sessionId,
         input.cardId,
+        input.enforcedOnly,
       );
       if (validation.status === "fail") {
         state.phase = "validation_failed";
@@ -183,8 +314,11 @@ export async function agentTaskWorkflow(
       }
     }
 
+    // Step 8: Post-workflow session audit (if Dolt config provided and not disabled)
+    const auditSummary = await runPostWorkflowAudit(input, sessionId);
+
     state.phase = "completed";
-    return makeResult("completed", state, startTime, result);
+    return makeResult("completed", state, startTime, result, auditSummary);
   } catch (err: unknown) {
     // On cancellation, abort the kilo serve session so it stops burning tokens
     if (isCancellation(err) && state.sessionId) {
@@ -195,27 +329,86 @@ export async function agentTaskWorkflow(
       return makeResult("aborted", state, startTime);
     }
     const errorMsg = err instanceof Error ? err.message : String(err);
+    if (state.sessionId) {
+      await CancellationScope.nonCancellable(async () => {
+        await abortSession(config, state.sessionId!);
+      });
+    }
     state.phase = "failed";
     state.error = errorMsg;
     return makeResult("failed", state, startTime);
   }
 }
 
+/** Apply the polling result to the workflow state. */
+function applyAgentResult(state: AgentTaskStatus, result: activities.AgentResult): void {
+  state.totalParts = result.totalParts;
+  state.toolCalls = result.toolCalls;
+  state.childCount = result.childCount;
+  state.totalCost = result.totalCost;
+  state.tokensInput = result.tokensInput;
+  state.tokensOutput = result.tokensOutput;
+  state.idleConfirmations = result.idleConfirmations;
+  state.requiredIdleConfirmations = result.requiredIdleConfirmations;
+  state.lastProgressAt = result.lastProgressAt;
+  state.leaf = {
+    sessionId: result.activeLeaf.sessionId,
+    label: result.activeLeaf.label,
+    phase: result.activeLeaf.phase,
+    runningTools: result.activeLeaf.runningTools,
+    completedTools: result.activeLeaf.completedTools,
+    lastToolName: result.activeLeaf.lastToolName,
+    done: result.activeLeaf.done,
+    thinking: result.activeLeaf.thinking,
+  };
+}
+
+/** Run post-workflow session audit if configured. */
+async function runPostWorkflowAudit(
+  input: AgentTaskInput,
+  sessionId: string,
+): Promise<AuditSummary | null> {
+  if (!input.doltConfig || input.disableAudit) return null;
+
+  const auditResult = await quickActivities.runSessionAudit(
+    input.doltConfig,
+    sessionId,
+    input.auditConfig,
+  );
+  return {
+    verdict: auditResult.verdict,
+    findingCount: auditResult.findingCount,
+    criticalCount: auditResult.criticalCount,
+    warningCount: auditResult.warningCount,
+    infoCount: auditResult.infoCount,
+    findings: auditResult.findings.map((f) => ({
+      type: f.type,
+      severity: f.severity,
+      message: f.message,
+    })),
+  };
+}
+
 function makeResult(
   status: AgentTaskResult["status"],
   state: AgentTaskStatus,
   startTime: number,
-  agentResult?: { totalCost: number; tokensInput: number; tokensOutput: number }
+  agentResult?: { totalCost: number; tokensInput: number; tokensOutput: number },
+  audit?: AuditSummary | null,
 ): AgentTaskResult {
+  // Use state.totalCost as primary source — it's updated by both the poll result
+  // and the budget check, so it reflects the most recent value for all outcomes
+  // including budget_exceeded. Fall back to agentResult for backward compat.
   return {
     status,
     sessionId: state.sessionId,
     totalParts: state.totalParts,
     toolCalls: state.toolCalls,
     durationMs: Date.now() - startTime,
-    totalCost: agentResult?.totalCost ?? 0,
-    tokensInput: agentResult?.tokensInput ?? 0,
-    tokensOutput: agentResult?.tokensOutput ?? 0,
+    totalCost: state.totalCost || agentResult?.totalCost || 0,
+    tokensInput: state.tokensInput || agentResult?.tokensInput || 0,
+    tokensOutput: state.tokensOutput || agentResult?.tokensOutput || 0,
     error: state.error,
+    audit: audit ?? null,
   };
 }

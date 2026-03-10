@@ -1,5 +1,5 @@
 ---
-description: Workflow for responding to PR review feedback: fetch comments, plan fixes, implement changes, run quality gates, and acknowledge every review thread.
+description: Child-level workflow for PR review response. Supports standalone use (all phases) or phase-scoped invocation from respond-to-pr-review-orchestrate (Phase 0 only for ledger building, Phase 5 only for acknowledgement).
 auto_execution_mode: 3
 punch_card: respond-to-pr-review
 ---
@@ -15,6 +15,24 @@ ensures changes meet quality standards, and requires that **every comment is ack
 
 **Punch Card:** `respond-to-pr-review` (7 rows, 6 required)
 **Commands Reference:** [`.kilocode/commands.toml`](../commands.toml)
+
+## Orchestration Context
+
+This workflow can be invoked in two ways:
+
+### Standalone (all phases)
+When invoked directly (e.g., `/respond-to-pr-review`), execute all phases 0–6.
+
+### Phase-scoped (child of orchestrator)
+When invoked by [`/respond-to-pr-review-orchestrate`](./respond-to-pr-review-orchestrate.md),
+you will be given a `workflow_instruction` that scopes you to specific phases:
+
+- **"Phase 0 only"** → You are a **ledger builder**. Execute Phase 0, return the Comment
+  Ledger, then stop. Do NOT fix code, do NOT reply to comments.
+- **"Phase 5 only"** → You are an **acknowledger**. You will receive a Comment Ledger and
+  a fix mapping. Execute Phase 5 only — reply to every comment on GitHub. Do NOT modify code.
+
+Check your handoff packet for `workflow_instruction` to determine your scope.
 
 ## Core Principles
 
@@ -180,25 +198,47 @@ For each cluster:
 > Composite: `format_ruff` → `check_ruff` → `check_mypy` → `test_pytest`
 > All run through `bounded_gate.py` with receipt tracking.
 
-### Step 4.2: SonarQube Quality Gate
+### Step 4.2: SonarQube Quality Gate (Full — Conditions + Issues)
 
-Check the SonarQube quality gate for the PR and address any issues causing it to fail.
-SonarQube issues on a PR represent **new issues introduced by the PR** — treat them as
-blocking, just like reviewer comments.
+**You must check BOTH the quality gate conditions AND the issue list.**
+
+Quality gate conditions include **metrics** (e.g., duplication density, coverage) that are
+NOT surfaced as issues. If you only check issues, you will miss metric-based failures.
+
+#### Step 4.2a: Check Quality Gate Status (conditions)
 
 > 📌 `inspect quality-gate` → [`commands.inspect_quality_gate`](../commands.toml)
 > Resolves to: `mcp--sonarqube--get_project_quality_gate_status` with `projectKey=<key>` and `pullRequest=<PR_NUMBER>`
 
+This returns the overall gate status and **each condition** with its threshold and actual
+value. For each condition with `status=ERROR`, add a ledger row with `type=sonarqube-gate`
+and the metric details.
+
+#### Step 4.2b: Check Quality Gate Issues (rule violations)
+
 > 📌 `search issues` → [`commands.search_issues`](../commands.toml)
 > Resolves to: `mcp--sonarqube--search_sonar_issues_in_projects` with `projects=[<key>]` and `pullRequestId=<PR_NUMBER>`
+
+For each issue, add a ledger row with `type=sonarqube`.
+
+#### Step 4.2c: Inspect Measures (if metric conditions fail)
+
+> 📌 `inspect measures` → [`commands.inspect_measures`](../commands.toml)
+> Resolves to: `mcp--sonarqube--get_component_measures` with `projectKey=<key>` and `pullRequest=<PR_NUMBER>`
+
+Use this to get detailed metric values (e.g., `new_duplicated_lines_density`) when a
+metric condition fails. This tells you the exact scope of duplication or coverage gaps.
 
 If the quality gate is **failing** or issues exist:
 
 1. List all issues on the PR using `search issues`
-2. For each issue, inspect the rule if unfamiliar: `mcp--sonarqube--show_rule` with `key=<rule_key>`
-3. Add SonarQube issues to the **Comment Ledger** (Phase 0.4) with `type=sonarqube`
-4. Implement fixes alongside reviewer-requested changes
-5. After pushing, the gate will re-evaluate on the next SonarQube analysis run
+2. List all failing conditions using `inspect quality-gate`
+3. For metric failures (duplication, coverage), use `inspect measures` to get specifics
+4. For each issue, inspect the rule if unfamiliar: `mcp--sonarqube--show_rule` with `key=<rule_key>`
+5. Add SonarQube issues to the **Comment Ledger** (Phase 0.4) with `type=sonarqube`
+6. Add SonarQube metric failures to the **Comment Ledger** with `type=sonarqube-gate`
+7. Implement fixes alongside reviewer-requested changes
+8. After pushing, the gate will re-evaluate on the next SonarQube analysis run
 
 **Line Fault:** If the SonarQube MCP server is unavailable or unresponsive, this is a
 **line fault**. Do NOT skip and proceed — emit a Line Fault Contract and dispatch the fitter:
@@ -309,6 +349,7 @@ are missing, complete the missing steps, re-mint, and re-checkpoint.
 
 ## Related Workflows
 
+- [`/respond-to-pr-review-orchestrate`](./respond-to-pr-review-orchestrate.md) — Orchestrator that delegates ledger → fix → acknowledge as phased children
 - [`/start-task`](./start-task.md) — Task preparation phase
 - [`/execute-task`](./execute-task.md) — Task execution phase
 - [`/fix-ci`](./fix-ci.md) — Quality gate fixes

@@ -43,7 +43,7 @@ export interface SessionMetrics {
 export interface GovernorThresholds {
   /** Maximum step count before step_overflow (default: 100). */
   maxSteps: number;
-  /** Maximum cost in USD before cost_overflow (default: 10.00). */
+  /** Maximum cost in USD before cost_overflow (default: 10). */
   maxCostUsd: number;
   /** Minimum cycle length to check for tool_cycle (default: 2). */
   minCycleLength: number;
@@ -59,7 +59,7 @@ export interface GovernorThresholds {
 
 export const DEFAULT_THRESHOLDS: GovernorThresholds = {
   maxSteps: 100,
-  maxCostUsd: 10.0,
+  maxCostUsd: 10,
   minCycleLength: 2,
   maxCycleLength: 6,
   cycleRepetitions: 3,
@@ -93,7 +93,7 @@ export type DiagnosisCategory =
 export interface DiagnosisReport {
   sessionId: string;
   category: DiagnosisCategory;
-  /** 0.0–1.0 confidence in the classification. */
+  /** 0–1 confidence in the classification. */
   confidence: number;
   /** Human-readable summary. */
   summary: string;
@@ -173,6 +173,7 @@ export interface PunchCardRequirement {
   punchKeyPattern: string;
   required: boolean;
   forbidden: boolean;
+  enforced: boolean;
   description?: string;
 }
 
@@ -198,4 +199,78 @@ export interface SubtaskValidation {
   parentTaskId: string;
   children: Array<{ childId: string; validation: ValidationResult }>;
   allChildrenValid: boolean;
+}
+
+// ── Session Audit ──
+
+/** Severity of an audit finding. */
+export type AuditSeverity = "info" | "warning" | "critical";
+
+/** Overall audit verdict. */
+export type AuditVerdict = "pass" | "warn" | "fail";
+
+/** Classification of audit anomaly types. */
+export type AuditAnomalyType =
+  | "missing_quality_gate"
+  | "cost_anomaly"
+  | "loop_signature"
+  | "tool_adherence_deviation"
+  | "incomplete_subtask_tree"
+  | "stall_detected";
+
+/** A single audit finding with evidence. */
+export interface AuditFinding {
+  /** Which anomaly type this finding belongs to. */
+  type: AuditAnomalyType;
+  /** Severity level. */
+  severity: AuditSeverity;
+  /** Human-readable description of the anomaly. */
+  message: string;
+  /** Structured evidence supporting the finding. */
+  evidence: Record<string, unknown>;
+}
+
+/** Configurable thresholds for session audit. */
+export interface SessionAuditConfig {
+  /** Maximum cost per 100k tokens before flagging as anomalous (default: $0.42). */
+  cheapZonePercentileUsd: number;
+  /** Absolute cost threshold above which a session is flagged (default: $1.00). */
+  costAnomalyThresholdUsd: number;
+  /** Maximum step count for bounded tasks before flagging (default: 50). */
+  maxExpectedSteps: number;
+  /** Minimum repeated pattern length for loop detection (default: 2). */
+  loopMinPatternLength: number;
+  /** Maximum repeated pattern length for loop detection (default: 6). */
+  loopMaxPatternLength: number;
+  /** Minimum repetitions of a pattern to flag as a loop (default: 3). */
+  loopMinRepetitions: number;
+  /** Expected edit count range [min, max] for tool adherence check. */
+  expectedEditRange: [number, number];
+  /** Maximum gap in seconds between punches before flagging a stall (default: 60). */
+  maxPunchGapSeconds: number;
+  /** Quality gate punch types that must be present. */
+  requiredQualityGates: string[];
+}
+
+/** Complete audit report for a session. */
+export interface SessionAuditReport {
+  /** The session that was audited. */
+  sessionId: string;
+  /** When the audit was performed. */
+  auditedAt: Date;
+  /** Overall audit verdict: pass (no findings), warn (info/warning only), fail (critical). */
+  verdict: AuditVerdict;
+  /** All findings from the audit. */
+  findings: AuditFinding[];
+  /** Summary metrics about the session at audit time. */
+  metrics: {
+    totalCost: number;
+    stepCount: number;
+    punchCount: number;
+    tokensInput: number;
+    tokensOutput: number;
+    tokensReasoning: number;
+    durationMs: number;
+    childCount: number;
+  };
 }

@@ -75,3 +75,4 @@ docs/comms/
 .kilocode/prompts/attestation-health-check.json
 .kilocode/prompts/monorepo-migration-hlr.md
 .kilocode/prompts/factory-onboarding-attestation-response.md
+.beads/backup/

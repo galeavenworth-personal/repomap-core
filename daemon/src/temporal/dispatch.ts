@@ -17,15 +17,20 @@
  *   --poll <ms>          Poll interval in ms (default: 10000)
  *   --no-wait            Start workflow and exit (fire-and-forget)
  *   --workflow-id <id>   Custom workflow ID (default: auto-generated)
+ *   --enforce            Enable enforced punch card exit gate (requires card)
+ *   --card-id <id>       Punch card ID (overrides mode-card-map.json lookup)
  *
  * Environment:
  *   TEMPORAL_ADDRESS     Temporal server gRPC address (default: localhost:7233)
  *   TEMPORAL_NAMESPACE   Temporal namespace (default: default)
+ *   DOLT_HOST            Dolt server host (default: 127.0.0.1)
+ *   DOLT_PORT            Dolt server port (default: 3307)
+ *   DOLT_DATABASE        Dolt database name (default: beads_repomap-core)
  */
 
 import { Client, Connection } from "@temporalio/client";
 import { execFileSync } from "node:child_process";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, readFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import type { AgentTaskInput, AgentTaskResult, AgentTaskStatus } from "./workflows.js";
 
@@ -67,6 +72,23 @@ function resolveBinary(name: string, fallbackPaths: string[] = []): string {
 
 const PGREP = resolveBinary("pgrep", ["/usr/bin/pgrep", "/bin/pgrep"]);
 
+type ModeCardMap = Record<string, string>;
+
+const MODE_CARD_MAP_PATH = new URL("../../../.kilocode/mode-card-map.json", import.meta.url);
+
+function loadModeCardMap(): ModeCardMap {
+  try {
+    const raw = readFileSync(MODE_CARD_MAP_PATH, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object") {
+      return parsed as ModeCardMap;
+    }
+  } catch {
+    // Graceful fallback
+  }
+  return {};
+}
+
 interface ParsedArgs {
   agent: string;
   title: string | undefined;
@@ -76,6 +98,8 @@ interface ParsedArgs {
   pollIntervalMs: number;
   noWait: boolean;
   workflowId: string | undefined;
+  enforce: boolean;
+  cardId: string | undefined;
   prompt: string;
 }
 
@@ -94,6 +118,8 @@ function parseDispatchArgs(args: string[]): ParsedArgs {
   let pollIntervalMs = 10_000;
   let noWait = false;
   let workflowId: string | undefined;
+  let enforce = false;
+  let cardId: string | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -122,6 +148,12 @@ function parseDispatchArgs(args: string[]): ParsedArgs {
       case "--workflow-id":
         workflowId = args[++i];
         break;
+      case "--enforce":
+        enforce = true;
+        break;
+      case "--card-id":
+        cardId = args[++i];
+        break;
       default:
         positional.push(args[i]);
     }
@@ -136,6 +168,8 @@ function parseDispatchArgs(args: string[]): ParsedArgs {
     pollIntervalMs,
     noWait,
     workflowId,
+    enforce,
+    cardId,
     prompt: positional.join(" "),
   };
 }
@@ -235,6 +269,7 @@ async function main() {
     pollIntervalMs,
     noWait,
     workflowId,
+    enforce,
     prompt,
   } = parsed;
   if (!prompt) {
@@ -245,7 +280,9 @@ async function main() {
 
   const address = process.env.TEMPORAL_ADDRESS ?? "localhost:7233";
   const namespace = process.env.TEMPORAL_NAMESPACE ?? "default";
+  const doltHost = process.env.DOLT_HOST ?? "127.0.0.1";
   const doltPort = Number.parseInt(process.env.DOLT_PORT ?? "3307", 10);
+  const doltDatabase = process.env.DOLT_DATABASE ?? "beads_repomap-core";
 
   const allOk = await runPreflightChecks(kiloHost, kiloPort, doltPort, address);
 
@@ -263,6 +300,21 @@ async function main() {
 
   console.log("[dispatch] Pre-flight passed (5/5 components healthy)");
 
+  // ── Resolve punch card enforcement config ──
+  const resolvedCardId = parsed.cardId ?? loadModeCardMap()[agent] ?? undefined;
+  if (enforce && !resolvedCardId) {
+    console.error(
+      `[dispatch] ERROR: --enforce requested but no punch card ID resolvable for agent '${agent}'.`,
+    );
+    console.error(
+      "[dispatch] Provide --card-id <id> or add an entry in .kilocode/mode-card-map.json.",
+    );
+    process.exit(1);
+  }
+  const doltConfig = resolvedCardId
+    ? { host: doltHost, port: doltPort, database: doltDatabase, user: "root" }
+    : undefined;
+
   console.log(`[dispatch] Connecting to Temporal at ${address}...`);
   const connection = await Connection.connect({ address });
   const client = new Client({ connection, namespace });
@@ -277,12 +329,18 @@ async function main() {
     kiloPort,
     pollIntervalMs,
     timeoutMs,
+    ...(doltConfig ? { doltConfig } : {}),
+    ...(resolvedCardId ? { cardId: resolvedCardId } : {}),
+    ...(enforce ? { enforcedOnly: true } : {}),
   };
 
   console.log(`[dispatch] Starting workflow: ${wfId}`);
   console.log(`[dispatch] Agent: ${agent}`);
   console.log(`[dispatch] Prompt: ${prompt.length} chars`);
   console.log(`[dispatch] kilo serve: ${kiloHost}:${kiloPort}`);
+  if (resolvedCardId) {
+    console.log(`[dispatch] Punch card: ${resolvedCardId}${enforce ? " (enforced exit gate)" : " (observational)"}`);
+  }
 
   const handle = await client.workflow.start("agentTaskWorkflow", {
     taskQueue: TASK_QUEUE,

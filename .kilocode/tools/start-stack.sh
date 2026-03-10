@@ -27,7 +27,6 @@
 #   - kilo serve must be running on port 4096 (started separately unless --with-kilo/--ensure is used)
 #   - temporal CLI installed (~/.temporalio/bin/temporal or on PATH)
 #   - daemon/node_modules installed (cd daemon && npm install)
-#   - oc-daemon/node_modules installed (cd oc-daemon && npm install)
 #   - dolt CLI installed (~/.local/bin/dolt or on PATH)
 #   - pm2 installed in daemon (cd daemon && npm install --save-dev pm2)
 #
@@ -46,9 +45,6 @@ ECOSYSTEM_CONFIG="$SCRIPT_DIR/ecosystem.config.cjs"
 if [[ "${FACTORY_REQUIRE_ROOT:-}" == "1" || "${FACTORY_REQUIRE_ROOT:-}" == "true" ]]; then
     "$SCRIPT_DIR/require_factory_root.sh" "$REPO_ROOT"
 fi
-
-# oc-daemon lives alongside the repo, not inside it
-OC_DAEMON_DIR="${OC_DAEMON_DIR:-$(cd "$REPO_ROOT/.." && pwd)/oc-daemon}"
 
 KILO_HOST="${KILO_HOST:-127.0.0.1}"
 KILO_PORT="${KILO_PORT:-4096}"
@@ -350,17 +346,6 @@ do_start() {
     log "✅ Punch card schema migration complete."
 
     # ── Step 3: Validate dependencies ─────────────────────────────────────
-    if [[ ! -d "$OC_DAEMON_DIR/src" ]]; then
-        log "ERROR: oc-daemon not found at $OC_DAEMON_DIR"
-        log "Set OC_DAEMON_DIR or ensure it exists alongside the repo."
-        exit 1
-    fi
-
-    if [[ ! -d "$OC_DAEMON_DIR/node_modules" ]]; then
-        log "Installing oc-daemon dependencies..."
-        (cd "$OC_DAEMON_DIR" && npm install --silent)
-    fi
-
     if [[ ! -d "$DAEMON_DIR/node_modules" ]]; then
         log "Installing daemon dependencies..."
         (cd "$DAEMON_DIR" && npm install --silent)
@@ -373,7 +358,6 @@ do_start() {
     # pm2 handles: daemonization, auto-restart on crash, log management,
     # proper process tree. No more nohup/pgrep hacks.
     log "Starting pm2-managed processes..."
-    OC_DAEMON_DIR="$OC_DAEMON_DIR" \
     KILO_HOST="$KILO_HOST" KILO_PORT="$KILO_PORT" DOLT_PORT="$DOLT_PORT" \
         "$PM2" start "$ECOSYSTEM_CONFIG" 2>&1 | while IFS= read -r line; do
             log "  $line"
