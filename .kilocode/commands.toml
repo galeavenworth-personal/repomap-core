@@ -22,7 +22,7 @@
 version = "1.0.0"
 inventory_date = "2026-02-21"
 source_bead = "repomap-core-4r3"
-total_bindings = 50  # 45 atomic + 5 composite
+total_bindings = 51  # 46 atomic + 5 composite
 
 # ─── Quality Gates (receipt_required = true via bounded_gate.py) ────────────
 
@@ -274,6 +274,16 @@ tool = "new_task"
 target_mode = "product-skeptic"
 contract = ".kilocode/contracts/composability/handoff_packet.md"
 receipt_required = false
+
+[commands.dispatch_pr_review]
+verb = "dispatch"
+noun = "pr-review"
+skill = "native"
+tool = "new_task"
+target_mode = "pr-review"
+contract = ".kilocode/contracts/composability/handoff_packet.md"
+receipt_required = false
+notes = "Tier 3 specialist — PR ledger building (Phase 0) or PR acknowledgement (Phase 5)"
 
 [commands.dispatch_code_simplifier]
 verb = "dispatch"

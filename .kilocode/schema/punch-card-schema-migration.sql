@@ -203,6 +203,55 @@ INSERT IGNORE INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pa
     ('respond-to-pr-review', 'respond-to-pr-review', 'gate_pass',        'pytest',       TRUE,  'Pytest test suite must pass'),
     ('respond-to-pr-review', 'respond-to-pr-review', 'cost_checkpoint',  '%',            FALSE, 'Cost tracking (optional)');
 
+-- PR Review Orchestration card (Tier 2: Tactical — phased PR review — ENFORCED)
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description, enforced) VALUES
+    ('pr-review-orchestrate', 'pr-review-orchestrate', 'child_spawn',     'pr-review',              TRUE,  FALSE, 'Must delegate ledger/acknowledge phases to pr-review mode', TRUE),
+    ('pr-review-orchestrate', 'pr-review-orchestrate', 'child_spawn',     'code',                   TRUE,  FALSE, 'Must delegate fix phase to code mode', TRUE),
+    ('pr-review-orchestrate', 'pr-review-orchestrate', 'child_complete',  'child_return',           TRUE,  FALSE, 'Must receive child completions', TRUE),
+    ('pr-review-orchestrate', 'pr-review-orchestrate', 'step_complete',   'task_exit',              TRUE,  FALSE, 'Orchestrator must reach completion', TRUE),
+    ('pr-review-orchestrate', 'pr-review-orchestrate', 'tool_call',       'edit_file%',             TRUE,  TRUE,  'FORBIDDEN: Must not edit files directly', TRUE),
+    ('pr-review-orchestrate', 'pr-review-orchestrate', 'tool_call',       'apply_diff%',            TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs directly', TRUE),
+    ('pr-review-orchestrate', 'pr-review-orchestrate', 'tool_call',       'write_to_file%',         TRUE,  TRUE,  'FORBIDDEN: Must not write files directly', TRUE),
+    ('pr-review-orchestrate', 'pr-review-orchestrate', 'mcp_call',        '%codebase___retrieval%', TRUE,  TRUE,  'FORBIDDEN: Must not explore codebase directly', TRUE),
+    ('pr-review-orchestrate', 'pr-review-orchestrate', 'tool_call',       'bash%gh %',              TRUE,  TRUE,  'FORBIDDEN: Must not call GitHub CLI directly', TRUE),
+    ('pr-review-orchestrate', 'pr-review-orchestrate', 'cost_checkpoint', '%',                      FALSE, FALSE, 'Cost tracking (optional)', FALSE)
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description),
+    enforced = VALUES(enforced);
+
+-- Build PR Ledger card (Tier 3: Specialist — pr-review child Phase 0 — ENFORCED)
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description, enforced) VALUES
+    ('build-pr-ledger', 'build-pr-ledger', 'tool_call',       'bash%gh %',        TRUE,  FALSE, 'Must use gh CLI to fetch PR comments', TRUE),
+    ('build-pr-ledger', 'build-pr-ledger', 'step_complete',   'task_exit',        TRUE,  FALSE, 'Phase must complete', TRUE),
+    ('build-pr-ledger', 'build-pr-ledger', 'tool_call',       'edit_file%',       TRUE,  TRUE,  'FORBIDDEN: Must not edit files (ledger building only)', TRUE),
+    ('build-pr-ledger', 'build-pr-ledger', 'tool_call',       'apply_diff%',      TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs (ledger building only)', TRUE),
+    ('build-pr-ledger', 'build-pr-ledger', 'tool_call',       'write_to_file%',   TRUE,  TRUE,  'FORBIDDEN: Must not write files (ledger building only)', TRUE),
+    ('build-pr-ledger', 'build-pr-ledger', 'cost_checkpoint', '%',               FALSE, FALSE, 'Cost tracking (optional)', FALSE)
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description),
+    enforced = VALUES(enforced);
+
+-- Acknowledge PR Ledger card (Tier 3: Specialist — pr-review child Phase 5 — ENFORCED)
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description, enforced) VALUES
+    ('acknowledge-pr-ledger', 'acknowledge-pr-ledger', 'tool_call',       'bash%gh %',        TRUE,  FALSE, 'Must use gh CLI to reply to PR comments', TRUE),
+    ('acknowledge-pr-ledger', 'acknowledge-pr-ledger', 'step_complete',   'task_exit',        TRUE,  FALSE, 'Phase must complete', TRUE),
+    ('acknowledge-pr-ledger', 'acknowledge-pr-ledger', 'tool_call',       'edit_file%',       TRUE,  TRUE,  'FORBIDDEN: Must not edit files (acknowledgement only)', TRUE),
+    ('acknowledge-pr-ledger', 'acknowledge-pr-ledger', 'tool_call',       'apply_diff%',      TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs (acknowledgement only)', TRUE),
+    ('acknowledge-pr-ledger', 'acknowledge-pr-ledger', 'tool_call',       'write_to_file%',   TRUE,  TRUE,  'FORBIDDEN: Must not write files (acknowledgement only)', TRUE),
+    ('acknowledge-pr-ledger', 'acknowledge-pr-ledger', 'cost_checkpoint', '%',               FALSE, FALSE, 'Cost tracking (optional)', FALSE)
+ON DUPLICATE KEY UPDATE
+    workflow_name = VALUES(workflow_name),
+    required = VALUES(required),
+    forbidden = VALUES(forbidden),
+    description = VALUES(description),
+    enforced = VALUES(enforced);
+
 INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description, enforced) VALUES
     ('plant-orchestrate', 'plant-orchestrate', 'child_spawn',    '%orchestrator%',        TRUE,  FALSE, '[v2] Must delegate to an orchestrator child', TRUE),
     ('plant-orchestrate', 'plant-orchestrate', 'child_complete',  'child_return',        TRUE,  FALSE, 'Must receive child completion', TRUE),
