@@ -75,6 +75,17 @@ function extractTaskId(event: RawEvent): string {
     if (part && typeof part.sessionID === "string") return part.sessionID;
   }
 
+  // message.updated: sessionID lives on the message info object
+  if (event.type === "message.updated") {
+    const info = props.info as Record<string, unknown> | undefined;
+    if (info && typeof info.sessionID === "string") return info.sessionID;
+  }
+
+  // message.removed: sessionID lives directly on properties
+  if (event.type === "message.removed") {
+    if (typeof props.sessionID === "string") return props.sessionID;
+  }
+
   // session.updated / session.created / session.deleted: session is in properties.info
   if (event.type.startsWith("session.")) {
     const info = props.info as Record<string, unknown> | undefined;
@@ -256,16 +267,74 @@ function classifyToolPart(
   };
 }
 
-/** Classify a "session.updated" event: only completed sessions produce punches. */
+/** Classify a "session.updated" event.
+ *
+ * Current SDK Session type has NO `status` field. Session updates are
+ * emitted whenever the session metadata changes (title, summary, etc.).
+ * We mint a session_lifecycle punch to track updates.
+ *
+ * Session *completion* is detected via message.updated events where the
+ * AssistantMessage has a `finish` field (see classifyMessageUpdated).
+ */
 function classifySessionUpdated(event: RawEvent, now: Date): Punch | null {
+  // Legacy path: if info.status exists (older SDK), detect completion
   const info = event.properties.info as Record<string, unknown> | undefined;
   const status = info?.status as string | undefined;
-  if (status !== "completed") return null;
+  if (status === "completed") {
+    return {
+      taskId: extractTaskId(event),
+      punchType: "step_complete",
+      punchKey: "session_completed",
+      observedAt: now,
+      sourceHash: computeSourceHash(event),
+    };
+  }
 
+  // Current SDK: mint a session_lifecycle punch for tracking
   return {
     taskId: extractTaskId(event),
-    punchType: "step_complete",
-    punchKey: "session_completed",
+    punchType: "session_lifecycle",
+    punchKey: "session_updated",
+    observedAt: now,
+    sourceHash: computeSourceHash(event),
+  };
+}
+
+/**
+ * Classify a "message.updated" event.
+ *
+ * AssistantMessage carries `finish` field when the message is terminal.
+ * finish="end" → session completed successfully.
+ * This is the primary session completion signal in the current SDK.
+ */
+function classifyMessageUpdated(event: RawEvent, now: Date): Punch | null {
+  const info = event.properties.info as Record<string, unknown> | undefined;
+  if (!info) return null;
+
+  const role = info.role as string | undefined;
+  if (role !== "assistant") return null;
+
+  const finish = info.finish as string | undefined;
+  if (!finish) return null;
+
+  const sessionId = (info.sessionID as string) ?? extractTaskId(event);
+
+  // finish="end" means the assistant completed its work
+  if (finish === "end") {
+    return {
+      taskId: sessionId,
+      punchType: "step_complete",
+      punchKey: "session_completed",
+      observedAt: now,
+      sourceHash: computeSourceHash(event),
+    };
+  }
+
+  // Other finish values (abort, error) — track as lifecycle events
+  return {
+    taskId: sessionId,
+    punchType: "session_lifecycle",
+    punchKey: `session_${finish}`,
     observedAt: now,
     sourceHash: computeSourceHash(event),
   };
@@ -301,6 +370,9 @@ export function classifyEvent(event: RawEvent): Punch | null {
 
   if (event.type === "message.part.updated") {
     return classifyPartUpdated(event, now);
+  }
+  if (event.type === "message.updated") {
+    return classifyMessageUpdated(event, now);
   }
   if (event.type === "session.updated") {
     return classifySessionUpdated(event, now);

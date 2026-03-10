@@ -190,10 +190,9 @@ describe("e2e pipeline integration", () => {
         },
       },
       {
-        type: "session.updated",
+        type: "message.updated",
         properties: {
-          info: { id: "sess-1", projectID: "p1" },
-          status: "running",
+          info: { sessionID: "sess-1", role: "assistant" },
         },
       },
       { type: "file.edited", properties: {} },
