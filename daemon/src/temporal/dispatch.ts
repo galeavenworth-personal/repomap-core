@@ -19,6 +19,10 @@
  *   --workflow-id <id>   Custom workflow ID (default: auto-generated)
  *   --enforce            Enable enforced punch card exit gate (requires card)
  *   --card-id <id>       Punch card ID (overrides mode-card-map.json lookup)
+ *   --max-session-cost <usd>  Per-session cost cap in USD (default: $5)
+ *   --max-session-steps <n>   Per-session step cap (default: 200)
+ *   --max-tree-cost <usd>     Per-subtask-tree cost cap in USD (default: $25)
+ *   --no-budget          Disable cost budget enforcement entirely
  *
  * Environment:
  *   TEMPORAL_ADDRESS     Temporal server gRPC address (default: localhost:7233)
@@ -101,6 +105,10 @@ interface ParsedArgs {
   enforce: boolean;
   cardId: string | undefined;
   prompt: string;
+  maxSessionCostUsd: number | undefined;
+  maxSessionSteps: number | undefined;
+  maxTreeCostUsd: number | undefined;
+  noBudget: boolean;
 }
 
 function withSessionContext(prompt: string): string {
@@ -120,6 +128,10 @@ function parseDispatchArgs(args: string[]): ParsedArgs {
   let workflowId: string | undefined;
   let enforce = false;
   let cardId: string | undefined;
+  let maxSessionCostUsd: number | undefined;
+  let maxSessionSteps: number | undefined;
+  let maxTreeCostUsd: number | undefined;
+  let noBudget = false;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -154,6 +166,18 @@ function parseDispatchArgs(args: string[]): ParsedArgs {
       case "--card-id":
         cardId = args[++i];
         break;
+      case "--max-session-cost":
+        maxSessionCostUsd = Number.parseFloat(args[++i]);
+        break;
+      case "--max-session-steps":
+        maxSessionSteps = Number.parseInt(args[++i], 10);
+        break;
+      case "--max-tree-cost":
+        maxTreeCostUsd = Number.parseFloat(args[++i]);
+        break;
+      case "--no-budget":
+        noBudget = true;
+        break;
       default:
         positional.push(args[i]);
     }
@@ -170,6 +194,10 @@ function parseDispatchArgs(args: string[]): ParsedArgs {
     workflowId,
     enforce,
     cardId,
+    maxSessionCostUsd,
+    maxSessionSteps,
+    maxTreeCostUsd,
+    noBudget,
     prompt: positional.join(" "),
   };
 }
@@ -311,7 +339,9 @@ async function main() {
     );
     process.exit(1);
   }
-  const doltConfig = resolvedCardId
+  // Dolt config is needed for punch cards OR cost budget enforcement
+  const needsDolt = resolvedCardId || !parsed.noBudget;
+  const doltConfig = needsDolt
     ? { host: doltHost, port: doltPort, database: doltDatabase, user: "root" }
     : undefined;
 
@@ -320,6 +350,16 @@ async function main() {
   const client = new Client({ connection, namespace });
 
   const wfId = workflowId ?? `agent-task-${Date.now()}`;
+
+  // Build cost budget overrides from CLI flags
+  const hasBudgetOverrides = parsed.maxSessionCostUsd != null || parsed.maxSessionSteps != null || parsed.maxTreeCostUsd != null;
+  const costBudget = hasBudgetOverrides
+    ? {
+        ...(parsed.maxSessionCostUsd != null ? { maxSessionCostUsd: parsed.maxSessionCostUsd } : {}),
+        ...(parsed.maxSessionSteps != null ? { maxSessionSteps: parsed.maxSessionSteps } : {}),
+        ...(parsed.maxTreeCostUsd != null ? { maxTreeCostUsd: parsed.maxTreeCostUsd } : {}),
+      }
+    : undefined;
 
   const input: AgentTaskInput = {
     prompt: withSessionContext(prompt),
@@ -332,6 +372,8 @@ async function main() {
     ...(doltConfig ? { doltConfig } : {}),
     ...(resolvedCardId ? { cardId: resolvedCardId } : {}),
     ...(enforce ? { enforcedOnly: true } : {}),
+    ...(costBudget ? { costBudget } : {}),
+    ...(parsed.noBudget ? { disableCostBudget: true } : {}),
   };
 
   console.log(`[dispatch] Starting workflow: ${wfId}`);
@@ -340,6 +382,11 @@ async function main() {
   console.log(`[dispatch] kilo serve: ${kiloHost}:${kiloPort}`);
   if (resolvedCardId) {
     console.log(`[dispatch] Punch card: ${resolvedCardId}${enforce ? " (enforced exit gate)" : " (observational)"}`);
+  }
+  if (parsed.noBudget) {
+    console.log("[dispatch] Cost budget: DISABLED");
+  } else if (costBudget) {
+    console.log(`[dispatch] Cost budget: session=$${costBudget.maxSessionCostUsd ?? "default"}, steps=${costBudget.maxSessionSteps ?? "default"}, tree=$${costBudget.maxTreeCostUsd ?? "default"}`);
   }
 
   const handle = await client.workflow.start("agentTaskWorkflow", {

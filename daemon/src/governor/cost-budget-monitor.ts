@@ -32,20 +32,20 @@ import {
 
 /** Configurable cost budget thresholds. */
 export interface CostBudgetConfig {
-  /** Maximum cost in USD per session before intervention (default: $1). */
+  /** Maximum cost in USD per session before intervention (default: $5). */
   maxSessionCostUsd: number;
-  /** Maximum step count per session before intervention (default: 50). */
+  /** Maximum step count per session before intervention (default: 200). */
   maxSessionSteps: number;
-  /** Maximum aggregate cost in USD across a subtask tree (default: $5). */
+  /** Maximum aggregate cost in USD across a subtask tree (default: $25). */
   maxTreeCostUsd: number;
   /** Warning threshold as fraction of max cost, 0–1 inclusive (default: 0.8). */
   warningThresholdRatio: number;
 }
 
 export const DEFAULT_COST_BUDGET_CONFIG: CostBudgetConfig = {
-  maxSessionCostUsd: 1,
-  maxSessionSteps: 50,
-  maxTreeCostUsd: 5,
+  maxSessionCostUsd: 5,
+  maxSessionSteps: 200,
+  maxTreeCostUsd: 25,
   warningThresholdRatio: 0.8,
 };
 
@@ -53,9 +53,9 @@ export const DEFAULT_COST_BUDGET_CONFIG: CostBudgetConfig = {
  * Load cost budget config from environment variables, falling back to defaults.
  *
  * Environment variables:
- *   GOVERNOR_MAX_SESSION_COST_USD  — per-session cost cap (default: 1)
- *   GOVERNOR_MAX_SESSION_STEPS     — per-session step cap (default: 50)
- *   GOVERNOR_MAX_TREE_COST_USD     — per-subtask-tree cost cap (default: 5)
+ *   GOVERNOR_MAX_SESSION_COST_USD  — per-session cost cap (default: 5)
+ *   GOVERNOR_MAX_SESSION_STEPS     — per-session step cap (default: 200)
+ *   GOVERNOR_MAX_TREE_COST_USD     — per-subtask-tree cost cap (default: 25)
  *   GOVERNOR_WARNING_THRESHOLD     — warning ratio 0–1 inclusive (default: 0.80)
  */
 export function loadCostBudgetConfig(

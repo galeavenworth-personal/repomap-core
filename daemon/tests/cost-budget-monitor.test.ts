@@ -72,16 +72,16 @@ describe("loadCostBudgetConfig", () => {
     expect(config.maxTreeCostUsd).toBe(DEFAULT_COST_BUDGET_CONFIG.maxTreeCostUsd);
   });
 
-  it("default per-session cost cap is $1.00", () => {
-    expect(DEFAULT_COST_BUDGET_CONFIG.maxSessionCostUsd).toBe(1);
+  it("default per-session cost cap is $5.00", () => {
+    expect(DEFAULT_COST_BUDGET_CONFIG.maxSessionCostUsd).toBe(5);
   });
 
-  it("default per-session step cap is 50", () => {
-    expect(DEFAULT_COST_BUDGET_CONFIG.maxSessionSteps).toBe(50);
+  it("default per-session step cap is 200", () => {
+    expect(DEFAULT_COST_BUDGET_CONFIG.maxSessionSteps).toBe(200);
   });
 
-  it("default per-tree cost cap is $5.00", () => {
-    expect(DEFAULT_COST_BUDGET_CONFIG.maxTreeCostUsd).toBe(5);
+  it("default per-tree cost cap is $25.00", () => {
+    expect(DEFAULT_COST_BUDGET_CONFIG.maxTreeCostUsd).toBe(25);
   });
 
   it("default warning threshold is 0.8 (80%)", () => {
@@ -292,23 +292,23 @@ function createBudgetMonitor(
 describe("CostBudgetMonitor — checkBudget breaches", () => {
 
   it("triggers intervention when session cost exceeds cap", async () => {
-    // Session cost $1.50 exceeds default $1.00 cap
-    const monitor = createBudgetMonitor(1.50, 10, 1.50, 1);
+    // Session cost $6.50 exceeds default $5.00 cap
+    const monitor = createBudgetMonitor(6.50, 10, 6.50, 1);
     const result = await monitor.checkBudget("test-session");
 
     expect(result.status).toBe("breach");
     expect(result.breaches.length).toBeGreaterThanOrEqual(1);
     expect(result.breaches[0].type).toBe("session_cost");
-    expect(result.breaches[0].current).toBe(1.50);
-    expect(result.breaches[0].limit).toBe(1);
+    expect(result.breaches[0].current).toBe(6.50);
+    expect(result.breaches[0].limit).toBe(5);
     expect(result.intervention).not.toBeNull();
     expect(result.intervention!.action).toBe("kill_session");
     expect(result.intervention!.classification).toBe("cost_overflow");
   });
 
   it("triggers intervention when session steps exceed cap", async () => {
-    // 60 steps exceeds default 50 cap
-    const monitor = createBudgetMonitor(0.50, 60, 0.50, 1);
+    // 220 steps exceeds default 200 cap
+    const monitor = createBudgetMonitor(0.50, 220, 0.50, 1);
     const result = await monitor.checkBudget("test-session");
 
     expect(result.status).toBe("breach");
@@ -319,8 +319,8 @@ describe("CostBudgetMonitor — checkBudget breaches", () => {
   });
 
   it("triggers abort_tree when tree cost exceeds cap", async () => {
-    // Tree cost $6.00 exceeds default $5.00 cap
-    const monitor = createBudgetMonitor(0.50, 10, 6.00, 3);
+    // Tree cost $28.00 exceeds default $25.00 cap
+    const monitor = createBudgetMonitor(0.50, 10, 28.00, 3);
     const result = await monitor.checkBudget("test-session");
 
     expect(result.status).toBe("breach");
@@ -330,8 +330,8 @@ describe("CostBudgetMonitor — checkBudget breaches", () => {
   });
 
   it("reports multiple breaches simultaneously", async () => {
-    // Both session cost and steps exceed caps
-    const monitor = createBudgetMonitor(1.50, 60, 1.50, 1);
+    // Both session cost ($6.50 > $5) and steps (220 > 200) exceed caps
+    const monitor = createBudgetMonitor(6.50, 220, 6.50, 1);
     const result = await monitor.checkBudget("test-session");
 
     expect(result.status).toBe("breach");
@@ -342,7 +342,7 @@ describe("CostBudgetMonitor — checkBudget breaches", () => {
   });
 
   it("intervention detection is compatible with governor types", async () => {
-    const monitor = createBudgetMonitor(2.00, 10, 2.00, 1);
+    const monitor = createBudgetMonitor(6.50, 10, 6.50, 1);
     const result = await monitor.checkBudget("test-session");
 
     expect(result.intervention).not.toBeNull();
@@ -353,7 +353,7 @@ describe("CostBudgetMonitor — checkBudget breaches", () => {
     expect(detection.classification).toBe("cost_overflow");
     expect(typeof detection.reason).toBe("string");
     expect(detection.metrics).toBeDefined();
-    expect(detection.metrics.totalCost).toBe(2);
+    expect(detection.metrics.totalCost).toBe(6.5);
     expect(detection.detectedAt).toBeInstanceOf(Date);
   });
 
@@ -375,9 +375,9 @@ describe("CostBudgetMonitor — checkBudget breaches", () => {
 
 describe("CostBudgetMonitor — checkBudget warnings", () => {
   it("returns warning when session cost approaches threshold", async () => {
-    // $0.85 is 85% of $1.00 cap, above 80% warning threshold
+    // $4.25 is 85% of $5.00 cap, above 80% warning threshold
     const { monitor } = createMockMonitor(leafSessionResponses(
-      snap("0.85", "20", "30000", "15000", "5000", "60")));
+      snap("4.25", "20", "30000", "15000", "5000", "60")));
     const result = await monitor.checkBudget("test-session");
 
     expect(result.status).toBe("warning");
@@ -386,9 +386,9 @@ describe("CostBudgetMonitor — checkBudget warnings", () => {
   });
 
   it("returns warning when steps approach threshold", async () => {
-    // 42 steps is 84% of 50 cap, above 80% warning threshold
+    // 168 steps is 84% of 200 cap, above 80% warning threshold
     const { monitor } = createMockMonitor(leafSessionResponses(
-      snap("0.30", "42", "30000", "15000", "5000", "60")));
+      snap("0.30", "168", "30000", "15000", "5000", "60")));
     const result = await monitor.checkBudget("test-session");
 
     expect(result.status).toBe("warning");
@@ -422,7 +422,7 @@ describe("CostBudgetMonitor — getConfig", () => {
     );
     const config = monitor.getConfig();
     expect(config.maxSessionCostUsd).toBe(2);
-    expect(config.maxSessionSteps).toBe(50); // default
+    expect(config.maxSessionSteps).toBe(200); // default
   });
 });
 
