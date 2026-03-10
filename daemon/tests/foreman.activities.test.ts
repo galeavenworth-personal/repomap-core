@@ -1,0 +1,564 @@
+/**
+ * Foreman Activities Tests
+ *
+ * Unit tests for the Beads CLI activity wrappers. All tests mock the bd CLI
+ * execution via vi.mock of node:child_process, so no real bd binary is needed.
+ *
+ * Test organization:
+ *   1. execBd — CLI execution helper
+ *   2. parseBdJson — JSON parsing with error classification
+ *   3. selectNextBead — bead selection, filtering, sorting
+ *   4. getBeadDetail — bead detail fetch and validation
+ *   5. updateBeadStatus — status transitions
+ *   6. closeBead — bead closure
+ *   7. Error classification — transient vs contract errors
+ */
+
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+// Mock @temporalio/activity before importing activities
+vi.mock("@temporalio/activity", () => ({
+  log: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+  heartbeat: vi.fn(),
+}));
+
+// Mock node:child_process
+vi.mock("node:child_process", () => ({
+  execFile: vi.fn(),
+}));
+
+import { execFile } from "node:child_process";
+import {
+  execBd,
+  parseBdJson,
+  selectNextBead,
+  getBeadDetail,
+  updateBeadStatus,
+  closeBead,
+  BeadsTransientError,
+  BeadsContractError,
+} from "../src/temporal/foreman.activities.js";
+import type { SelectNextBeadInput, CloseBeadInput } from "../src/temporal/foreman.types.js";
+
+// ── Test helpers ──
+
+const REPO_PATH = "/fake/repo";
+
+/**
+ * Configure the mocked execFile to call the callback with given results.
+ */
+function mockExecFileSuccess(stdout: string, stderr = "") {
+  const mock = vi.mocked(execFile);
+  mock.mockImplementation(
+    ((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
+      const callback = cb as (
+        error: Error | null,
+        stdout: string,
+        stderr: string,
+      ) => void;
+      callback(null, stdout, stderr);
+    }) as typeof execFile,
+  );
+}
+
+function mockExecFileFailure(
+  exitCode: number,
+  stderr: string,
+  stdout = "",
+) {
+  const mock = vi.mocked(execFile);
+  mock.mockImplementation(
+    ((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
+      const callback = cb as (
+        error: Error | null,
+        stdout: string,
+        stderr: string,
+      ) => void;
+      const error = new Error(`Command failed with exit code ${exitCode}`) as Error & {
+        code: number;
+        killed: boolean;
+      };
+      error.code = exitCode;
+      error.killed = false;
+      callback(error, stdout, stderr);
+    }) as typeof execFile,
+  );
+}
+
+function mockExecFileTimeout() {
+  const mock = vi.mocked(execFile);
+  mock.mockImplementation(
+    ((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
+      const callback = cb as (
+        error: Error | null,
+        stdout: string,
+        stderr: string,
+      ) => void;
+      const error = new Error("timed out") as Error & {
+        killed: boolean;
+        code: string;
+      };
+      error.killed = true;
+      error.code = "ETIMEDOUT";
+      callback(error, "", "");
+    }) as typeof execFile,
+  );
+}
+
+// ── Fixtures ──
+
+function makeBdReadyOutput(
+  items: Array<{
+    id: string;
+    title: string;
+    priority?: string;
+    labels?: string[];
+    depends_on?: string[];
+    estimated_complexity?: string;
+  }>,
+): string {
+  return JSON.stringify(items);
+}
+
+function makeBdShowOutput(item: {
+  id: string;
+  title: string;
+  priority?: string;
+  labels?: string[];
+  depends_on?: string[];
+  description?: string;
+  estimated_complexity?: string;
+  status?: string;
+}): string {
+  return JSON.stringify(item);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+// ── 1. execBd ──
+
+describe("execBd", () => {
+  it("resolves with stdout/stderr/exitCode on success", async () => {
+    mockExecFileSuccess("hello world\n", "some warning");
+    const result = await execBd(REPO_PATH, ["ready", "--json"]);
+    expect(result.stdout).toBe("hello world\n");
+    expect(result.stderr).toBe("some warning");
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("calls execFile with correct bd path and cwd", async () => {
+    mockExecFileSuccess("[]");
+    await execBd(REPO_PATH, ["ready", "--json"]);
+
+    const mock = vi.mocked(execFile);
+    expect(mock).toHaveBeenCalledOnce();
+    const [file, args, opts] = mock.mock.calls[0] as [
+      string,
+      string[],
+      { cwd: string },
+    ];
+    expect(file).toContain(".kilocode/tools/bd");
+    expect(args).toEqual(["ready", "--json"]);
+    expect(opts.cwd).toBe(REPO_PATH);
+  });
+
+  it("throws BeadsTransientError on non-zero exit", async () => {
+    mockExecFileFailure(1, "bd: database not available");
+    await expect(execBd(REPO_PATH, ["ready", "--json"])).rejects.toThrow(
+      BeadsTransientError,
+    );
+  });
+
+  it("throws BeadsTransientError with exit code info on failure", async () => {
+    mockExecFileFailure(2, "connection refused");
+    try {
+      await execBd(REPO_PATH, ["ready", "--json"]);
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(BeadsTransientError);
+      const err = e as BeadsTransientError;
+      expect(err.exitCode).toBe(2);
+      expect(err.stderr).toBe("connection refused");
+      expect(err.retryable).toBe(true);
+    }
+  });
+
+  it("throws BeadsTransientError on timeout", async () => {
+    mockExecFileTimeout();
+    try {
+      await execBd(REPO_PATH, ["ready", "--json"]);
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(BeadsTransientError);
+      const err = e as BeadsTransientError;
+      expect(err.exitCode).toBeNull();
+      expect(err.message).toContain("timed out");
+    }
+  });
+});
+
+// ── 2. parseBdJson ──
+
+describe("parseBdJson", () => {
+  it("parses valid JSON", () => {
+    const result = parseBdJson<{ foo: number }>('{"foo": 42}', "test");
+    expect(result).toEqual({ foo: 42 });
+  });
+
+  it("parses JSON with surrounding whitespace", () => {
+    const result = parseBdJson<number[]>("  [1, 2, 3]  \n", "test");
+    expect(result).toEqual([1, 2, 3]);
+  });
+
+  it("throws BeadsContractError on empty output", () => {
+    expect(() => parseBdJson("", "test")).toThrow(BeadsContractError);
+    expect(() => parseBdJson("  \n  ", "test")).toThrow(BeadsContractError);
+  });
+
+  it("throws BeadsContractError on invalid JSON", () => {
+    expect(() => parseBdJson("not json at all", "test")).toThrow(
+      BeadsContractError,
+    );
+  });
+
+  it("BeadsContractError includes raw output", () => {
+    try {
+      parseBdJson("broken{", "test");
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(BeadsContractError);
+      const err = e as BeadsContractError;
+      expect(err.rawOutput).toBe("broken{");
+      expect(err.retryable).toBe(false);
+    }
+  });
+});
+
+// ── 3. selectNextBead ──
+
+describe("selectNextBead", () => {
+  const baseInput: SelectNextBeadInput = {
+    repoPath: REPO_PATH,
+    retryLedger: [],
+    skipList: [],
+  };
+
+  it("returns null when no beads are ready", async () => {
+    mockExecFileSuccess("[]");
+    const result = await selectNextBead(baseInput);
+    expect(result).toBeNull();
+  });
+
+  it("returns the only available bead", async () => {
+    const output = makeBdReadyOutput([
+      { id: "bead-1", title: "Fix bug", priority: "P1" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const result = await selectNextBead(baseInput);
+    expect(result).not.toBeNull();
+    expect(result!.beadId).toBe("bead-1");
+    expect(result!.title).toBe("Fix bug");
+    expect(result!.priority).toBe("P1");
+  });
+
+  it("selects highest-priority bead", async () => {
+    const output = makeBdReadyOutput([
+      { id: "bead-low", title: "Low pri", priority: "P3" },
+      { id: "bead-high", title: "High pri", priority: "P0" },
+      { id: "bead-mid", title: "Mid pri", priority: "P1" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const result = await selectNextBead(baseInput);
+    expect(result!.beadId).toBe("bead-high");
+  });
+
+  it("filters out beads in skipList", async () => {
+    const output = makeBdReadyOutput([
+      { id: "bead-skip", title: "Skip me", priority: "P0" },
+      { id: "bead-keep", title: "Keep me", priority: "P2" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const result = await selectNextBead({
+      ...baseInput,
+      skipList: ["bead-skip"],
+    });
+    expect(result!.beadId).toBe("bead-keep");
+  });
+
+  it("filters out beads with exhausted retries", async () => {
+    const output = makeBdReadyOutput([
+      { id: "bead-exhausted", title: "Exhausted", priority: "P0" },
+      { id: "bead-ok", title: "OK", priority: "P2" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const result = await selectNextBead({
+      ...baseInput,
+      retryLedger: [
+        {
+          beadId: "bead-exhausted",
+          attempts: 3,
+          maxAttempts: 3,
+          lastAttemptAt: new Date().toISOString(),
+          lastError: "failed",
+          lastResult: { kind: "failed", error: "failed", retryable: false },
+          nextRetryAfter: new Date().toISOString(),
+          exhausted: true,
+        },
+      ],
+    });
+    expect(result!.beadId).toBe("bead-ok");
+  });
+
+  it("returns null when all beads are filtered out", async () => {
+    const output = makeBdReadyOutput([
+      { id: "bead-1", title: "Skip", priority: "P0" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const result = await selectNextBead({
+      ...baseInput,
+      skipList: ["bead-1"],
+    });
+    expect(result).toBeNull();
+  });
+
+  it("defaults priority to P3 for unknown priority values", async () => {
+    const output = makeBdReadyOutput([
+      { id: "bead-1", title: "Unknown pri", priority: "urgent" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const result = await selectNextBead(baseInput);
+    expect(result!.priority).toBe("P3");
+  });
+
+  it("defaults estimatedComplexity to unknown for invalid values", async () => {
+    const output = makeBdReadyOutput([
+      { id: "bead-1", title: "Test", estimated_complexity: "huge" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const result = await selectNextBead(baseInput);
+    expect(result!.estimatedComplexity).toBe("unknown");
+  });
+
+  it("populates labels and dependsOn from bd output", async () => {
+    const output = makeBdReadyOutput([
+      {
+        id: "bead-1",
+        title: "Rich bead",
+        priority: "P1",
+        labels: ["feature", "frontend"],
+        depends_on: ["bead-0"],
+        estimated_complexity: "medium",
+      },
+    ]);
+    mockExecFileSuccess(output);
+
+    const result = await selectNextBead(baseInput);
+    expect(result!.labels).toEqual(["feature", "frontend"]);
+    expect(result!.dependsOn).toEqual(["bead-0"]);
+    expect(result!.estimatedComplexity).toBe("medium");
+  });
+
+  it("skips items with missing id or title", async () => {
+    const output = JSON.stringify([
+      { title: "No ID" },
+      { id: "bead-2" },
+      { id: "bead-3", title: "Good" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const result = await selectNextBead(baseInput);
+    expect(result!.beadId).toBe("bead-3");
+  });
+
+  it("throws BeadsContractError when output is not an array", async () => {
+    mockExecFileSuccess('{"id": "not-an-array"}');
+    await expect(selectNextBead(baseInput)).rejects.toThrow(
+      BeadsContractError,
+    );
+  });
+
+  it("throws BeadsTransientError when bd CLI fails", async () => {
+    mockExecFileFailure(1, "database not running");
+    await expect(selectNextBead(baseInput)).rejects.toThrow(
+      BeadsTransientError,
+    );
+  });
+});
+
+// ── 4. getBeadDetail ──
+
+describe("getBeadDetail", () => {
+  it("returns structured detail for a valid bead", async () => {
+    const output = makeBdShowOutput({
+      id: "bead-42",
+      title: "Implement foreman",
+      priority: "P1",
+      labels: ["epic:foreman"],
+      depends_on: ["bead-10"],
+      description: "Implement the foreman control loop",
+      estimated_complexity: "large",
+      status: "ready",
+    });
+    mockExecFileSuccess(output);
+
+    const detail = await getBeadDetail(REPO_PATH, "bead-42");
+    expect(detail.beadId).toBe("bead-42");
+    expect(detail.title).toBe("Implement foreman");
+    expect(detail.priority).toBe("P1");
+    expect(detail.labels).toEqual(["epic:foreman"]);
+    expect(detail.dependsOn).toEqual(["bead-10"]);
+    expect(detail.description).toBe("Implement the foreman control loop");
+    expect(detail.estimatedComplexity).toBe("large");
+    expect(detail.status).toBe("ready");
+  });
+
+  it("defaults missing optional fields", async () => {
+    const output = makeBdShowOutput({
+      id: "bead-minimal",
+      title: "Minimal bead",
+    });
+    mockExecFileSuccess(output);
+
+    const detail = await getBeadDetail(REPO_PATH, "bead-minimal");
+    expect(detail.beadId).toBe("bead-minimal");
+    expect(detail.labels).toEqual([]);
+    expect(detail.dependsOn).toEqual([]);
+    expect(detail.description).toBe("");
+    expect(detail.estimatedComplexity).toBe("unknown");
+    expect(detail.status).toBe("unknown");
+    expect(detail.priority).toBe("P3");
+  });
+
+  it("throws BeadsContractError when id is missing", async () => {
+    mockExecFileSuccess(JSON.stringify({ title: "No ID" }));
+    await expect(getBeadDetail(REPO_PATH, "bead-x")).rejects.toThrow(
+      BeadsContractError,
+    );
+  });
+
+  it("throws BeadsContractError when output is not an object", async () => {
+    mockExecFileSuccess('"just a string"');
+    await expect(getBeadDetail(REPO_PATH, "bead-x")).rejects.toThrow(
+      BeadsContractError,
+    );
+  });
+
+  it("throws BeadsTransientError when bd CLI fails", async () => {
+    mockExecFileFailure(1, "bead not found");
+    await expect(getBeadDetail(REPO_PATH, "bead-x")).rejects.toThrow(
+      BeadsTransientError,
+    );
+  });
+});
+
+// ── 5. updateBeadStatus ──
+
+describe("updateBeadStatus", () => {
+  it("returns updated=true on success", async () => {
+    mockExecFileSuccess("Status updated\n");
+    const result = await updateBeadStatus(REPO_PATH, "bead-1", "in_progress");
+    expect(result.updated).toBe(true);
+    expect(result.error).toBeNull();
+  });
+
+  it("passes correct args to bd", async () => {
+    mockExecFileSuccess("");
+    await updateBeadStatus(REPO_PATH, "bead-42", "in_progress");
+
+    const mock = vi.mocked(execFile);
+    const [, args] = mock.mock.calls[0] as [string, string[]];
+    expect(args).toEqual(["update", "bead-42", "--status", "in_progress"]);
+  });
+
+  it("throws BeadsTransientError on CLI failure (for Temporal retry)", async () => {
+    mockExecFileFailure(1, "db locked");
+    await expect(
+      updateBeadStatus(REPO_PATH, "bead-1", "in_progress"),
+    ).rejects.toThrow(BeadsTransientError);
+  });
+});
+
+// ── 6. closeBead ──
+
+describe("closeBead", () => {
+  const baseInput: CloseBeadInput = {
+    repoPath: REPO_PATH,
+    beadId: "bead-done",
+    outcome: {
+      beadId: "bead-done",
+      workflowId: "wf-1",
+      sessionId: "sess-1",
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      durationMs: 5000,
+      totalCost: 0.5,
+      tokensInput: 1000,
+      tokensOutput: 500,
+      result: { kind: "completed" },
+      audit: null,
+      attempt: 1,
+    },
+  };
+
+  it("returns closed=true on success", async () => {
+    mockExecFileSuccess("Closed bead-done\n");
+    const result = await closeBead(baseInput);
+    expect(result.closed).toBe(true);
+    expect(result.error).toBeNull();
+  });
+
+  it("passes correct args to bd", async () => {
+    mockExecFileSuccess("");
+    await closeBead(baseInput);
+
+    const mock = vi.mocked(execFile);
+    const [, args] = mock.mock.calls[0] as [string, string[]];
+    expect(args).toEqual(["close", "bead-done"]);
+  });
+
+  it("throws BeadsTransientError on CLI failure (for Temporal retry)", async () => {
+    mockExecFileFailure(1, "cannot close");
+    await expect(closeBead(baseInput)).rejects.toThrow(BeadsTransientError);
+  });
+});
+
+// ── 7. Error classification ──
+
+describe("error classification", () => {
+  it("BeadsTransientError is retryable", () => {
+    const err = new BeadsTransientError("test", 1, "stderr");
+    expect(err.retryable).toBe(true);
+    expect(err.name).toBe("BeadsTransientError");
+    expect(err.exitCode).toBe(1);
+    expect(err.stderr).toBe("stderr");
+  });
+
+  it("BeadsContractError is not retryable", () => {
+    const err = new BeadsContractError("test", "raw output");
+    expect(err.retryable).toBe(false);
+    expect(err.name).toBe("BeadsContractError");
+    expect(err.rawOutput).toBe("raw output");
+  });
+
+  it("both error types extend Error", () => {
+    expect(new BeadsTransientError("t", 1, "")).toBeInstanceOf(Error);
+    expect(new BeadsContractError("c", "")).toBeInstanceOf(Error);
+  });
+});
