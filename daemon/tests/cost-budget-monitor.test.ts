@@ -113,15 +113,29 @@ function createMockConnection(queryResponses: Map<string, unknown[]>) {
   };
 }
 
+/** Build a responses Map for a single leaf session (no children). */
+function leafSessionResponses(snapshot: Record<string, unknown>) {
+  const responses = new Map<string, unknown[]>();
+  responses.set("FROM child_rels", []);
+  responses.set("FROM punches", [snapshot]);
+  return responses;
+}
+
 /**
  * Create a CostBudgetMonitor with a mocked connection.
  * Returns both the monitor and the mock connection for assertions.
  */
 function createMockMonitor(
-  queryResponses: Map<string, unknown[]>,
+  queryResponses?: Map<string, unknown[]>,
   budgetConfig?: Partial<CostBudgetConfig>,
+  customHandler?: (sql: string, params?: unknown[]) => unknown[],
 ) {
-  const mockConn = createMockConnection(queryResponses);
+  const mockConn = customHandler
+    ? {
+        execute: vi.fn(async (sql: string, params?: unknown[]) => [customHandler(sql, params)]),
+        end: vi.fn(async () => {}),
+      }
+    : createMockConnection(queryResponses ?? new Map());
   const monitor = new CostBudgetMonitor(
     { host: "127.0.0.1", port: 3307, database: "test_db" },
     budgetConfig,
@@ -136,16 +150,10 @@ function createMockMonitor(
 describe("CostBudgetMonitor — getSessionCost", () => {
   it("returns zero snapshot for session with no punches", async () => {
     const responses = new Map<string, unknown[]>();
-    responses.set("FROM punches", [
-      {
-        total_cost: "0",
-        step_count: "0",
-        tokens_input: "0",
-        tokens_output: "0",
-        tokens_reasoning: "0",
-        punch_count: "0",
-      },
-    ]);
+    responses.set("FROM punches", [{
+      total_cost: "0", step_count: "0", tokens_input: "0",
+      tokens_output: "0", tokens_reasoning: "0", punch_count: "0",
+    }]);
 
     const { monitor } = createMockMonitor(responses);
     const snapshot = await monitor.getSessionCost("session-empty");
@@ -160,16 +168,10 @@ describe("CostBudgetMonitor — getSessionCost", () => {
 
   it("returns accumulated cost data from punches table", async () => {
     const responses = new Map<string, unknown[]>();
-    responses.set("FROM punches", [
-      {
-        total_cost: "1.25",
-        step_count: "30",
-        tokens_input: "50000",
-        tokens_output: "25000",
-        tokens_reasoning: "10000",
-        punch_count: "120",
-      },
-    ]);
+    responses.set("FROM punches", [{
+      total_cost: "1.25", step_count: "30", tokens_input: "50000",
+      tokens_output: "25000", tokens_reasoning: "10000", punch_count: "120",
+    }]);
 
     const { monitor } = createMockMonitor(responses);
     const snapshot = await monitor.getSessionCost("session-costly");
@@ -184,16 +186,10 @@ describe("CostBudgetMonitor — getSessionCost", () => {
 
   it("handles null cost values gracefully", async () => {
     const responses = new Map<string, unknown[]>();
-    responses.set("FROM punches", [
-      {
-        total_cost: null,
-        step_count: null,
-        tokens_input: null,
-        tokens_output: null,
-        tokens_reasoning: null,
-        punch_count: "5",
-      },
-    ]);
+    responses.set("FROM punches", [{
+      total_cost: null, step_count: null, tokens_input: null,
+      tokens_output: null, tokens_reasoning: null, punch_count: "5",
+    }]);
 
     const { monitor } = createMockMonitor(responses);
     const snapshot = await monitor.getSessionCost("session-null");
@@ -209,18 +205,10 @@ describe("CostBudgetMonitor — getSessionCost", () => {
 
 describe("CostBudgetMonitor — getTreeCost", () => {
   it("returns single session when no children exist", async () => {
-    const responses = new Map<string, unknown[]>();
-    responses.set("FROM punches", [
-      {
-        total_cost: "0.50",
-        step_count: "10",
-        tokens_input: "20000",
-        tokens_output: "10000",
-        tokens_reasoning: "5000",
-        punch_count: "40",
-      },
-    ]);
-    responses.set("FROM child_rels", []);
+    const responses = leafSessionResponses({
+      total_cost: "0.50", step_count: "10", tokens_input: "20000",
+      tokens_output: "10000", tokens_reasoning: "5000", punch_count: "40",
+    });
 
     const { monitor } = createMockMonitor(responses);
     const tree = await monitor.getTreeCost("root-session");
@@ -232,47 +220,25 @@ describe("CostBudgetMonitor — getTreeCost", () => {
 
   it("aggregates cost across parent + children", async () => {
     const parentCost = {
-      total_cost: "0.50",
-      step_count: "10",
-      tokens_input: "20000",
-      tokens_output: "10000",
-      tokens_reasoning: "5000",
-      punch_count: "40",
+      total_cost: "0.50", step_count: "10", tokens_input: "20000",
+      tokens_output: "10000", tokens_reasoning: "5000", punch_count: "40",
     };
     const childCost = {
-      total_cost: "0.30",
-      step_count: "8",
-      tokens_input: "15000",
-      tokens_output: "8000",
-      tokens_reasoning: "3000",
-      punch_count: "25",
+      total_cost: "0.30", step_count: "8", tokens_input: "15000",
+      tokens_output: "8000", tokens_reasoning: "3000", punch_count: "25",
     };
 
-    // We need a more sophisticated mock that responds differently based on params
-    const mockConn = {
-      execute: vi.fn(async (sql: string, params?: unknown[]) => {
-        if (sql.includes("FROM child_rels")) {
-          const parentId = params?.[0] as string;
-          if (parentId === "parent-session") {
-            return [[{ child_id: "child-session-1" }]];
-          }
-          return [[]];
-        }
-        if (sql.includes("FROM punches")) {
-          const taskId = params?.[0] as string;
-          if (taskId === "parent-session") return [[parentCost]];
-          if (taskId === "child-session-1") return [[childCost]];
-          return [[{ total_cost: "0", step_count: "0", tokens_input: "0", tokens_output: "0", tokens_reasoning: "0", punch_count: "0" }]];
-        }
-        return [[]];
-      }),
-      end: vi.fn(async () => {}),
-    };
-
-    const monitor = new CostBudgetMonitor(
-      { host: "127.0.0.1", port: 3307, database: "test_db" },
-    );
-    (monitor as unknown as { connection: unknown }).connection = mockConn;
+    const { monitor } = createMockMonitor(undefined, undefined, (sql, params) => {
+      if (sql.includes("FROM child_rels")) {
+        return (params?.[0] === "parent-session") ? [{ child_id: "child-session-1" }] : [];
+      }
+      if (sql.includes("FROM punches")) {
+        if (params?.[0] === "parent-session") return [parentCost];
+        if (params?.[0] === "child-session-1") return [childCost];
+        return [{ total_cost: "0", step_count: "0", tokens_input: "0", tokens_output: "0", tokens_reasoning: "0", punch_count: "0" }];
+      }
+      return [];
+    });
 
     const tree = await monitor.getTreeCost("parent-session");
 
@@ -285,34 +251,19 @@ describe("CostBudgetMonitor — getTreeCost", () => {
 
   it("handles deep subtask trees (grandchildren)", async () => {
     const costSnapshot = {
-      total_cost: "0.25",
-      step_count: "5",
-      tokens_input: "10000",
-      tokens_output: "5000",
-      tokens_reasoning: "2000",
-      punch_count: "20",
+      total_cost: "0.25", step_count: "5", tokens_input: "10000",
+      tokens_output: "5000", tokens_reasoning: "2000", punch_count: "20",
     };
 
-    const mockConn = {
-      execute: vi.fn(async (sql: string, params?: unknown[]) => {
-        if (sql.includes("FROM child_rels")) {
-          const parentId = params?.[0] as string;
-          if (parentId === "root") return [[{ child_id: "child-1" }]];
-          if (parentId === "child-1") return [[{ child_id: "grandchild-1" }]];
-          return [[]];
-        }
-        if (sql.includes("FROM punches")) {
-          return [[costSnapshot]];
-        }
-        return [[]];
-      }),
-      end: vi.fn(async () => {}),
-    };
-
-    const monitor = new CostBudgetMonitor(
-      { host: "127.0.0.1", port: 3307, database: "test_db" },
-    );
-    (monitor as unknown as { connection: unknown }).connection = mockConn;
+    const { monitor } = createMockMonitor(undefined, undefined, (sql, params) => {
+      if (sql.includes("FROM child_rels")) {
+        if (params?.[0] === "root") return [{ child_id: "child-1" }];
+        if (params?.[0] === "child-1") return [{ child_id: "grandchild-1" }];
+        return [];
+      }
+      if (sql.includes("FROM punches")) return [costSnapshot];
+      return [];
+    });
 
     const tree = await monitor.getTreeCost("root");
 
@@ -469,18 +420,10 @@ describe("CostBudgetMonitor — checkBudget breaches", () => {
 describe("CostBudgetMonitor — checkBudget warnings", () => {
   it("returns warning when session cost approaches threshold", async () => {
     // $0.85 is 85% of $1.00 cap, above 80% warning threshold
-    const responses = new Map<string, unknown[]>();
-    responses.set("FROM child_rels", []);
-    responses.set("FROM punches", [{
-      total_cost: "0.85",
-      step_count: "20",
-      tokens_input: "30000",
-      tokens_output: "15000",
-      tokens_reasoning: "5000",
-      punch_count: "60",
-    }]);
-
-    const { monitor } = createMockMonitor(responses);
+    const { monitor } = createMockMonitor(leafSessionResponses({
+      total_cost: "0.85", step_count: "20", tokens_input: "30000",
+      tokens_output: "15000", tokens_reasoning: "5000", punch_count: "60",
+    }));
     const result = await monitor.checkBudget("test-session");
 
     expect(result.status).toBe("warning");
@@ -490,18 +433,10 @@ describe("CostBudgetMonitor — checkBudget warnings", () => {
 
   it("returns warning when steps approach threshold", async () => {
     // 42 steps is 84% of 50 cap, above 80% warning threshold
-    const responses = new Map<string, unknown[]>();
-    responses.set("FROM child_rels", []);
-    responses.set("FROM punches", [{
-      total_cost: "0.30",
-      step_count: "42",
-      tokens_input: "30000",
-      tokens_output: "15000",
-      tokens_reasoning: "5000",
-      punch_count: "60",
-    }]);
-
-    const { monitor } = createMockMonitor(responses);
+    const { monitor } = createMockMonitor(leafSessionResponses({
+      total_cost: "0.30", step_count: "42", tokens_input: "30000",
+      tokens_output: "15000", tokens_reasoning: "5000", punch_count: "60",
+    }));
     const result = await monitor.checkBudget("test-session");
 
     expect(result.status).toBe("warning");
@@ -513,18 +448,10 @@ describe("CostBudgetMonitor — checkBudget warnings", () => {
 
 describe("CostBudgetMonitor — checkBudget OK", () => {
   it("returns ok when all metrics are within budget", async () => {
-    const responses = new Map<string, unknown[]>();
-    responses.set("FROM child_rels", []);
-    responses.set("FROM punches", [{
-      total_cost: "0.30",
-      step_count: "10",
-      tokens_input: "15000",
-      tokens_output: "8000",
-      tokens_reasoning: "3000",
-      punch_count: "30",
-    }]);
-
-    const { monitor } = createMockMonitor(responses);
+    const { monitor } = createMockMonitor(leafSessionResponses({
+      total_cost: "0.30", step_count: "10", tokens_input: "15000",
+      tokens_output: "8000", tokens_reasoning: "3000", punch_count: "30",
+    }));
     const result = await monitor.checkBudget("test-session");
 
     expect(result.status).toBe("ok");
@@ -555,18 +482,10 @@ describe("CostBudgetMonitor — runaway session detection", () => {
   it("catches the 267-step $5.94 runaway from Experiment A (with default thresholds)", async () => {
     // Simulates the runaway session from the bead description:
     // 267 steps, $5.94, 67% of total experiment cost
-    const responses = new Map<string, unknown[]>();
-    responses.set("FROM child_rels", []);
-    responses.set("FROM punches", [{
-      total_cost: "5.94",
-      step_count: "267",
-      tokens_input: "400000",
-      tokens_output: "200000",
-      tokens_reasoning: "100000",
-      punch_count: "534",
-    }]);
-
-    const { monitor } = createMockMonitor(responses);
+    const { monitor } = createMockMonitor(leafSessionResponses({
+      total_cost: "5.94", step_count: "267", tokens_input: "400000",
+      tokens_output: "200000", tokens_reasoning: "100000", punch_count: "534",
+    }));
     const result = await monitor.checkBudget("runaway-session");
 
     expect(result.status).toBe("breach");
@@ -579,18 +498,10 @@ describe("CostBudgetMonitor — runaway session detection", () => {
 
   it("well-behaved $0.42 session passes budget check", async () => {
     // Simulates a well-behaved decomposed session: $0.42/100k tokens
-    const responses = new Map<string, unknown[]>();
-    responses.set("FROM child_rels", []);
-    responses.set("FROM punches", [{
-      total_cost: "0.42",
-      step_count: "15",
-      tokens_input: "70000",
-      tokens_output: "30000",
-      tokens_reasoning: "10000",
-      punch_count: "45",
-    }]);
-
-    const { monitor } = createMockMonitor(responses);
+    const { monitor } = createMockMonitor(leafSessionResponses({
+      total_cost: "0.42", step_count: "15", tokens_input: "70000",
+      tokens_output: "30000", tokens_reasoning: "10000", punch_count: "45",
+    }));
     const result = await monitor.checkBudget("good-session");
 
     expect(result.status).toBe("ok");

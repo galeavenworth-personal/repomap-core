@@ -80,6 +80,62 @@ function zeroTimestampRow() {
   return { min_at: null, max_at: null };
 }
 
+/**
+ * Create a mock audit wired to return the given punches for ORDER BY queries.
+ * Shorthand for the most common detector-test pattern.
+ */
+function createPunchAudit(
+  punches: unknown[],
+  auditConfig?: Partial<SessionAuditConfig>,
+) {
+  return createMockAudit((sql) => {
+    if (sql.includes("ORDER BY observed_at")) return punches;
+    return [];
+  }, auditConfig);
+}
+
+/**
+ * Create a mock audit wired to return { count: N } for COUNT(*) queries.
+ * Shorthand for tool adherence deviation tests.
+ */
+function createCountAudit(
+  count: string,
+  auditConfig?: Partial<SessionAuditConfig>,
+) {
+  return createMockAudit((sql) => {
+    if (sql.includes("COUNT(*)")) return [{ count }];
+    return [];
+  }, auditConfig);
+}
+
+/**
+ * Create a runAudit-level mock handler for edge-case tests.
+ * All 4 edge-case tests share this identical SQL-matching skeleton;
+ * only the cost row, timestamp row, gate count, and edit count differ.
+ */
+function createRunAuditHandler(opts: {
+  costRow?: Record<string, unknown>;
+  timestampRow?: Record<string, unknown>;
+  gateCount?: string;
+  editCount?: string;
+}) {
+  const {
+    costRow = zeroCostRow(),
+    timestampRow = zeroTimestampRow(),
+    gateCount = "1",
+    editCount = "5",
+  } = opts;
+  return (sql: string): unknown[] => {
+    if (sql.includes("SUM(cost)") || sql.includes("COALESCE(SUM(cost)")) return [costRow];
+    if (sql.includes("MIN(observed_at)")) return [timestampRow];
+    if (sql.includes("child_rels")) return [];
+    if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) return [{ count: gateCount }];
+    if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) return [{ count: editCount }];
+    if (sql.includes("ORDER BY observed_at")) return [];
+    return [];
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // 1. Configuration Loading
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -358,10 +414,7 @@ describe("SessionAudit — detectLoopSignatures", () => {
       cost: "0.01",
     }));
 
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return stepPunches;
-      return [];
-    });
+    const { audit } = createPunchAudit(stepPunches);
 
     const findings = await audit.detectLoopSignatures("session-1");
 
@@ -382,10 +435,7 @@ describe("SessionAudit — detectLoopSignatures", () => {
       cost: "0",
     }));
 
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return toolPunches;
-      return [];
-    });
+    const { audit } = createPunchAudit(toolPunches);
 
     const findings = await audit.detectLoopSignatures("session-1");
 
@@ -407,20 +457,14 @@ describe("SessionAudit — detectLoopSignatures", () => {
       { punch_type: "tool_call", punch_key: "write_to_file", observed_at: "2025-01-01T00:00:04Z", cost: "0" },
     ];
 
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return punches;
-      return [];
-    });
+    const { audit } = createPunchAudit(punches);
 
     const findings = await audit.detectLoopSignatures("session-1");
     expect(findings).toHaveLength(0);
   });
 
   it("returns no findings for empty punch sequence", async () => {
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return [];
-      return [];
-    });
+    const { audit } = createPunchAudit([]);
 
     const findings = await audit.detectLoopSignatures("session-1");
     expect(findings).toHaveLength(0);
@@ -436,10 +480,7 @@ describe("SessionAudit — detectLoopSignatures", () => {
       cost: "0",
     }));
 
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return toolPunches;
-      return [];
-    });
+    const { audit } = createPunchAudit(toolPunches);
 
     const findings = await audit.detectLoopSignatures("session-1");
 
@@ -457,10 +498,7 @@ describe("SessionAudit — detectLoopSignatures", () => {
       cost: "0",
     }));
 
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return toolPunches;
-      return [];
-    });
+    const { audit } = createPunchAudit(toolPunches);
 
     const findings = await audit.detectLoopSignatures("session-1");
 
@@ -477,10 +515,7 @@ describe("SessionAudit — detectLoopSignatures", () => {
 
 describe("SessionAudit — detectToolAdherenceDeviation", () => {
   it("returns warning when edit count is below minimum", async () => {
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("COUNT(*)")) return [{ count: "0" }];
-      return [];
-    });
+    const { audit } = createCountAudit("0");
 
     const findings = await audit.detectToolAdherenceDeviation("session-1");
 
@@ -492,10 +527,7 @@ describe("SessionAudit — detectToolAdherenceDeviation", () => {
   });
 
   it("returns warning when edit count exceeds maximum", async () => {
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("COUNT(*)")) return [{ count: "50" }];
-      return [];
-    });
+    const { audit } = createCountAudit("50");
 
     const findings = await audit.detectToolAdherenceDeviation("session-1");
 
@@ -507,10 +539,7 @@ describe("SessionAudit — detectToolAdherenceDeviation", () => {
   });
 
   it("returns no findings when edit count is within range", async () => {
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("COUNT(*)")) return [{ count: "10" }];
-      return [];
-    });
+    const { audit } = createCountAudit("10");
 
     const findings = await audit.detectToolAdherenceDeviation("session-1");
     expect(findings).toHaveLength(0);
@@ -518,28 +547,16 @@ describe("SessionAudit — detectToolAdherenceDeviation", () => {
 
   it("returns no findings at exact boundaries", async () => {
     // editCount = 1 (min) → within range
-    const { audit: auditMin } = createMockAudit((sql) => {
-      if (sql.includes("COUNT(*)")) return [{ count: "1" }];
-      return [];
-    });
+    const { audit: auditMin } = createCountAudit("1");
     expect(await auditMin.detectToolAdherenceDeviation("session-1")).toHaveLength(0);
 
     // editCount = 30 (max) → within range
-    const { audit: auditMax } = createMockAudit((sql) => {
-      if (sql.includes("COUNT(*)")) return [{ count: "30" }];
-      return [];
-    });
+    const { audit: auditMax } = createCountAudit("30");
     expect(await auditMax.detectToolAdherenceDeviation("session-1")).toHaveLength(0);
   });
 
   it("respects custom expectedEditRange", async () => {
-    const { audit } = createMockAudit(
-      (sql) => {
-        if (sql.includes("COUNT(*)")) return [{ count: "5" }];
-        return [];
-      },
-      { expectedEditRange: [10, 20] },
-    );
+    const { audit } = createCountAudit("5", { expectedEditRange: [10, 20] });
 
     const findings = await audit.detectToolAdherenceDeviation("session-1");
     expect(findings).toHaveLength(1);
@@ -646,10 +663,7 @@ describe("SessionAudit — detectStalls", () => {
       { punch_type: "tool_call", punch_key: "edit_file", observed_at: new Date(now + 90_000).toISOString(), cost: "0" }, // 90s gap > 60s threshold
     ];
 
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return punches;
-      return [];
-    });
+    const { audit } = createPunchAudit(punches);
 
     const findings = await audit.detectStalls("session-1");
 
@@ -668,10 +682,7 @@ describe("SessionAudit — detectStalls", () => {
       { punch_type: "tool_call", punch_key: "edit_file", observed_at: new Date(now + 200_000).toISOString(), cost: "0" }, // 200s > 180s (3x60s)
     ];
 
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return punches;
-      return [];
-    });
+    const { audit } = createPunchAudit(punches);
 
     const findings = await audit.detectStalls("session-1");
 
@@ -687,31 +698,22 @@ describe("SessionAudit — detectStalls", () => {
       { punch_type: "tool_call", punch_key: "read_file", observed_at: new Date(now + 50_000).toISOString(), cost: "0" }, // 20s < 60s
     ];
 
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return punches;
-      return [];
-    });
+    const { audit } = createPunchAudit(punches);
 
     const findings = await audit.detectStalls("session-1");
     expect(findings).toHaveLength(0);
   });
 
   it("returns no findings with fewer than 2 punches", async () => {
-    const { audit: audit0 } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return [];
-      return [];
-    });
+    const { audit: audit0 } = createPunchAudit([]);
     expect(await audit0.detectStalls("session-1")).toHaveLength(0);
 
-    const { audit: audit1 } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return [{
-        punch_type: "step_complete",
-        punch_key: "step_finished",
-        observed_at: new Date().toISOString(),
-        cost: "0.01",
-      }];
-      return [];
-    });
+    const { audit: audit1 } = createPunchAudit([{
+      punch_type: "step_complete",
+      punch_key: "step_finished",
+      observed_at: new Date().toISOString(),
+      cost: "0.01",
+    }]);
     expect(await audit1.detectStalls("session-1")).toHaveLength(0);
   });
 
@@ -724,10 +726,7 @@ describe("SessionAudit — detectStalls", () => {
       { punch_type: "tool_call", punch_key: "d", observed_at: new Date(now + 180_000).toISOString(), cost: "0" },    // 100s gap (stall 2, longest)
     ];
 
-    const { audit } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return punches;
-      return [];
-    });
+    const { audit } = createPunchAudit(punches);
 
     const findings = await audit.detectStalls("session-1");
 
@@ -744,20 +743,11 @@ describe("SessionAudit — detectStalls", () => {
     ];
 
     // With default 60s threshold: no stall
-    const { audit: auditDefault } = createMockAudit((sql) => {
-      if (sql.includes("ORDER BY observed_at")) return punches;
-      return [];
-    });
+    const { audit: auditDefault } = createPunchAudit(punches);
     expect(await auditDefault.detectStalls("session-1")).toHaveLength(0);
 
     // With custom 30s threshold: stall detected
-    const { audit: auditCustom } = createMockAudit(
-      (sql) => {
-        if (sql.includes("ORDER BY observed_at")) return punches;
-        return [];
-      },
-      { maxPunchGapSeconds: 30 },
-    );
+    const { audit: auditCustom } = createPunchAudit(punches, { maxPunchGapSeconds: 30 });
     const findings = await auditCustom.detectStalls("session-1");
     expect(findings).toHaveLength(1);
   });
@@ -1005,25 +995,7 @@ describe("SessionAudit — runAudit verdict", () => {
 
 describe("SessionAudit — edge cases", () => {
   it("handles session with zero tokens and zero cost", async () => {
-    const handler = (sql: string): unknown[] => {
-      if (sql.includes("SUM(cost)") || sql.includes("COALESCE(SUM(cost)")) {
-        return [zeroCostRow()];
-      }
-      if (sql.includes("MIN(observed_at)")) {
-        return [zeroTimestampRow()];
-      }
-      if (sql.includes("child_rels")) return [];
-      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) {
-        return [{ count: "1" }]; // gates present to avoid missing_quality_gate noise
-      }
-      if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) {
-        return [{ count: "5" }]; // within range
-      }
-      if (sql.includes("ORDER BY observed_at")) return [];
-      return [];
-    };
-
-    const { audit } = createMockAudit(handler);
+    const { audit } = createMockAudit(createRunAuditHandler({}));
     const report = await audit.runAudit("session-zero");
 
     expect(report.metrics.totalCost).toBe(0);
@@ -1035,25 +1007,7 @@ describe("SessionAudit — edge cases", () => {
   });
 
   it("handles session with no punches at all", async () => {
-    const handler = (sql: string): unknown[] => {
-      if (sql.includes("SUM(cost)") || sql.includes("COALESCE(SUM(cost)")) {
-        return [zeroCostRow()];
-      }
-      if (sql.includes("MIN(observed_at)")) {
-        return [zeroTimestampRow()];
-      }
-      if (sql.includes("child_rels")) return [];
-      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) {
-        return [{ count: "0" }]; // no quality gates
-      }
-      if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) {
-        return [{ count: "0" }]; // no edits
-      }
-      if (sql.includes("ORDER BY observed_at")) return [];
-      return [];
-    };
-
-    const { audit } = createMockAudit(handler);
+    const { audit } = createMockAudit(createRunAuditHandler({ gateCount: "0", editCount: "0" }));
     const report = await audit.runAudit("session-empty");
 
     // Missing quality gates are still reported (that's the point)
@@ -1067,32 +1021,12 @@ describe("SessionAudit — edge cases", () => {
   });
 
   it("handles null values in metrics rows", async () => {
-    const handler = (sql: string): unknown[] => {
-      if (sql.includes("SUM(cost)") || sql.includes("COALESCE(SUM(cost)")) {
-        return [{
-          total_cost: null,
-          step_count: null,
-          tokens_input: null,
-          tokens_output: null,
-          tokens_reasoning: null,
-          punch_count: null,
-        }];
-      }
-      if (sql.includes("MIN(observed_at)")) {
-        return [{ min_at: null, max_at: null }];
-      }
-      if (sql.includes("child_rels")) return [];
-      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) {
-        return [{ count: "1" }];
-      }
-      if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) {
-        return [{ count: "5" }];
-      }
-      if (sql.includes("ORDER BY observed_at")) return [];
-      return [];
-    };
-
-    const { audit } = createMockAudit(handler);
+    const { audit } = createMockAudit(createRunAuditHandler({
+      costRow: {
+        total_cost: null, step_count: null, tokens_input: null,
+        tokens_output: null, tokens_reasoning: null, punch_count: null,
+      },
+    }));
     const report = await audit.runAudit("session-null");
 
     expect(report.metrics.totalCost).toBe(0);
@@ -1102,35 +1036,14 @@ describe("SessionAudit — edge cases", () => {
   });
 
   it("handles string-typed numeric values from MySQL", async () => {
-    const handler = (sql: string): unknown[] => {
-      if (sql.includes("SUM(cost)") || sql.includes("COALESCE(SUM(cost)")) {
-        return [{
-          total_cost: "0.50",
-          step_count: "15",
-          tokens_input: "30000",
-          tokens_output: "15000",
-          tokens_reasoning: "5000",
-          punch_count: "50",
-        }];
-      }
-      if (sql.includes("MIN(observed_at)")) {
-        return [{
-          min_at: "2025-01-01T00:00:00Z",
-          max_at: "2025-01-01T00:05:00Z",
-        }];
-      }
-      if (sql.includes("child_rels")) return [];
-      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) {
-        return [{ count: "1" }];
-      }
-      if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) {
-        return [{ count: "10" }];
-      }
-      if (sql.includes("ORDER BY observed_at")) return [];
-      return [];
-    };
-
-    const { audit } = createMockAudit(handler);
+    const { audit } = createMockAudit(createRunAuditHandler({
+      costRow: {
+        total_cost: "0.50", step_count: "15", tokens_input: "30000",
+        tokens_output: "15000", tokens_reasoning: "5000", punch_count: "50",
+      },
+      timestampRow: { min_at: "2025-01-01T00:00:00Z", max_at: "2025-01-01T00:05:00Z" },
+      editCount: "10",
+    }));
     const report = await audit.runAudit("session-strings");
 
     expect(report.metrics.totalCost).toBe(0.50);
