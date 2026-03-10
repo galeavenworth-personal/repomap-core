@@ -38,6 +38,15 @@ export {
   SubtaskVerifier,
 } from "./subtask-verifier.js";
 export {
+  BaseDoltClient,
+  toNumber,
+  parseEnvFloat,
+  parseEnvInt,
+  type MysqlNumeric,
+  type CostAggRow,
+  type ChildRow,
+} from "./dolt-utils.js";
+export {
   CostBudgetMonitor,
   loadCostBudgetConfig,
   DEFAULT_COST_BUDGET_CONFIG,

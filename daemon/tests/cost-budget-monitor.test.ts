@@ -469,29 +469,18 @@ describe("CostBudgetMonitor — checkBudget breaches", () => {
 describe("CostBudgetMonitor — checkBudget warnings", () => {
   it("returns warning when session cost approaches threshold", async () => {
     // $0.85 is 85% of $1.00 cap, above 80% warning threshold
-    const mockConn = {
-      execute: vi.fn(async (sql: string) => {
-        if (sql.includes("FROM child_rels")) return [[]];
-        if (sql.includes("FROM punches")) {
-          return [[{
-            total_cost: "0.85",
-            step_count: "20",
-            tokens_input: "30000",
-            tokens_output: "15000",
-            tokens_reasoning: "5000",
-            punch_count: "60",
-          }]];
-        }
-        return [[]];
-      }),
-      end: vi.fn(async () => {}),
-    };
+    const responses = new Map<string, unknown[]>();
+    responses.set("FROM child_rels", []);
+    responses.set("FROM punches", [{
+      total_cost: "0.85",
+      step_count: "20",
+      tokens_input: "30000",
+      tokens_output: "15000",
+      tokens_reasoning: "5000",
+      punch_count: "60",
+    }]);
 
-    const monitor = new CostBudgetMonitor(
-      { host: "127.0.0.1", port: 3307, database: "test_db" },
-    );
-    (monitor as unknown as { connection: unknown }).connection = mockConn;
-
+    const { monitor } = createMockMonitor(responses);
     const result = await monitor.checkBudget("test-session");
 
     expect(result.status).toBe("warning");
@@ -501,29 +490,18 @@ describe("CostBudgetMonitor — checkBudget warnings", () => {
 
   it("returns warning when steps approach threshold", async () => {
     // 42 steps is 84% of 50 cap, above 80% warning threshold
-    const mockConn = {
-      execute: vi.fn(async (sql: string) => {
-        if (sql.includes("FROM child_rels")) return [[]];
-        if (sql.includes("FROM punches")) {
-          return [[{
-            total_cost: "0.30",
-            step_count: "42",
-            tokens_input: "30000",
-            tokens_output: "15000",
-            tokens_reasoning: "5000",
-            punch_count: "60",
-          }]];
-        }
-        return [[]];
-      }),
-      end: vi.fn(async () => {}),
-    };
+    const responses = new Map<string, unknown[]>();
+    responses.set("FROM child_rels", []);
+    responses.set("FROM punches", [{
+      total_cost: "0.30",
+      step_count: "42",
+      tokens_input: "30000",
+      tokens_output: "15000",
+      tokens_reasoning: "5000",
+      punch_count: "60",
+    }]);
 
-    const monitor = new CostBudgetMonitor(
-      { host: "127.0.0.1", port: 3307, database: "test_db" },
-    );
-    (monitor as unknown as { connection: unknown }).connection = mockConn;
-
+    const { monitor } = createMockMonitor(responses);
     const result = await monitor.checkBudget("test-session");
 
     expect(result.status).toBe("warning");
@@ -535,29 +513,18 @@ describe("CostBudgetMonitor — checkBudget warnings", () => {
 
 describe("CostBudgetMonitor — checkBudget OK", () => {
   it("returns ok when all metrics are within budget", async () => {
-    const mockConn = {
-      execute: vi.fn(async (sql: string) => {
-        if (sql.includes("FROM child_rels")) return [[]];
-        if (sql.includes("FROM punches")) {
-          return [[{
-            total_cost: "0.30",
-            step_count: "10",
-            tokens_input: "15000",
-            tokens_output: "8000",
-            tokens_reasoning: "3000",
-            punch_count: "30",
-          }]];
-        }
-        return [[]];
-      }),
-      end: vi.fn(async () => {}),
-    };
+    const responses = new Map<string, unknown[]>();
+    responses.set("FROM child_rels", []);
+    responses.set("FROM punches", [{
+      total_cost: "0.30",
+      step_count: "10",
+      tokens_input: "15000",
+      tokens_output: "8000",
+      tokens_reasoning: "3000",
+      punch_count: "30",
+    }]);
 
-    const monitor = new CostBudgetMonitor(
-      { host: "127.0.0.1", port: 3307, database: "test_db" },
-    );
-    (monitor as unknown as { connection: unknown }).connection = mockConn;
-
+    const { monitor } = createMockMonitor(responses);
     const result = await monitor.checkBudget("test-session");
 
     expect(result.status).toBe("ok");
@@ -588,29 +555,18 @@ describe("CostBudgetMonitor — runaway session detection", () => {
   it("catches the 267-step $5.94 runaway from Experiment A (with default thresholds)", async () => {
     // Simulates the runaway session from the bead description:
     // 267 steps, $5.94, 67% of total experiment cost
-    const mockConn = {
-      execute: vi.fn(async (sql: string) => {
-        if (sql.includes("FROM child_rels")) return [[]];
-        if (sql.includes("FROM punches")) {
-          return [[{
-            total_cost: "5.94",
-            step_count: "267",
-            tokens_input: "400000",
-            tokens_output: "200000",
-            tokens_reasoning: "100000",
-            punch_count: "534",
-          }]];
-        }
-        return [[]];
-      }),
-      end: vi.fn(async () => {}),
-    };
+    const responses = new Map<string, unknown[]>();
+    responses.set("FROM child_rels", []);
+    responses.set("FROM punches", [{
+      total_cost: "5.94",
+      step_count: "267",
+      tokens_input: "400000",
+      tokens_output: "200000",
+      tokens_reasoning: "100000",
+      punch_count: "534",
+    }]);
 
-    const monitor = new CostBudgetMonitor(
-      { host: "127.0.0.1", port: 3307, database: "test_db" },
-    );
-    (monitor as unknown as { connection: unknown }).connection = mockConn;
-
+    const { monitor } = createMockMonitor(responses);
     const result = await monitor.checkBudget("runaway-session");
 
     expect(result.status).toBe("breach");
@@ -623,29 +579,18 @@ describe("CostBudgetMonitor — runaway session detection", () => {
 
   it("well-behaved $0.42 session passes budget check", async () => {
     // Simulates a well-behaved decomposed session: $0.42/100k tokens
-    const mockConn = {
-      execute: vi.fn(async (sql: string) => {
-        if (sql.includes("FROM child_rels")) return [[]];
-        if (sql.includes("FROM punches")) {
-          return [[{
-            total_cost: "0.42",
-            step_count: "15",
-            tokens_input: "70000",
-            tokens_output: "30000",
-            tokens_reasoning: "10000",
-            punch_count: "45",
-          }]];
-        }
-        return [[]];
-      }),
-      end: vi.fn(async () => {}),
-    };
+    const responses = new Map<string, unknown[]>();
+    responses.set("FROM child_rels", []);
+    responses.set("FROM punches", [{
+      total_cost: "0.42",
+      step_count: "15",
+      tokens_input: "70000",
+      tokens_output: "30000",
+      tokens_reasoning: "10000",
+      punch_count: "45",
+    }]);
 
-    const monitor = new CostBudgetMonitor(
-      { host: "127.0.0.1", port: 3307, database: "test_db" },
-    );
-    (monitor as unknown as { connection: unknown }).connection = mockConn;
-
+    const { monitor } = createMockMonitor(responses);
     const result = await monitor.checkBudget("good-session");
 
     expect(result.status).toBe("ok");

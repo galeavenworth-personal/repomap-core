@@ -20,10 +20,17 @@
  *   - Well-behaved decomposed sessions: $0.42/100k tokens (42% cheaper)
  */
 
-import mysql, { type Connection } from "mysql2/promise";
-
 import type { DoltConfig } from "../writer/index.js";
 import type { LoopClassification, LoopDetection, SessionMetrics } from "./types.js";
+import {
+  BaseDoltClient,
+  toNumber,
+  parseEnvFloat,
+  parseEnvInt,
+  type MysqlNumeric,
+  type CostAggRow,
+  type ChildRow,
+} from "./dolt-utils.js";
 
 // ── Configuration ──
 
@@ -58,25 +65,9 @@ export const DEFAULT_COST_BUDGET_CONFIG: CostBudgetConfig = {
 export function loadCostBudgetConfig(
   overrides?: Partial<CostBudgetConfig>,
 ): CostBudgetConfig {
-  const env = process.env;
-
-  const parseFloat_ = (key: string, fallback: number): number => {
-    const raw = env[key];
-    if (raw == null || raw === "") return fallback;
-    const parsed = Number.parseFloat(raw);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-  };
-
-  const parseInt_ = (key: string, fallback: number): number => {
-    const raw = env[key];
-    if (raw == null || raw === "") return fallback;
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-  };
-
   /** Parse a ratio that must be in [0, 1]. */
   const parseRatio = (key: string, fallback: number): number => {
-    const raw = env[key];
+    const raw = process.env[key];
     if (raw == null || raw === "") return fallback;
     const parsed = Number.parseFloat(raw);
     return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
@@ -84,11 +75,11 @@ export function loadCostBudgetConfig(
 
   return {
     maxSessionCostUsd: overrides?.maxSessionCostUsd
-      ?? parseFloat_("GOVERNOR_MAX_SESSION_COST_USD", DEFAULT_COST_BUDGET_CONFIG.maxSessionCostUsd),
+      ?? parseEnvFloat("GOVERNOR_MAX_SESSION_COST_USD", DEFAULT_COST_BUDGET_CONFIG.maxSessionCostUsd),
     maxSessionSteps: overrides?.maxSessionSteps
-      ?? parseInt_("GOVERNOR_MAX_SESSION_STEPS", DEFAULT_COST_BUDGET_CONFIG.maxSessionSteps),
+      ?? parseEnvInt("GOVERNOR_MAX_SESSION_STEPS", DEFAULT_COST_BUDGET_CONFIG.maxSessionSteps),
     maxTreeCostUsd: overrides?.maxTreeCostUsd
-      ?? parseFloat_("GOVERNOR_MAX_TREE_COST_USD", DEFAULT_COST_BUDGET_CONFIG.maxTreeCostUsd),
+      ?? parseEnvFloat("GOVERNOR_MAX_TREE_COST_USD", DEFAULT_COST_BUDGET_CONFIG.maxTreeCostUsd),
     warningThresholdRatio: overrides?.warningThresholdRatio
       ?? parseRatio("GOVERNOR_WARNING_THRESHOLD", DEFAULT_COST_BUDGET_CONFIG.warningThresholdRatio),
   };
@@ -162,30 +153,6 @@ export interface GovernorIntervention {
 
 // ── Monitor Implementation ──
 
-/** MySQL2 returns numeric columns as string | number | null depending on driver config. */
-type MysqlNumeric = string | number | null;
-
-/** Row shape from Dolt cost aggregation queries. */
-interface CostAggRow {
-  total_cost: MysqlNumeric;
-  step_count: MysqlNumeric;
-  tokens_input: MysqlNumeric;
-  tokens_output: MysqlNumeric;
-  tokens_reasoning: MysqlNumeric;
-  punch_count: MysqlNumeric;
-}
-
-interface ChildRow {
-  child_id: string;
-}
-
-function toNumber(value: MysqlNumeric | undefined): number {
-  if (value == null) return 0;
-  if (typeof value === "number") return value;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 /**
  * Cost Budget Monitor — queries Dolt in real-time and evaluates cost budgets.
  *
@@ -196,39 +163,15 @@ function toNumber(value: MysqlNumeric | undefined): number {
  *   if (result.intervention) { ... kill session ... }
  *   await monitor.disconnect();
  */
-export class CostBudgetMonitor {
-  private connection: Connection | null = null;
+export class CostBudgetMonitor extends BaseDoltClient {
   private readonly budgetConfig: CostBudgetConfig;
 
   constructor(
-    private readonly doltConfig: DoltConfig,
+    doltConfig: DoltConfig,
     budgetConfig?: Partial<CostBudgetConfig>,
   ) {
+    super(doltConfig);
     this.budgetConfig = loadCostBudgetConfig(budgetConfig);
-  }
-
-  async connect(): Promise<void> {
-    this.connection = await mysql.createConnection({
-      host: this.doltConfig.host,
-      port: this.doltConfig.port,
-      database: this.doltConfig.database,
-      user: this.doltConfig.user ?? "root",
-      password: this.doltConfig.password,
-    });
-  }
-
-  async disconnect(): Promise<void> {
-    if (this.connection) {
-      await this.connection.end();
-      this.connection = null;
-    }
-  }
-
-  private requireConnection(): Connection {
-    if (!this.connection) {
-      throw new Error("CostBudgetMonitor is not connected");
-    }
-    return this.connection;
   }
 
   /** Get the current budget configuration (useful for logging/debugging). */

@@ -20,8 +20,6 @@
  *   - Stall: >60s gap between punches suggests stuck or confused
  */
 
-import mysql, { type Connection } from "mysql2/promise";
-
 import type { DoltConfig } from "../writer/index.js";
 import type {
   AuditFinding,
@@ -30,6 +28,15 @@ import type {
   SessionAuditConfig,
   SessionAuditReport,
 } from "./types.js";
+import {
+  BaseDoltClient,
+  toNumber,
+  parseEnvFloat,
+  parseEnvInt,
+  type MysqlNumeric,
+  type CostAggRow,
+  type ChildRow,
+} from "./dolt-utils.js";
 
 // ── Configuration ──
 
@@ -62,29 +69,13 @@ export const DEFAULT_AUDIT_CONFIG: SessionAuditConfig = {
 export function loadAuditConfig(
   overrides?: Partial<SessionAuditConfig>,
 ): SessionAuditConfig {
-  const env = process.env;
-
-  const parseFloat_ = (key: string, fallback: number): number => {
-    const raw = env[key];
-    if (raw == null || raw === "") return fallback;
-    const parsed = Number.parseFloat(raw);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-  };
-
-  const parseInt_ = (key: string, fallback: number): number => {
-    const raw = env[key];
-    if (raw == null || raw === "") return fallback;
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-  };
-
   return {
     cheapZonePercentileUsd: overrides?.cheapZonePercentileUsd
-      ?? parseFloat_("AUDIT_CHEAP_ZONE_USD", DEFAULT_AUDIT_CONFIG.cheapZonePercentileUsd),
+      ?? parseEnvFloat("AUDIT_CHEAP_ZONE_USD", DEFAULT_AUDIT_CONFIG.cheapZonePercentileUsd),
     costAnomalyThresholdUsd: overrides?.costAnomalyThresholdUsd
-      ?? parseFloat_("AUDIT_COST_ANOMALY_USD", DEFAULT_AUDIT_CONFIG.costAnomalyThresholdUsd),
+      ?? parseEnvFloat("AUDIT_COST_ANOMALY_USD", DEFAULT_AUDIT_CONFIG.costAnomalyThresholdUsd),
     maxExpectedSteps: overrides?.maxExpectedSteps
-      ?? parseInt_("AUDIT_MAX_EXPECTED_STEPS", DEFAULT_AUDIT_CONFIG.maxExpectedSteps),
+      ?? parseEnvInt("AUDIT_MAX_EXPECTED_STEPS", DEFAULT_AUDIT_CONFIG.maxExpectedSteps),
     loopMinPatternLength: overrides?.loopMinPatternLength
       ?? DEFAULT_AUDIT_CONFIG.loopMinPatternLength,
     loopMaxPatternLength: overrides?.loopMaxPatternLength
@@ -94,35 +85,19 @@ export function loadAuditConfig(
     expectedEditRange: overrides?.expectedEditRange
       ?? DEFAULT_AUDIT_CONFIG.expectedEditRange,
     maxPunchGapSeconds: overrides?.maxPunchGapSeconds
-      ?? parseInt_("AUDIT_MAX_PUNCH_GAP_SECONDS", DEFAULT_AUDIT_CONFIG.maxPunchGapSeconds),
+      ?? parseEnvInt("AUDIT_MAX_PUNCH_GAP_SECONDS", DEFAULT_AUDIT_CONFIG.maxPunchGapSeconds),
     requiredQualityGates: overrides?.requiredQualityGates
       ?? DEFAULT_AUDIT_CONFIG.requiredQualityGates,
   };
 }
 
-// ── Row Types ──
-
-/** MySQL2 returns numeric columns as string | number | null depending on driver config. */
-type MysqlNumeric = string | number | null;
-
-interface CostAggRow {
-  total_cost: MysqlNumeric;
-  step_count: MysqlNumeric;
-  tokens_input: MysqlNumeric;
-  tokens_output: MysqlNumeric;
-  tokens_reasoning: MysqlNumeric;
-  punch_count: MysqlNumeric;
-}
+// ── Row Types (module-local, not shared) ──
 
 interface PunchRow {
   punch_type: string;
   punch_key: string;
   observed_at: string | Date;
   cost: MysqlNumeric;
-}
-
-interface ChildRow {
-  child_id: string;
 }
 
 interface ChildStatusRow {
@@ -136,13 +111,6 @@ interface TimestampRow {
   max_at: string | Date | null;
 }
 
-function toNumber(value: MysqlNumeric | undefined): number {
-  if (value == null) return 0;
-  if (typeof value === "number") return value;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 // ── Session Audit ──
 
 /**
@@ -154,39 +122,15 @@ function toNumber(value: MysqlNumeric | undefined): number {
  *   const report = await audit.runAudit(sessionId);
  *   await audit.disconnect();
  */
-export class SessionAudit {
-  private connection: Connection | null = null;
+export class SessionAudit extends BaseDoltClient {
   private readonly auditConfig: SessionAuditConfig;
 
   constructor(
-    private readonly doltConfig: DoltConfig,
+    doltConfig: DoltConfig,
     auditConfig?: Partial<SessionAuditConfig>,
   ) {
+    super(doltConfig);
     this.auditConfig = loadAuditConfig(auditConfig);
-  }
-
-  async connect(): Promise<void> {
-    this.connection = await mysql.createConnection({
-      host: this.doltConfig.host,
-      port: this.doltConfig.port,
-      database: this.doltConfig.database,
-      user: this.doltConfig.user ?? "root",
-      password: this.doltConfig.password,
-    });
-  }
-
-  async disconnect(): Promise<void> {
-    if (this.connection) {
-      await this.connection.end();
-      this.connection = null;
-    }
-  }
-
-  private requireConnection(): Connection {
-    if (!this.connection) {
-      throw new Error("SessionAudit is not connected");
-    }
-    return this.connection;
   }
 
   /** Get the current audit configuration. */
