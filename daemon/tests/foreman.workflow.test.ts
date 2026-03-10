@@ -1854,3 +1854,861 @@ describe("exception states are resumable", () => {
     expect(carriedInput.carriedState!.awaitingInterventionSince).toBeDefined();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Agent-First Operation & Comprehensive Control Tests (0mp.19)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── 23. Full Happy Path Multi-Cycle (AC5: Agent-First Operation) ──
+
+describe("full happy path multi-cycle (AC5: agent-first operation)", () => {
+  it("autonomously polls, dispatches, completes, closes, and loops across multiple beads", async () => {
+    // This is the AC5 test: demonstrates the foreman can independently
+    // poll → dispatch → complete → close → poll again without any manual
+    // Cascade driver or human intervention.
+    let selectCalls = 0;
+    let closeBeadCalls: Array<{ beadId: string }> = [];
+    let updateStatusCalls: Array<{ beadId: string; status: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      switch (selectCalls) {
+        case 1:
+          return {
+            beadId: "bead-cycle-1",
+            title: "First task",
+            priority: "P1",
+            labels: [],
+            dependsOn: [],
+            estimatedComplexity: "small",
+          };
+        case 2:
+          return {
+            beadId: "bead-cycle-2",
+            title: "Second task",
+            priority: "P2",
+            labels: [],
+            dependsOn: [],
+            estimatedComplexity: "trivial",
+          };
+        default:
+          return null; // No more work after two beads
+      }
+    });
+    setMockActivity("updateBeadStatus", (_rp: unknown, beadId: unknown, status: unknown) => {
+      updateStatusCalls.push({ beadId: beadId as string, status: status as string });
+      return { updated: true, error: null };
+    });
+    setMockActivity("closeBead", (input: unknown) => {
+      const inp = input as { beadId: string };
+      closeBeadCalls.push({ beadId: inp.beadId });
+      return { closed: true, error: null };
+    });
+
+    // Both child workflows complete successfully
+    childResults = [
+      makeAgentResult({ status: "completed", sessionId: "sess-cycle-1", totalCost: 0.3 }),
+      makeAgentResult({ status: "completed", sessionId: "sess-cycle-2", totalCost: 0.2 }),
+    ];
+
+    // maxIterations = 5 gives enough room for: bead1 dispatch + bead2 dispatch + idle + continueAsNew
+    const input = makeInput({ maxIterations: 5 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    // ── Verify agent-first operation: two beads processed autonomously ──
+
+    // Two child workflows started (one per bead)
+    expect(startChildCalls.length).toBe(2);
+    expect(startChildCalls[0].taskQueue).toBe("agent-tasks");
+    expect(startChildCalls[1].taskQueue).toBe("agent-tasks");
+
+    // Both beads were claimed (in_progress)
+    const claimCalls = updateStatusCalls.filter((c) => c.status === "in_progress");
+    expect(claimCalls.length).toBe(2);
+    expect(claimCalls[0].beadId).toBe("bead-cycle-1");
+    expect(claimCalls[1].beadId).toBe("bead-cycle-2");
+
+    // Both beads were closed after completion
+    expect(closeBeadCalls.length).toBe(2);
+    expect(closeBeadCalls[0].beadId).toBe("bead-cycle-1");
+    expect(closeBeadCalls[1].beadId).toBe("bead-cycle-2");
+
+    // Carried state reflects both dispatches and completions
+    expect(continueAsNewCalled).toBe(true);
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    expect(carriedInput.carriedState!.totalDispatches).toBe(2);
+    expect(carriedInput.carriedState!.totalCompletions).toBe(2);
+    expect(carriedInput.carriedState!.totalFailures).toBe(0);
+    expect(carriedInput.carriedState!.totalEscalations).toBe(0);
+
+    // Both outcomes recorded
+    expect(carriedInput.carriedState!.recentOutcomes.length).toBe(2);
+    expect(carriedInput.carriedState!.recentOutcomes[0].beadId).toBe("bead-cycle-1");
+    expect(carriedInput.carriedState!.recentOutcomes[0].result).toEqual({ kind: "completed" });
+    expect(carriedInput.carriedState!.recentOutcomes[1].beadId).toBe("bead-cycle-2");
+    expect(carriedInput.carriedState!.recentOutcomes[1].result).toEqual({ kind: "completed" });
+  });
+
+  it("accumulates lifetime counters across multiple dispatch cycles", async () => {
+    let selectCalls = 0;
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls <= 3) {
+        return {
+          beadId: `bead-acc-${selectCalls}`,
+          title: `Task ${selectCalls}`,
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("closeBead", () => ({ closed: true, error: null }));
+
+    childResults = [
+      makeAgentResult({ status: "completed", totalCost: 1.0 }),
+      makeAgentResult({ status: "completed", totalCost: 2.0 }),
+      makeAgentResult({ status: "completed", totalCost: 0.5 }),
+    ];
+
+    // Start with carried state from a previous run
+    const input = makeInput({
+      maxIterations: 6,
+      carriedState: {
+        totalIterations: 20,
+        totalDispatches: 10,
+        totalCompletions: 8,
+        totalFailures: 2,
+        totalEscalations: 1,
+        lastHealthCheck: null,
+        lastHealthCheckAt: null,
+        recentOutcomes: [],
+        retryLedger: [],
+        pauseRequested: false,
+        shutdownRequested: false,
+        consecutiveHealthFailures: 0,
+        interventionReason: null,
+        awaitingInterventionSince: null,
+        foremanStartedAt: new Date(Date.now() - 7_200_000).toISOString(),
+        lastContinueAsNewAt: null,
+      },
+    });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    expect(continueAsNewCalled).toBe(true);
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    // Lifetime counters accumulate: 10 + 3 dispatches, 8 + 3 completions
+    expect(carriedInput.carriedState!.totalDispatches).toBe(13);
+    expect(carriedInput.carriedState!.totalCompletions).toBe(11);
+    // Failures and escalations unchanged
+    expect(carriedInput.carriedState!.totalFailures).toBe(2);
+    expect(carriedInput.carriedState!.totalEscalations).toBe(1);
+  });
+});
+
+// ── 24. Health Blocked → Recover → Proceed ──
+
+describe("health blocked then recovers", () => {
+  it("blocks when unhealthy, retries, then proceeds when healthy", async () => {
+    let healthCallCount = 0;
+    let selectCalls = 0;
+
+    setMockActivity("checkStackHealth", () => {
+      healthCallCount++;
+      // Fail first 2 checks, then pass
+      if (healthCallCount <= 2) return makeHealthResult("fail");
+      return makeHealthResult("pass");
+    });
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-after-recovery",
+          title: "Work after health recovery",
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("closeBead", () => ({ closed: true, error: null }));
+
+    childResults = [makeAgentResult({ status: "completed" })];
+
+    const input = makeInput({
+      maxIterations: 6,
+      healthCheckIntervalMs: 0, // Check every iteration
+      healthFailureThreshold: 10, // High threshold so we don't escalate
+    });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    // selectNextBead should have been called (health recovered)
+    expect(selectCalls).toBeGreaterThanOrEqual(1);
+
+    // A child workflow should have been started after recovery
+    expect(startChildCalls.length).toBe(1);
+
+    // Verify carried state shows the dispatch happened
+    expect(continueAsNewCalled).toBe(true);
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    expect(carriedInput.carriedState!.totalDispatches).toBe(1);
+    expect(carriedInput.carriedState!.totalCompletions).toBe(1);
+    // Health failure counter should have been reset after pass
+    expect(carriedInput.carriedState!.consecutiveHealthFailures).toBe(0);
+  });
+
+  it("records health blocked reason in status query while blocked", async () => {
+    let healthCallCount = 0;
+
+    setMockActivity("checkStackHealth", () => {
+      healthCallCount++;
+      return makeHealthResult("fail");
+    });
+
+    // maxIterations=1 so we exit quickly
+    const input = makeInput({
+      maxIterations: 1,
+      healthCheckIntervalMs: 0,
+      healthFailureThreshold: 10,
+    });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+    }
+
+    // Query health status
+    const healthHandler = queryHandlers.get("foreman.health") as () => HealthCheckResult | null;
+    const health = healthHandler();
+    expect(health).not.toBeNull();
+    expect(health!.overall).toBe("fail");
+
+    // No dispatches should have occurred
+    expect(startChildCalls.length).toBe(0);
+  });
+});
+
+// ── 25. No Work → Eventually Gets Work ──
+
+describe("no work then eventually gets work", () => {
+  it("idles on empty poll, then dispatches when work appears", async () => {
+    let selectCalls = 0;
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      // First 2 polls return nothing; third returns work
+      if (selectCalls <= 2) return null;
+      if (selectCalls === 3) {
+        return {
+          beadId: "bead-delayed",
+          title: "Delayed work item",
+          priority: "P2",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("closeBead", () => ({ closed: true, error: null }));
+
+    childResults = [makeAgentResult({ status: "completed" })];
+
+    const input = makeInput({ maxIterations: 6 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    // Should have idled twice (sleep calls for empty polls)
+    expect(sleepCalls.length).toBeGreaterThanOrEqual(2);
+
+    // Then should have dispatched once
+    expect(startChildCalls.length).toBe(1);
+
+    // Carried state reflects the dispatch
+    expect(continueAsNewCalled).toBe(true);
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    expect(carriedInput.carriedState!.totalDispatches).toBe(1);
+    expect(carriedInput.carriedState!.totalCompletions).toBe(1);
+  });
+});
+
+// ── 26. Pause Signal Behavioral Test ──
+
+describe("pause signal behavior", () => {
+  it("pauses via carried state, blocks dispatch, and resumes on shutdown signal", async () => {
+    // Test strategy: start with pauseRequested=true in carried state.
+    // The workflow enters the paused condition block immediately.
+    // We verify the phase is paused, then send shutdown to exit cleanly.
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => null);
+
+    const input = makeInput({
+      maxIterations: 5,
+      carriedState: {
+        totalIterations: 5,
+        totalDispatches: 2,
+        totalCompletions: 2,
+        totalFailures: 0,
+        totalEscalations: 0,
+        lastHealthCheck: null,
+        lastHealthCheckAt: null,
+        recentOutcomes: [],
+        retryLedger: [],
+        pauseRequested: true, // Start paused
+        shutdownRequested: false,
+        consecutiveHealthFailures: 0,
+        interventionReason: null,
+        awaitingInterventionSince: null,
+        foremanStartedAt: new Date().toISOString(),
+        lastContinueAsNewAt: null,
+      },
+    });
+
+    const workflowPromise = foremanWorkflow(input);
+
+    // Wait for workflow to reach the paused condition block
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Verify we're paused via status query
+    const statusHandler = queryHandlers.get("foreman.status") as () => ForemanStatus;
+    const status = statusHandler();
+    expect(status.paused).toBe(true);
+    expect(status.phase).toBe("paused");
+
+    // No dispatches should have happened while paused
+    expect(startChildCalls.length).toBe(0);
+
+    // Send shutdown signal to exit the pause condition
+    const shutdownHandler = signalHandlers.get("foreman.shutdown");
+    shutdownHandler!({ reason: "test: exit from pause" });
+
+    // Resolve the condition that was blocking
+    if (conditionResolver) conditionResolver();
+
+    const result = await workflowPromise;
+    expect(result.status).toBe("shutdown");
+    expect(result.shutdownReason).toBe("test: exit from pause");
+
+    // Verify no work was dispatched while paused
+    expect(startChildCalls.length).toBe(0);
+  });
+
+  it("pause signal handler sets pauseRequested state", async () => {
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => null);
+
+    const input = makeInput({ maxIterations: 1 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch {
+      // Expected: continueAsNew
+    }
+
+    // Verify handlers are registered
+    const pauseHandler = signalHandlers.get("foreman.pause");
+    const resumeHandler = signalHandlers.get("foreman.resume");
+    expect(pauseHandler).toBeDefined();
+    expect(resumeHandler).toBeDefined();
+
+    // Query initial state
+    const statusHandler = queryHandlers.get("foreman.status") as () => ForemanStatus;
+
+    // Fire pause signal
+    pauseHandler!();
+    const afterPause = statusHandler();
+    expect(afterPause.paused).toBe(true);
+
+    // Fire resume signal
+    resumeHandler!();
+    const afterResume = statusHandler();
+    expect(afterResume.paused).toBe(false);
+  });
+});
+
+// ── 27. Shutdown Signal — Graceful Drain ──
+
+describe("shutdown signal graceful drain", () => {
+  it("completes current bead then returns shutdown when shutdown fires during dispatch", async () => {
+    // Strategy: Fire the shutdown signal from inside the closeBead activity
+    // (which runs after the child workflow completes). This simulates
+    // shutdown arriving during the dispatch cycle. The workflow will
+    // complete the close, increment counters, then see shutdownRequested
+    // at the top of the next loop iteration.
+    let selectCalls = 0;
+    let closeBeadCalls: Array<{ beadId: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-in-flight",
+          title: "In-flight during shutdown",
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("closeBead", (input: unknown) => {
+      const inp = input as { beadId: string };
+      closeBeadCalls.push({ beadId: inp.beadId });
+      // Fire shutdown from inside the close activity — simulates operator
+      // sending shutdown while the dispatch is being finalized
+      const shutdownHandler = signalHandlers.get("foreman.shutdown");
+      if (shutdownHandler) {
+        shutdownHandler({ reason: "operator requested graceful drain" });
+      }
+      return { closed: true, error: null };
+    });
+
+    childResults = [makeAgentResult({ status: "completed" })];
+
+    const input = makeInput({ maxIterations: 10 });
+
+    const result = await foremanWorkflow(input);
+
+    // The workflow should have completed the bead, then seen shutdown
+    expect(result.status).toBe("shutdown");
+    expect(result.shutdownReason).toBe("operator requested graceful drain");
+
+    // The in-flight bead was completed and closed
+    expect(closeBeadCalls.length).toBe(1);
+    expect(closeBeadCalls[0].beadId).toBe("bead-in-flight");
+
+    // Only one dispatch (no new work after shutdown)
+    expect(startChildCalls.length).toBe(1);
+  });
+
+  it("exits immediately via carried shutdown state without dispatching", async () => {
+    // Verify the graceful path: shutdown is carried across continue-as-new
+    // and the new workflow returns immediately without entering the loop.
+    const input = makeInput({
+      carriedState: {
+        totalIterations: 30,
+        totalDispatches: 15,
+        totalCompletions: 14,
+        totalFailures: 1,
+        totalEscalations: 0,
+        lastHealthCheck: null,
+        lastHealthCheckAt: null,
+        recentOutcomes: [],
+        retryLedger: [],
+        pauseRequested: false,
+        shutdownRequested: true,
+        consecutiveHealthFailures: 0,
+        interventionReason: null,
+        awaitingInterventionSince: null,
+        foremanStartedAt: new Date().toISOString(),
+        lastContinueAsNewAt: null,
+      },
+    });
+
+    const result = await foremanWorkflow(input);
+
+    expect(result.status).toBe("shutdown");
+    // No dispatches occurred
+    expect(startChildCalls.length).toBe(0);
+    // Counters preserved from carried state
+    expect(result.totalDispatches).toBe(15);
+    expect(result.totalCompletions).toBe(14);
+  });
+});
+
+// ── 28. Exception Escalation — Irrecoverable Failure → Paused → Resume ──
+
+describe("exception escalation to paused state", () => {
+  it("enters awaiting_intervention with reason on irrecoverable failure, resumes on signal", async () => {
+    let selectCallCount = 0;
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCallCount++;
+      if (selectCallCount === 1) {
+        // First call: throw irrecoverable error
+        const err = new Error("bd schema version mismatch: expected v3, got v2");
+        err.name = "BeadsContractError";
+        throw err;
+      }
+      // After resume, return null (no work — we just want to verify the
+      // foreman loops back after resuming from intervention)
+      return null;
+    });
+
+    const input = makeInput({ maxIterations: 8, healthCheckIntervalMs: 0 });
+
+    const workflowPromise = foremanWorkflow(input);
+
+    // Wait for workflow to enter awaiting_intervention
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Verify the foreman is paused with a clear reason
+    const statusHandler = queryHandlers.get("foreman.status") as () => ForemanStatus;
+    const status = statusHandler();
+    expect(status.phase).toBe("awaiting_intervention");
+    expect(status.interventionReason).toContain("BeadsContractError");
+    expect(status.interventionReason).toContain("schema version mismatch");
+    expect(status.awaitingInterventionSince).not.toBeNull();
+
+    // Escalation counter should have incremented
+    expect(status.lifetimeEscalations).toBe(1);
+
+    // Send resume signal to clear intervention and unblock the workflow
+    const resumeHandler = signalHandlers.get("foreman.resume");
+    resumeHandler!();
+    if (conditionResolver) conditionResolver();
+
+    // After resume, the workflow continues — it will loop back, do health check,
+    // selectNextBead (returns null), idle, and eventually continueAsNew or we
+    // need to trigger shutdown.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Send shutdown to exit cleanly
+    const shutdownHandler = signalHandlers.get("foreman.shutdown");
+    shutdownHandler!({ reason: "test cleanup" });
+    if (conditionResolver) conditionResolver();
+
+    try {
+      const result = await workflowPromise;
+      if (result) {
+        expect(["shutdown", "failed"]).toContain(result.status);
+      }
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+    }
+
+    // The select was called at least once (the error call)
+    expect(selectCallCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ── 29. Outcome Reconciliation — Comprehensive ──
+
+describe("outcome reconciliation comprehensive", () => {
+  it("success closes bead and increments completion counter", async () => {
+    let selectCalls = 0;
+    let closeBeadCalls: Array<{ beadId: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-recon-success",
+          title: "Clean completion",
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("closeBead", (input: unknown) => {
+      const inp = input as { beadId: string };
+      closeBeadCalls.push({ beadId: inp.beadId });
+      return { closed: true, error: null };
+    });
+
+    childResults = [makeAgentResult({ status: "completed" })];
+
+    const input = makeInput({ maxIterations: 3 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    // Bead was closed
+    expect(closeBeadCalls.length).toBe(1);
+    expect(closeBeadCalls[0].beadId).toBe("bead-recon-success");
+
+    // Completion counter incremented
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    expect(carriedInput.carriedState!.totalCompletions).toBe(1);
+    expect(carriedInput.carriedState!.totalFailures).toBe(0);
+  });
+
+  it("failure updates retry ledger and does not close bead", async () => {
+    let selectCalls = 0;
+    let closeBeadCalls: Array<{ beadId: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-recon-fail",
+          title: "Failing task",
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("closeBead", (input: unknown) => {
+      const inp = input as { beadId: string };
+      closeBeadCalls.push({ beadId: inp.beadId });
+      return { closed: true, error: null };
+    });
+    setMockActivity("annotateBead", () => ({ annotated: true, error: null }));
+    setMockActivity("createEscalation", () => ({ escalationBeadId: "esc-recon" }));
+
+    childResults = [
+      makeAgentResult({
+        status: "failed",
+        error: "ECONNREFUSED: connection refused",
+      }),
+    ];
+
+    const input = makeInput({ maxIterations: 3, maxRetriesPerBead: 2 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    // Bead was NOT closed (failure path)
+    expect(closeBeadCalls.length).toBe(0);
+
+    // Retry ledger was updated
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    const ledger = carriedInput.carriedState!.retryLedger;
+    expect(ledger.length).toBe(1);
+    expect(ledger[0].beadId).toBe("bead-recon-fail");
+    expect(ledger[0].exhausted).toBe(false);
+  });
+
+  it("aborted dispatch leaves bead open (unclaimed but not closed)", async () => {
+    let selectCalls = 0;
+    let closeBeadCalls: Array<{ beadId: string }> = [];
+    let updateStatusCalls: Array<{ beadId: string; status: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-recon-abort",
+          title: "Aborted task",
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", (_rp: unknown, beadId: unknown, status: unknown) => {
+      updateStatusCalls.push({ beadId: beadId as string, status: status as string });
+      return { updated: true, error: null };
+    });
+    setMockActivity("closeBead", (input: unknown) => {
+      const inp = input as { beadId: string };
+      closeBeadCalls.push({ beadId: inp.beadId });
+      return { closed: true, error: null };
+    });
+    setMockActivity("annotateBead", () => ({ annotated: true, error: null }));
+
+    childResults = [
+      makeAgentResult({
+        status: "aborted",
+        error: "operator cancelled in-flight",
+      }),
+    ];
+
+    const input = makeInput({ maxIterations: 3 });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    // Bead was NOT closed (aborted path leaves open)
+    expect(closeBeadCalls.length).toBe(0);
+
+    // Bead was unclaimed (set back to ready)
+    const unclaimCall = updateStatusCalls.find(
+      (c) => c.beadId === "bead-recon-abort" && c.status === "ready",
+    );
+    expect(unclaimCall).toBeDefined();
+
+    // No escalation — aborted is not escalated
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    expect(carriedInput.carriedState!.totalEscalations).toBe(0);
+  });
+});
+
+// ── 30. Continue-As-New — Full State Preservation ──
+
+describe("continue-as-new state preservation", () => {
+  it("preserves all state fields across continue-as-new boundary", async () => {
+    let selectCalls = 0;
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-state-check",
+          title: "State preservation test",
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
+    setMockActivity("closeBead", () => ({ closed: true, error: null }));
+
+    childResults = [
+      makeAgentResult({
+        status: "completed",
+        sessionId: "sess-state",
+        totalCost: 2.5,
+        tokensInput: 12000,
+        tokensOutput: 6000,
+      }),
+    ];
+
+    const existingOutcome: DispatchOutcome = {
+      beadId: "bead-prior",
+      workflowId: "wf-prior",
+      sessionId: "sess-prior",
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      completedAt: new Date(Date.now() - 30_000).toISOString(),
+      durationMs: 30_000,
+      totalCost: 1.0,
+      tokensInput: 5000,
+      tokensOutput: 2500,
+      result: { kind: "completed" },
+      audit: null,
+      attempt: 1,
+    };
+
+    const input = makeInput({
+      maxIterations: 3,
+      carriedState: {
+        totalIterations: 42,
+        totalDispatches: 20,
+        totalCompletions: 18,
+        totalFailures: 2,
+        totalEscalations: 1,
+        lastHealthCheck: makeHealthResult("pass"),
+        lastHealthCheckAt: new Date().toISOString(),
+        recentOutcomes: [existingOutcome],
+        retryLedger: [],
+        pauseRequested: false,
+        shutdownRequested: false,
+        consecutiveHealthFailures: 0,
+        interventionReason: null,
+        awaitingInterventionSince: null,
+        foremanStartedAt: new Date(Date.now() - 7_200_000).toISOString(),
+        lastContinueAsNewAt: new Date(Date.now() - 3_600_000).toISOString(),
+      },
+    });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    expect(continueAsNewCalled).toBe(true);
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    const cs = carriedInput.carriedState!;
+
+    // Lifetime counters accumulated
+    expect(cs.totalIterations).toBeGreaterThanOrEqual(45); // 42 + at least 3
+    expect(cs.totalDispatches).toBe(21); // 20 + 1
+    expect(cs.totalCompletions).toBe(19); // 18 + 1
+    expect(cs.totalFailures).toBe(2); // unchanged
+    expect(cs.totalEscalations).toBe(1); // unchanged
+
+    // Recent outcomes includes both prior and new
+    expect(cs.recentOutcomes.length).toBe(2);
+    expect(cs.recentOutcomes[0].beadId).toBe("bead-prior");
+    expect(cs.recentOutcomes[1].beadId).toBe("bead-state-check");
+
+    // Health state preserved
+    expect(cs.lastHealthCheck).not.toBeNull();
+    expect(cs.lastHealthCheckAt).not.toBeNull();
+
+    // Timing fields preserved
+    expect(cs.foremanStartedAt).toBeDefined();
+    expect(cs.lastContinueAsNewAt).not.toBeNull();
+
+    // Operator state
+    expect(cs.pauseRequested).toBe(false);
+    expect(cs.shutdownRequested).toBe(false);
+    expect(cs.consecutiveHealthFailures).toBe(0);
+  });
+});
