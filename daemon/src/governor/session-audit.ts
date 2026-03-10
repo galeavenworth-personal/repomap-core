@@ -34,8 +34,6 @@ import {
   parseEnvFloat,
   parseEnvInt,
   type MysqlNumeric,
-  type CostAggRow,
-  type ChildRow,
 } from "./dolt-utils.js";
 
 // ── Configuration ──
@@ -215,22 +213,7 @@ export class SessionAudit extends BaseDoltClient {
     durationMs: number;
   }> {
     const conn = this.requireConnection();
-
-    const [costRows] = await conn.execute(
-      `SELECT
-         COALESCE(SUM(cost), 0)             AS total_cost,
-         SUM(CASE WHEN punch_type = 'step_complete' AND punch_key = 'step_finished' THEN 1 ELSE 0 END) AS step_count,
-         COALESCE(SUM(tokens_input), 0)     AS tokens_input,
-         COALESCE(SUM(tokens_output), 0)    AS tokens_output,
-         COALESCE(SUM(tokens_reasoning), 0) AS tokens_reasoning,
-         COUNT(*)                            AS punch_count
-       FROM punches
-       WHERE task_id = ?`,
-      [sessionId],
-    );
-
-    const rows = costRows as CostAggRow[];
-    const row = rows[0];
+    const agg = await this.queryCostAgg(sessionId);
 
     // Get duration from first/last punch timestamps
     const [tsRows] = await conn.execute(
@@ -246,24 +229,11 @@ export class SessionAudit extends BaseDoltClient {
     const maxAt = tsRow?.max_at ? new Date(tsRow.max_at).getTime() : 0;
     const durationMs = minAt > 0 && maxAt > 0 ? maxAt - minAt : 0;
 
-    return {
-      totalCost: toNumber(row?.total_cost),
-      stepCount: toNumber(row?.step_count),
-      punchCount: toNumber(row?.punch_count),
-      tokensInput: toNumber(row?.tokens_input),
-      tokensOutput: toNumber(row?.tokens_output),
-      tokensReasoning: toNumber(row?.tokens_reasoning),
-      durationMs,
-    };
+    return { ...agg, durationMs };
   }
 
   private async getChildIds(parentId: string): Promise<string[]> {
-    const conn = this.requireConnection();
-    const [rowsUnknown] = await conn.execute(
-      `SELECT child_id FROM child_rels WHERE parent_id = ?`,
-      [parentId],
-    );
-    return (rowsUnknown as ChildRow[]).map((r) => r.child_id);
+    return this.queryChildIds(parentId);
   }
 
   // ── Detector 1: Missing Quality Gates ──

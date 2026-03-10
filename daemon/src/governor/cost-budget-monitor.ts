@@ -24,11 +24,8 @@ import type { DoltConfig } from "../writer/index.js";
 import type { LoopClassification, LoopDetection, SessionMetrics } from "./types.js";
 import {
   BaseDoltClient,
-  toNumber,
   parseEnvFloat,
   parseEnvInt,
-  type CostAggRow,
-  type ChildRow,
 } from "./dolt-utils.js";
 
 // ── Configuration ──
@@ -182,33 +179,8 @@ export class CostBudgetMonitor extends BaseDoltClient {
    * Query Dolt for the cost accumulation of a single session.
    */
   async getSessionCost(sessionId: string): Promise<SessionCostSnapshot> {
-    const conn = this.requireConnection();
-
-    const [rowsUnknown] = await conn.execute(
-      `SELECT
-         COALESCE(SUM(cost), 0)             AS total_cost,
-         SUM(CASE WHEN punch_type = 'step_complete' AND punch_key = 'step_finished' THEN 1 ELSE 0 END) AS step_count,
-         COALESCE(SUM(tokens_input), 0)     AS tokens_input,
-         COALESCE(SUM(tokens_output), 0)    AS tokens_output,
-         COALESCE(SUM(tokens_reasoning), 0) AS tokens_reasoning,
-         COUNT(*)                            AS punch_count
-       FROM punches
-       WHERE task_id = ?`,
-      [sessionId],
-    );
-
-    const rows = rowsUnknown as CostAggRow[];
-    const row = rows[0];
-
-    return {
-      sessionId,
-      totalCost: toNumber(row?.total_cost),
-      stepCount: toNumber(row?.step_count),
-      tokensInput: toNumber(row?.tokens_input),
-      tokensOutput: toNumber(row?.tokens_output),
-      tokensReasoning: toNumber(row?.tokens_reasoning),
-      punchCount: toNumber(row?.punch_count),
-    };
+    const agg = await this.queryCostAgg(sessionId);
+    return { sessionId, ...agg };
   }
 
   /**
@@ -216,21 +188,16 @@ export class CostBudgetMonitor extends BaseDoltClient {
    * Uses child_rels table for traversal.
    */
   async getTreeSessionIds(rootSessionId: string): Promise<string[]> {
-    const conn = this.requireConnection();
     const visited = new Set<string>([rootSessionId]);
     const queue = [rootSessionId];
 
     while (queue.length > 0) {
       const parentId = queue.shift()!;
-      const [rowsUnknown] = await conn.execute(
-        `SELECT child_id FROM child_rels WHERE parent_id = ?`,
-        [parentId],
-      );
-      const rows = rowsUnknown as ChildRow[];
-      for (const row of rows) {
-        if (!visited.has(row.child_id)) {
-          visited.add(row.child_id);
-          queue.push(row.child_id);
+      const children = await this.queryChildIds(parentId);
+      for (const childId of children) {
+        if (!visited.has(childId)) {
+          visited.add(childId);
+          queue.push(childId);
         }
       }
     }

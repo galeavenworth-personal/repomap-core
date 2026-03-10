@@ -75,6 +75,52 @@ export abstract class BaseDoltClient {
     }
     return this.connection;
   }
+
+  /**
+   * Query Dolt for cost/token/step aggregation of a single session.
+   * Shared between CostBudgetMonitor.getSessionCost and SessionAudit.getSessionMetrics.
+   */
+  protected async queryCostAgg(sessionId: string): Promise<{
+    totalCost: number;
+    stepCount: number;
+    tokensInput: number;
+    tokensOutput: number;
+    tokensReasoning: number;
+    punchCount: number;
+  }> {
+    const conn = this.requireConnection();
+    const [rowsUnknown] = await conn.execute(
+      `SELECT
+         COALESCE(SUM(cost), 0)             AS total_cost,
+         SUM(CASE WHEN punch_type = 'step_complete' AND punch_key = 'step_finished' THEN 1 ELSE 0 END) AS step_count,
+         COALESCE(SUM(tokens_input), 0)     AS tokens_input,
+         COALESCE(SUM(tokens_output), 0)    AS tokens_output,
+         COALESCE(SUM(tokens_reasoning), 0) AS tokens_reasoning,
+         COUNT(*)                            AS punch_count
+       FROM punches
+       WHERE task_id = ?`,
+      [sessionId],
+    );
+    const row = (rowsUnknown as CostAggRow[])[0];
+    return {
+      totalCost: toNumber(row?.total_cost),
+      stepCount: toNumber(row?.step_count),
+      tokensInput: toNumber(row?.tokens_input),
+      tokensOutput: toNumber(row?.tokens_output),
+      tokensReasoning: toNumber(row?.tokens_reasoning),
+      punchCount: toNumber(row?.punch_count),
+    };
+  }
+
+  /** Query direct child IDs from the child_rels table. */
+  protected async queryChildIds(parentId: string): Promise<string[]> {
+    const conn = this.requireConnection();
+    const [rowsUnknown] = await conn.execute(
+      `SELECT child_id FROM child_rels WHERE parent_id = ?`,
+      [parentId],
+    );
+    return (rowsUnknown as ChildRow[]).map((r) => r.child_id);
+  }
 }
 
 // ── Environment Variable Parsing ──
