@@ -282,54 +282,28 @@ function createBudgetMonitor(
   treeSessionCount: number,
   budgetConfig?: Partial<CostBudgetConfig>,
 ) {
-  const mockConn = {
-    execute: vi.fn(async (sql: string, params?: unknown[]) => {
-      if (sql.includes("FROM child_rels")) {
-        // Return additional child sessions to make tree bigger
-        if (treeSessionCount > 1 && params?.[0] === "test-session") {
-          const children = [];
-          for (let i = 1; i < treeSessionCount; i++) {
-            children.push({ child_id: `child-${i}` });
-          }
-          return [children];
-        }
-        return [[]];
+  const { monitor } = createMockMonitor(undefined, budgetConfig, (sql, params) => {
+    if (sql.includes("FROM child_rels")) {
+      if (treeSessionCount > 1 && params?.[0] === "test-session") {
+        return Array.from({ length: treeSessionCount - 1 }, (_, i) => ({ child_id: `child-${i + 1}` }));
       }
-      if (sql.includes("FROM punches")) {
-        const taskId = params?.[0] as string;
-        if (taskId === "test-session") {
-          return [[{
-            total_cost: String(sessionCost),
-            step_count: String(sessionSteps),
-            tokens_input: "10000",
-            tokens_output: "5000",
-            tokens_reasoning: "2000",
-            punch_count: "50",
-          }]];
-        }
-        // Children share the remaining tree cost equally
-        const childCost = treeSessionCount > 1
-          ? (treeCost - sessionCost) / (treeSessionCount - 1)
-          : 0;
-        return [[{
-          total_cost: String(childCost),
-          step_count: "5",
-          tokens_input: "5000",
-          tokens_output: "2500",
-          tokens_reasoning: "1000",
-          punch_count: "20",
-        }]];
+      return [];
+    }
+    if (sql.includes("FROM punches")) {
+      if (params?.[0] === "test-session") {
+        return [{
+          total_cost: String(sessionCost), step_count: String(sessionSteps),
+          tokens_input: "10000", tokens_output: "5000", tokens_reasoning: "2000", punch_count: "50",
+        }];
       }
-      return [[]];
-    }),
-    end: vi.fn(async () => {}),
-  };
-
-  const monitor = new CostBudgetMonitor(
-    { host: "127.0.0.1", port: 3307, database: "test_db" },
-    budgetConfig,
-  );
-  (monitor as unknown as { connection: unknown }).connection = mockConn;
+      const childCost = treeSessionCount > 1 ? (treeCost - sessionCost) / (treeSessionCount - 1) : 0;
+      return [{
+        total_cost: String(childCost), step_count: "5",
+        tokens_input: "5000", tokens_output: "2500", tokens_reasoning: "1000", punch_count: "20",
+      }];
+    }
+    return [];
+  });
   return monitor;
 }
 

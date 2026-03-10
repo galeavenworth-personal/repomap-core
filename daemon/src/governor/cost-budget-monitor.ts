@@ -27,7 +27,6 @@ import {
   toNumber,
   parseEnvFloat,
   parseEnvInt,
-  type MysqlNumeric,
   type CostAggRow,
   type ChildRow,
 } from "./dolt-utils.js";

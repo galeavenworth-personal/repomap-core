@@ -66,12 +66,18 @@ function createMockAudit(
 /** Default zero-cost aggregate row for session metrics queries. */
 function zeroCostRow() {
   return {
-    total_cost: "0",
-    step_count: "0",
-    tokens_input: "0",
-    tokens_output: "0",
-    tokens_reasoning: "0",
-    punch_count: "0",
+    total_cost: "0", step_count: "0", tokens_input: "0",
+    tokens_output: "0", tokens_reasoning: "0", punch_count: "0",
+  };
+}
+
+/** Build a cost aggregate row from compact args (defaults to zeroCostRow). */
+function makeCostRow(
+  cost = "0", steps = "0", tIn = "0", tOut = "0", tReason = "0", punches = "0",
+): Record<string, unknown> {
+  return {
+    total_cost: cost, step_count: steps, tokens_input: tIn,
+    tokens_output: tOut, tokens_reasoning: tReason, punch_count: punches,
   };
 }
 
@@ -79,6 +85,12 @@ function zeroCostRow() {
 function zeroTimestampRow() {
   return { min_at: null, max_at: null };
 }
+
+/** A pair of well-spaced punches that won't trigger stall/loop detectors. */
+const SAFE_PUNCHES = [
+  { punch_type: "tool_call", punch_key: "edit_file", observed_at: "2025-01-01T00:00:00Z", cost: "0" },
+  { punch_type: "tool_call", punch_key: "read_file", observed_at: "2025-01-01T00:00:10Z", cost: "0" },
+];
 
 /**
  * Create a mock audit wired to return the given punches for ORDER BY queries.
@@ -108,33 +120,6 @@ function createCountAudit(
   }, auditConfig);
 }
 
-/**
- * Create a runAudit-level mock handler for edge-case tests.
- * All 4 edge-case tests share this identical SQL-matching skeleton;
- * only the cost row, timestamp row, gate count, and edit count differ.
- */
-function createRunAuditHandler(opts: {
-  costRow?: Record<string, unknown>;
-  timestampRow?: Record<string, unknown>;
-  gateCount?: string;
-  editCount?: string;
-}) {
-  const {
-    costRow = zeroCostRow(),
-    timestampRow = zeroTimestampRow(),
-    gateCount = "1",
-    editCount = "5",
-  } = opts;
-  return (sql: string): unknown[] => {
-    if (sql.includes("SUM(cost)") || sql.includes("COALESCE(SUM(cost)")) return [costRow];
-    if (sql.includes("MIN(observed_at)")) return [timestampRow];
-    if (sql.includes("child_rels")) return [];
-    if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) return [{ count: gateCount }];
-    if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) return [{ count: editCount }];
-    if (sql.includes("ORDER BY observed_at")) return [];
-    return [];
-  };
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 1. Configuration Loading
@@ -758,61 +743,44 @@ describe("SessionAudit — detectStalls", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Build a full mock query handler for runAudit.
- * Controls responses for metrics, timestamps, child_rels, quality gates,
- * punches list, and tool adherence queries.
+ * Build a mock query handler for runAudit / edge-case tests.
+ * Covers metrics, timestamps, child_rels, quality gates, tool adherence,
+ * child status, and punch list queries.
  */
 function createFullMockHandler(opts: {
   costRow?: Record<string, unknown>;
   timestampRow?: Record<string, unknown>;
   children?: Array<{ child_id: string }>;
   qualityGateCount?: number;
+  gateCount?: string;
   punches?: unknown[];
-  editCount?: number;
+  editCount?: number | string;
   childStatusRows?: Map<string, { punch_count: string; has_quality_gate: string }>;
-}) {
+} = {}) {
   const {
     costRow = zeroCostRow(),
     timestampRow = zeroTimestampRow(),
     children = [],
-    qualityGateCount = 1,
+    qualityGateCount,
+    gateCount,
     punches = [],
     editCount = 5,
     childStatusRows = new Map(),
   } = opts;
+  const resolvedGateCount = gateCount ?? String(qualityGateCount ?? 1);
 
   return (sql: string, params?: unknown[]): unknown[] => {
-    // Session metrics aggregation (SUM cost, step_count, etc.)
-    if (sql.includes("SUM(cost)") || sql.includes("COALESCE(SUM(cost)")) {
-      return [costRow];
-    }
-    // Timestamps for duration
-    if (sql.includes("MIN(observed_at)")) {
-      return [timestampRow];
-    }
-    // Child relations
-    if (sql.includes("child_rels")) {
-      return children;
-    }
-    // Quality gate count — matches the IN ('gate_pass', 'gate_fail') query
-    if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) {
-      return [{ count: String(qualityGateCount) }];
-    }
-    // Tool adherence (edit count) — must come before generic COUNT(*)
-    if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) {
-      return [{ count: String(editCount) }];
-    }
-    // Child status (incomplete subtask tree) — matches IN ('gate_pass', 'gate_fail')
+    if (sql.includes("SUM(cost)") || sql.includes("COALESCE(SUM(cost)")) return [costRow];
+    if (sql.includes("MIN(observed_at)")) return [timestampRow];
+    if (sql.includes("child_rels")) return children;
+    if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("punch_key LIKE")) return [{ count: resolvedGateCount }];
+    if (sql.includes("COUNT(*)") && sql.includes("write_to_file")) return [{ count: String(editCount) }];
     if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && sql.includes("gate_fail")) {
       const taskId = params?.[0] as string;
       const row = childStatusRows.get(taskId);
-      if (row) return [row];
-      return [{ punch_count: "10", has_quality_gate: "1" }];
+      return row ? [row] : [{ punch_count: "10", has_quality_gate: "1" }];
     }
-    // Punch list for loop/stall detection
-    if (sql.includes("ORDER BY observed_at")) {
-      return punches;
-    }
+    if (sql.includes("ORDER BY observed_at")) return punches;
     return [];
   };
 }
@@ -821,24 +789,9 @@ describe("SessionAudit — runAudit verdict", () => {
 
   it("returns verdict=pass when no findings exist", async () => {
     const handler = createFullMockHandler({
-      costRow: {
-        total_cost: "0.20",
-        step_count: "10",
-        tokens_input: "30000",
-        tokens_output: "15000",
-        tokens_reasoning: "5000",
-        punch_count: "40",
-      },
-      timestampRow: {
-        min_at: "2025-01-01T00:00:00Z",
-        max_at: "2025-01-01T00:05:00Z",
-      },
-      qualityGateCount: 1,
-      editCount: 10,
-      punches: [
-        { punch_type: "tool_call", punch_key: "edit_file", observed_at: "2025-01-01T00:00:00Z", cost: "0" },
-        { punch_type: "tool_call", punch_key: "read_file", observed_at: "2025-01-01T00:00:10Z", cost: "0" },
-      ],
+      costRow: makeCostRow("0.20", "10", "30000", "15000", "5000", "40"),
+      timestampRow: { min_at: "2025-01-01T00:00:00Z", max_at: "2025-01-01T00:05:00Z" },
+      editCount: 10, punches: SAFE_PUNCHES,
     });
 
     const { audit } = createMockAudit(handler);
@@ -856,24 +809,9 @@ describe("SessionAudit — runAudit verdict", () => {
   it("returns verdict=warn when only non-critical findings exist", async () => {
     // High cost-per-100k but below absolute threshold → warning only
     const handler = createFullMockHandler({
-      costRow: {
-        total_cost: "0.50",
-        step_count: "10",
-        tokens_input: "50000",
-        tokens_output: "25000",
-        tokens_reasoning: "5000",
-        punch_count: "40",
-      },
-      timestampRow: {
-        min_at: "2025-01-01T00:00:00Z",
-        max_at: "2025-01-01T00:05:00Z",
-      },
-      qualityGateCount: 1,
-      editCount: 10,
-      punches: [
-        { punch_type: "tool_call", punch_key: "edit_file", observed_at: "2025-01-01T00:00:00Z", cost: "0" },
-        { punch_type: "tool_call", punch_key: "read_file", observed_at: "2025-01-01T00:00:10Z", cost: "0" },
-      ],
+      costRow: makeCostRow("0.50", "10", "50000", "25000", "5000", "40"),
+      timestampRow: { min_at: "2025-01-01T00:00:00Z", max_at: "2025-01-01T00:05:00Z" },
+      editCount: 10, punches: SAFE_PUNCHES,
     });
 
     const { audit } = createMockAudit(handler);
@@ -887,24 +825,9 @@ describe("SessionAudit — runAudit verdict", () => {
   it("returns verdict=fail when any critical finding exists", async () => {
     // Missing quality gates → critical findings
     const handler = createFullMockHandler({
-      costRow: {
-        total_cost: "0.20",
-        step_count: "10",
-        tokens_input: "30000",
-        tokens_output: "15000",
-        tokens_reasoning: "5000",
-        punch_count: "40",
-      },
-      timestampRow: {
-        min_at: "2025-01-01T00:00:00Z",
-        max_at: "2025-01-01T00:05:00Z",
-      },
-      qualityGateCount: 0, // all gates missing → critical
-      editCount: 10,
-      punches: [
-        { punch_type: "tool_call", punch_key: "edit_file", observed_at: "2025-01-01T00:00:00Z", cost: "0" },
-        { punch_type: "tool_call", punch_key: "read_file", observed_at: "2025-01-01T00:00:10Z", cost: "0" },
-      ],
+      costRow: makeCostRow("0.20", "10", "30000", "15000", "5000", "40"),
+      timestampRow: { min_at: "2025-01-01T00:00:00Z", max_at: "2025-01-01T00:05:00Z" },
+      qualityGateCount: 0, editCount: 10, punches: SAFE_PUNCHES,
     });
 
     const { audit } = createMockAudit(handler);
@@ -916,22 +839,10 @@ describe("SessionAudit — runAudit verdict", () => {
 
   it("includes metrics in the report", async () => {
     const handler = createFullMockHandler({
-      costRow: {
-        total_cost: "1.25",
-        step_count: "30",
-        tokens_input: "50000",
-        tokens_output: "25000",
-        tokens_reasoning: "10000",
-        punch_count: "120",
-      },
-      timestampRow: {
-        min_at: "2025-01-01T00:00:00Z",
-        max_at: "2025-01-01T00:10:00Z",
-      },
+      costRow: makeCostRow("1.25", "30", "50000", "25000", "10000", "120"),
+      timestampRow: { min_at: "2025-01-01T00:00:00Z", max_at: "2025-01-01T00:10:00Z" },
       children: [{ child_id: "child-1" }, { child_id: "child-2" }],
-      qualityGateCount: 1,
       editCount: 10,
-      punches: [],
     });
 
     const { audit } = createMockAudit(handler);
@@ -954,25 +865,12 @@ describe("SessionAudit — runAudit verdict", () => {
     // - Excessive steps (critical)
     // - Edit count below minimum (warning)
     const handler = createFullMockHandler({
-      costRow: {
-        total_cost: "5.00",
-        step_count: "60",
-        tokens_input: "100000",
-        tokens_output: "50000",
-        tokens_reasoning: "10000",
-        punch_count: "200",
-      },
-      timestampRow: {
-        min_at: "2025-01-01T00:00:00Z",
-        max_at: "2025-01-01T01:00:00Z",
-      },
-      qualityGateCount: 0,
-      editCount: 0,
+      costRow: makeCostRow("5.00", "60", "100000", "50000", "10000", "200"),
+      timestampRow: { min_at: "2025-01-01T00:00:00Z", max_at: "2025-01-01T01:00:00Z" },
+      qualityGateCount: 0, editCount: 0,
       punches: Array.from({ length: 60 }, (_, i) => ({
-        punch_type: "step_complete",
-        punch_key: "step_finished",
-        observed_at: new Date(Date.now() + i * 1000).toISOString(),
-        cost: "0.01",
+        punch_type: "step_complete", punch_key: "step_finished",
+        observed_at: new Date(Date.now() + i * 1000).toISOString(), cost: "0.01",
       })),
     });
 
@@ -995,7 +893,7 @@ describe("SessionAudit — runAudit verdict", () => {
 
 describe("SessionAudit — edge cases", () => {
   it("handles session with zero tokens and zero cost", async () => {
-    const { audit } = createMockAudit(createRunAuditHandler({}));
+    const { audit } = createMockAudit(createFullMockHandler());
     const report = await audit.runAudit("session-zero");
 
     expect(report.metrics.totalCost).toBe(0);
@@ -1007,7 +905,7 @@ describe("SessionAudit — edge cases", () => {
   });
 
   it("handles session with no punches at all", async () => {
-    const { audit } = createMockAudit(createRunAuditHandler({ gateCount: "0", editCount: "0" }));
+    const { audit } = createMockAudit(createFullMockHandler({ gateCount: "0", editCount: 0 }));
     const report = await audit.runAudit("session-empty");
 
     // Missing quality gates are still reported (that's the point)
@@ -1021,11 +919,9 @@ describe("SessionAudit — edge cases", () => {
   });
 
   it("handles null values in metrics rows", async () => {
-    const { audit } = createMockAudit(createRunAuditHandler({
-      costRow: {
-        total_cost: null, step_count: null, tokens_input: null,
-        tokens_output: null, tokens_reasoning: null, punch_count: null,
-      },
+    const { audit } = createMockAudit(createFullMockHandler({
+      costRow: { total_cost: null, step_count: null, tokens_input: null,
+        tokens_output: null, tokens_reasoning: null, punch_count: null },
     }));
     const report = await audit.runAudit("session-null");
 
@@ -1036,13 +932,10 @@ describe("SessionAudit — edge cases", () => {
   });
 
   it("handles string-typed numeric values from MySQL", async () => {
-    const { audit } = createMockAudit(createRunAuditHandler({
-      costRow: {
-        total_cost: "0.50", step_count: "15", tokens_input: "30000",
-        tokens_output: "15000", tokens_reasoning: "5000", punch_count: "50",
-      },
+    const { audit } = createMockAudit(createFullMockHandler({
+      costRow: makeCostRow("0.50", "15", "30000", "15000", "5000", "50"),
       timestampRow: { min_at: "2025-01-01T00:00:00Z", max_at: "2025-01-01T00:05:00Z" },
-      editCount: "10",
+      editCount: 10,
     }));
     const report = await audit.runAudit("session-strings");
 
