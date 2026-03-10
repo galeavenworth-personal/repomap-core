@@ -353,4 +353,15 @@ INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, 
     ('execute-subtask', 'execute-subtask', 'child_spawn',    '%',                     TRUE,  TRUE,  'FORBIDDEN: Specialist must not delegate'),
     ('execute-subtask', 'execute-subtask', 'cost_checkpoint', '%',                    FALSE, FALSE, 'Cost tracking (optional)');
 
+-- Decompose Epic card (Tier 1: Plant Manager — epic decomposition)
+INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description) VALUES
+    ('decompose-epic', 'decompose-epic', 'mcp_call',        '%sequential%thinking%',  TRUE,  FALSE, 'Must use sequential thinking for decomposition'),
+    ('decompose-epic', 'decompose-epic', 'mcp_call',        '%codebase___retrieval%',  TRUE,  FALSE, 'Must explore codebase before decomposing'),
+    ('decompose-epic', 'decompose-epic', 'tool_call',       '%bd%create%',             TRUE,  FALSE, 'Must mint child beads'),
+    ('decompose-epic', 'decompose-epic', 'step_complete',   'task_exit',               TRUE,  FALSE, 'Must reach completion'),
+    ('decompose-epic', 'decompose-epic', 'tool_call',       'edit_file%',              TRUE,  TRUE,  'FORBIDDEN: Must not edit source files during decomposition'),
+    ('decompose-epic', 'decompose-epic', 'tool_call',       'apply_diff%',             TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs during decomposition'),
+    ('decompose-epic', 'decompose-epic', 'tool_call',       'write_to_file%',          TRUE,  TRUE,  'FORBIDDEN: Must not write source files during decomposition'),
+    ('decompose-epic', 'decompose-epic', 'cost_checkpoint', '%',                       FALSE, FALSE, 'Cost tracking (optional)');
+
 -- PUNCH_CARD_SCHEMA SEEDS END
