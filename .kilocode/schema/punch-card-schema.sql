@@ -402,16 +402,16 @@ INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, 
     ('execute-subtask', 'execute-subtask', 'cost_checkpoint', '%',                    FALSE, FALSE, '[v2] Cost tracking (optional)', FALSE);
 
 -- Decompose Epic card (Tier 1: Plant Manager — epic decomposition — ENFORCED)
--- Plant-manager reads the epic, explores codebase, thinks through decomposition,
--- and mints child beads. Does the thinking itself (no child spawning).
+-- Delegates discover, explore, prepare phases to architect children.
+-- Parent only mints beads from the prepare phase output.
 INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description, enforced) VALUES
-    ('decompose-epic', 'decompose-epic', 'mcp_call',        '%sequential%thinking%',  TRUE,  FALSE, 'Must use sequential thinking for decomposition', TRUE),
-    ('decompose-epic', 'decompose-epic', 'mcp_call',        '%codebase___retrieval%',  TRUE,  FALSE, 'Must explore codebase before decomposing', TRUE),
-    ('decompose-epic', 'decompose-epic', 'tool_call',       '%bd%create%',             TRUE,  FALSE, 'Must mint child beads', TRUE),
-    ('decompose-epic', 'decompose-epic', 'step_complete',   'task_exit',               TRUE,  FALSE, 'Must reach completion', TRUE),
-    ('decompose-epic', 'decompose-epic', 'tool_call',       'edit_file%',              TRUE,  TRUE,  'FORBIDDEN: Must not edit source files during decomposition', TRUE),
-    ('decompose-epic', 'decompose-epic', 'tool_call',       'apply_diff%',             TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs during decomposition', TRUE),
-    ('decompose-epic', 'decompose-epic', 'tool_call',       'write_to_file%',          TRUE,  TRUE,  'FORBIDDEN: Must not write source files during decomposition', TRUE),
-    ('decompose-epic', 'decompose-epic', 'cost_checkpoint', '%',                       FALSE, FALSE, 'Cost tracking (optional)', FALSE);
+    ('decompose-epic', 'decompose-epic', 'child_spawn',     'architect',              TRUE,  FALSE, 'Must delegate phases to architect children', TRUE),
+    ('decompose-epic', 'decompose-epic', 'child_complete',  'child_return',           TRUE,  FALSE, 'Must receive child completions', TRUE),
+    ('decompose-epic', 'decompose-epic', 'step_complete',   'task_exit',              TRUE,  FALSE, 'Must reach completion', TRUE),
+    ('decompose-epic', 'decompose-epic', 'tool_call',       'edit_file%',             TRUE,  TRUE,  'FORBIDDEN: Must not edit files directly', TRUE),
+    ('decompose-epic', 'decompose-epic', 'tool_call',       'apply_diff%',            TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs directly', TRUE),
+    ('decompose-epic', 'decompose-epic', 'tool_call',       'write_to_file%',         TRUE,  TRUE,  'FORBIDDEN: Must not write files directly', TRUE),
+    ('decompose-epic', 'decompose-epic', 'mcp_call',        '%codebase___retrieval%', TRUE,  TRUE,  'FORBIDDEN: Must not explore codebase directly', TRUE),
+    ('decompose-epic', 'decompose-epic', 'cost_checkpoint', '%',                      FALSE, FALSE, 'Cost tracking (optional)', FALSE);
 
 -- PUNCH_CARD_SCHEMA SEEDS END

@@ -1,151 +1,170 @@
 ---
-description: Epic decomposition workflow. Spawned by plant-manager to break an epic into implementable child beads. Output is minted beads in the dependency graph, not markdown plans. Uses the start-task pattern (discover, explore, prepare) but scoped to epic-level understanding.
+description: Delegation orchestrator for epic decomposition. Spawns architect children for discover, explore, and prepare phases scoped to an epic. Parent mints child beads from the preparation output. Follows the start-task delegation pattern.
 auto_execution_mode: 3
 punch_card: decompose-epic
 ---
 
-# Decompose Epic
+# Decompose Epic (Delegation Orchestrator)
 
-You are a **plant-manager** dispatched to decompose an epic into implementable child beads.
-Your job is bounded: understand the epic, explore the codebase, and mint child beads that
-the factory can execute one at a time as a sequential line.
+A delegation orchestrator that decomposes an epic into implementable child beads.
+Each phase runs in its own isolated child session via `new_task`, ensuring context isolation,
+bounded cost, and punch card enforcement at every phase boundary.
 
-**Punch Card:** `decompose-epic`
+The parent's unique responsibility: **mint the beads** from the prepare phase output.
+Children discover, explore, and plan. The parent acts on the plan.
+
+**Punch Card:** `decompose-epic` (8 rows, 3 required, 4 forbidden)
 **Commands Reference:** [`.kilocode/commands.toml`](../commands.toml)
 
-**You are a Tier 1 orchestrator for this workflow.** You do the thinking yourself
-(no child spawning needed for decomposition). You read beads, explore code, reason
-through sequential thinking, and mint beads as the output artifact.
+## Usage
+
+```
+/decompose-epic <epic-id>
+```
+
+## Architecture
+
+**You are a plant-manager (Tier 1).** You coordinate, you do not explore or plan directly.
+
+```
+plant-manager (this workflow)
+├── Phase 1: new_task → architect (discover-phase)
+│   └── Objective: understand epic scope, read beads, gather strategic context
+│   └── punch card: discover-phase
+├── Phase 2: new_task → architect (explore-phase)
+│   └── Objective: explore codebase, map implementation surface
+│   └── punch card: explore-phase
+├── Phase 3: new_task → architect (prepare-phase)
+│   └── Objective: design subtask graph via sequential thinking
+│   └── punch card: prepare-phase
+├── Phase 4: PARENT MINTS BEADS (bd create --parent {epic_id})
+└── punch card: decompose-epic (requires child_spawn, forbids direct tool use)
+```
+
+**Anti-delegation enforcement:** If you call `edit_file`, `apply_diff`, `write_to_file`,
+or `codebase_retrieval` directly, your punch card checkpoint will FAIL.
+Delegate specialist work to children.
 
 ---
 
-## Inputs
+## Pre-Flight
 
-- `epic_id` — the bead identifier for the epic to decompose
-- The epic's description, acceptance criteria, and dependency context come from `bd show`
+1. Beads preflight (fail-fast):
 
----
+   ```bash
+   .kilocode/tools/beads_preflight.sh
+   ```
 
-## Phase 1: Understand the Epic
+   If `.beads/ not initialized`:
 
-### Step 1.1: Read the Epic and Its Context
+   ```bash
+   .kilocode/tools/bd init
+   ```
 
-```bash
-.kilocode/tools/bd show {epic_id}
-```
+2. Fetch epic details (orchestrator reads task metadata — this is coordination, not exploration):
 
-Read the full epic description, acceptance criteria, labels, dependencies, and any
-existing children. If the epic has a parent, read that too.
+   > `show issue {epic-id}` → [`commands.show_issue`](../commands.toml)
+   > Resolves to: `.kilocode/tools/bd show {id}`
 
-### Step 1.2: Read Related Architecture Docs
+3. If the epic has a parent or dependencies, read those too:
 
-If the epic references specs, architecture docs, or related beads:
-- Read each referenced document
-- Read each related bead with `bd show`
-- Build a mental model of what this epic needs to deliver
+   > `show issue {parent-id}` → [`commands.show_issue`](../commands.toml)
 
-### Step 1.3: Problem Definition (Sequential Thinking)
-
-> `decompose task` → [`commands.decompose_task`](../commands.toml)
-
-Create at least 2 interpretation branches of the epic's scope:
-
-```
-decompose task: "Interpretation A: The epic requires [specific deliverables]"
-  stage=Problem Definition, tags=[epic-decomposition, scope]
-
-decompose task: "Interpretation B: The epic could also mean [alternative scope]"
-  stage=Problem Definition, tags=[epic-decomposition, scope]
-  assumptions_challenged=[assumption from A]
-```
-
-Resolve to a single interpretation grounded in the epic's acceptance criteria.
+4. Build the handoff packet for Phase 1 from the epic details.
 
 ---
 
-## Phase 2: Explore the Codebase
+## Phase 1: Discover (Delegate to Architect Child)
 
-### Step 2.1: Identify Implementation Surface
+> `dispatch architect` → [`commands.dispatch_architect`](../commands.toml)
+> Resolves to: `new_task` with `target_mode=architect`
+> Contract: [`.kilocode/contracts/composability/handoff_packet.md`](../contracts/composability/handoff_packet.md)
 
-> `retrieve codebase` → [`commands.retrieve_codebase`](../commands.toml)
+**Handoff packet must include:**
+- `task_id` (use the epic_id)
+- `objective`: "Perform epic discovery — understand the full scope of epic {epic_id}, its acceptance criteria, existing children, dependency context, and related architecture documents"
+- `evidence`: [epic description, acceptance criteria, existing children list, dependency chain, related docs]
+- `success_criteria`: ["Discovery summary with: epic scope interpretation, existing children assessment, dependency context, key architecture references, open questions"]
+- `workflow_instruction`: "Follow `/discover-phase` workflow. Your punch card is `discover-phase`."
 
-Search for:
-- Existing code the epic builds on or extends
-- Patterns and conventions the implementation must follow
-- Test infrastructure the new code must integrate with
-- Files that will be created or modified
+**Additional context to include in the handoff:**
+- List existing children and their status
+- Reference any architecture docs mentioned in the epic
+- Note which dependencies are already satisfied
 
-### Step 2.2: Map Dependencies and Ordering
+**Child workflow:** [`discover-phase.md`](./discover-phase.md)
 
-> `decompose task` → [`commands.decompose_task`](../commands.toml)
-
-```
-decompose task: "Implementation surface: [files/modules involved]. 
-  Natural ordering: [what must come first, what depends on what].
-  Existing patterns: [conventions to follow]."
-  stage=Research, tags=[epic-decomposition, codebase-map]
-```
-
-### Step 2.3: Identify Risks and Constraints
-
-```
-decompose task: "Risks: [what could go wrong]. Constraints: [what's non-negotiable].
-  Testing strategy: [how each subtask gets verified]."
-  stage=Research, tags=[epic-decomposition, risks]
-```
+**Wait for child completion.** Parse the discovery summary from the child's return.
 
 ---
 
-## Phase 3: Design the Subtask Graph
+## Phase 2: Explore (Delegate to Architect Child)
 
-### Step 3.1: Generate Candidate Decompositions
+> `dispatch architect` → [`commands.dispatch_architect`](../commands.toml)
+> Resolves to: `new_task` with `target_mode=architect`
 
-> `decompose task` → [`commands.decompose_task`](../commands.toml)
+**Handoff packet must include:**
+- `task_id` (use the epic_id)
+- `objective`: "Perform codebase exploration for epic {epic_id} — deep structural and semantic analysis of the implementation surface the epic requires"
+- `evidence`: [discovery summary from Phase 1, key components identified, existing infrastructure to build on]
+- `success_criteria`: ["Exploration summary with: architecture map of relevant code, existing patterns and conventions, test infrastructure, files that will be created or modified, risk assessment"]
+- `workflow_instruction`: "Follow `/explore-phase` workflow. Your punch card is `explore-phase`."
 
-Generate at least 2 decomposition strategies:
+**Child workflow:** [`explore-phase.md`](./explore-phase.md)
 
-```
-decompose task: "Decomposition A (layer-by-layer): [list subtasks bottom-up].
-  Pros: [each layer testable independently]. Cons: [no end-to-end until late]."
-  stage=Analysis, tags=[decomposition-candidate]
-
-decompose task: "Decomposition B (slice-by-slice): [list subtasks as vertical slices].
-  Pros: [working end-to-end early]. Cons: [may need refactoring later]."
-  stage=Analysis, tags=[decomposition-candidate]
-```
-
-### Step 3.2: Choose and Refine
-
-```
-decompose task: "Chosen decomposition: [A or B]. Rationale: [why].
-  Final subtask list with ordering and dependencies."
-  stage=Synthesis, tags=[decomposition-decision]
-```
-
-**Each subtask must be:**
-- **Bounded** — completable in a single agent session (< 200 steps)
-- **Testable** — has concrete verification criteria
-- **Committable** — produces a single meaningful commit
-- **Ordered** — clear which subtasks depend on which
-
-### Step 3.3: Define Each Subtask Precisely
-
-For each subtask, define:
-1. **Title** — concise, action-oriented
-2. **Type** — task, feature, or chore
-3. **Priority** — P1 for critical path, P2 for important, P3 for optional
-4. **Description** — what to implement, which files to touch, acceptance criteria
-5. **Dependencies** — which sibling subtasks must complete first (if any)
+**Wait for child completion.** Parse the exploration summary from the child's return.
 
 ---
 
-## Phase 4: Mint the Beads
+## Phase 3: Prepare (Delegate to Architect Child)
 
-**This is the critical output phase.** The subtask plan becomes real beads in the graph.
+> `dispatch architect` → [`commands.dispatch_architect`](../commands.toml)
+> Resolves to: `new_task` with `target_mode=architect`
+
+**Handoff packet must include:**
+- `task_id` (use the epic_id)
+- `objective`: "Design the subtask decomposition for epic {epic_id} via sequential thinking. Output a precise subtask list that the parent will mint as child beads."
+- `evidence`: [discovery summary, exploration summary, epic acceptance criteria]
+- `success_criteria`: ["Preparation summary with: chosen decomposition strategy, ordered subtask list where each subtask has title/type/priority/description/files/verification, sibling dependency map, risk mitigations"]
+- `workflow_instruction`: "Follow `/prepare-phase` workflow. Your punch card is `prepare-phase`."
+
+**Critical instruction for prepare child:**
+
+> Your subtask plan will be used by the parent to mint beads with `bd create`.
+> Each subtask MUST include:
+> 1. **Title** — concise, action-oriented
+> 2. **Type** — task, feature, or chore
+> 3. **Priority** — P1 for critical path, P2 for important, P3 for optional
+> 4. **Description** — what to implement, which files to touch, acceptance criteria, verification commands
+> 5. **Dependencies** — which sibling subtasks must complete first (by title reference)
+>
+> Constraints:
+> - Each subtask must be completable in a single agent session (< 200 steps)
+> - Each subtask must produce a single meaningful commit
+> - No more than 10 subtasks — if you need more, recommend sub-epics
+> - Stay within the epic's acceptance criteria — no aspirational additions
+>
+> Ordering heuristic:
+> - Architecture/contracts/types first (foundations)
+> - Core implementation second (the meat)
+> - Tests third (verification)
+> - Integration/wiring last (connecting to the system)
+> - Docs alongside or after (never before implementation)
+
+**Child workflow:** [`prepare-phase.md`](./prepare-phase.md)
+
+**Wait for child completion.** Parse the preparation summary with the subtask plan.
+
+---
+
+## Phase 4: Mint the Beads (PARENT ACTION)
+
+**This is the only phase where you act directly.** You take the subtask plan from
+the prepare phase child and mint it into the beads graph.
 
 ### Step 4.1: Create Child Beads
 
-For each subtask in order:
+For each subtask from the prepare phase output, in order:
 
 ```bash
 .kilocode/tools/bd create \
@@ -160,7 +179,7 @@ For each subtask in order:
 
 ### Step 4.2: Wire Sibling Dependencies (if any)
 
-If subtask B depends on subtask A completing first:
+If the prepare phase specified that subtask B depends on subtask A:
 
 ```bash
 .kilocode/tools/bd dep add {child_B_id} {child_A_id}
@@ -168,7 +187,8 @@ If subtask B depends on subtask A completing first:
 
 **Only add dependencies where they're structurally necessary.** Don't over-constrain —
 the factory executes beads sequentially within a line anyway. Dependencies matter for
-correctness (e.g., "the test harness must exist before the tests"), not just ordering.
+correctness (e.g., "the type definitions must exist before the implementation"), not
+just ordering preference.
 
 ### Step 4.3: Verify the Graph
 
@@ -190,55 +210,77 @@ Confirm:
 
 ---
 
-## Phase 5: Export Session and Complete
+## Execution Pattern
 
-### Step 5.1: Export Thinking Session
-
-> `export session` → [`commands.export_session`](../commands.toml)
-
-File path: `.kilocode/thinking/epic-{epic_id}-decomposition-{YYYY-MM-DD}.json`
-
-### Step 5.2: Structured Output
-
-Return with this structure:
-
-```markdown
-## Epic Decomposition: {epic_id}
-
-### Epic
-- Title: [epic title]
-- Acceptance Criteria: [from epic description]
-
-### Decomposition Strategy
-- Approach: [chosen strategy]
-- Rationale: [why this ordering]
-
-### Minted Beads (in execution order)
-1. **{child_id}** — {title} [P{n}]
-   - Files: [target files]
-   - Verification: [how to confirm it's done]
-2. **{child_id}** — {title} [P{n}]
-   - Files: [target files]  
-   - Verification: [how to confirm it's done]
-[...]
-
-### Dependencies Between Subtasks
-- {child_B} depends on {child_A} because [reason]
-
-### Risks and Mitigations
-- Risk: [description] -> Mitigation: [approach]
-
-### Evidence
-- runtime_model_reported: [model]
-- beads_created: [count]
-- epic_children_total: [count]
 ```
+┌─────────────────────────────────────────────────────────────────┐
+│  PRE-FLIGHT (orchestrator reads epic metadata)                  │
+│  ├── show issue {epic-id}          → commands.show_issue        │
+│  ├── show issue {parent-id}        → commands.show_issue        │
+│  └── Build handoff packet from epic details                     │
+├─────────────────────────────────────────────────────────────────┤
+│  PHASE 1: DISCOVER (delegate)                                   │
+│  ├── dispatch architect            → commands.dispatch_architect │
+│  │   └── child runs /discover-phase with punch card             │
+│  └── Parse discovery summary from child return                  │
+├─────────────────────────────────────────────────────────────────┤
+│  PHASE 2: EXPLORE (delegate)                                    │
+│  ├── dispatch architect            → commands.dispatch_architect │
+│  │   └── child runs /explore-phase with punch card              │
+│  └── Parse exploration summary from child return                │
+├─────────────────────────────────────────────────────────────────┤
+│  PHASE 3: PREPARE (delegate)                                    │
+│  ├── dispatch architect            → commands.dispatch_architect │
+│  │   └── child runs /prepare-phase with punch card              │
+│  └── Parse preparation summary with subtask plan                │
+├─────────────────────────────────────────────────────────────────┤
+│  PHASE 4: MINT BEADS (parent acts)                              │
+│  ├── bd create --parent {epic_id}  (for each subtask)           │
+│  ├── bd dep add (wire sibling dependencies)                     │
+│  ├── bd show {epic_id}             (verify graph)               │
+│  └── bd export -o .beads/issues.jsonl                           │
+├─────────────────────────────────────────────────────────────────┤
+│  EXIT GATE: PUNCH CARD CHECKPOINT                               │
+│  ├── mint punches {task_id}        → commands.punch_mint        │
+│  ├── checkpoint punch-card {task_id} decompose-epic             │
+│  │                                 → commands.punch_checkpoint   │
+│  └── MUST PASS — checks child_spawn + forbids direct tool use   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Critical Rules
+
+### Delegation Is Mandatory
+You are a Tier 1 orchestrator. You MUST delegate discovery, exploration, and planning
+to children via `new_task`. Direct calls to `codebase_retrieval`, `edit_file`,
+`apply_diff`, or `write_to_file` will cause your punch card checkpoint to FAIL.
+
+The ONLY direct actions you take are:
+- Reading beads (`bd show`, `bd ready`) for coordination
+- Minting beads (`bd create`, `bd dep add`) from the prepare phase output
+- Exporting beads state (`bd export`)
+
+### Bead Quality
+- Each bead must be **self-contained enough** that an agent can execute it without
+  reading the decomposition session. The bead description IS the spec.
+- Include file paths, acceptance criteria, and verification commands in descriptions.
+- Don't create more than 10 subtasks — if you need more, the epic needs sub-epics.
+
+### Scope Discipline
+- Stay within the epic's acceptance criteria. Don't add aspirational work.
+- If a child discovers work that doesn't fit the epic, note it but don't mint it.
+- Optional/nice-to-have items get P3 and a note in the description.
+
+### Virtual Environment Mandate
+**ALWAYS** use `.venv/bin/python -m ...` for Python execution.
 
 ---
 
 ## EXIT GATE: Punch Card Checkpoint
 
-**Before completing, you MUST run the punch card checkpoint.**
+**Before calling `attempt_completion`, you MUST run the punch card checkpoint.**
 
 > `mint punches {task_id}` → [`commands.punch_mint`](../commands.toml)
 > Resolves to: `python3 .kilocode/tools/punch_engine.py mint {task_id}`
@@ -247,8 +289,17 @@ Return with this structure:
 > Resolves to: `python3 .kilocode/tools/punch_engine.py checkpoint {task_id} decompose-epic`
 > **receipt_required = true** — this is a hard gate.
 
-**If checkpoint FAILS:** Review missing punches, complete them, re-mint, re-checkpoint.
-**If checkpoint PASSES:** Proceed to completion.
+**Checkpoint verifies:**
+- ✅ You spawned at least one `architect` child (delegation happened)
+- ✅ You received child completions
+- ✅ You created beads (`bd create`)
+- ❌ You did NOT call `edit_file`, `apply_diff`, `write_to_file`, or `codebase_retrieval` directly
+
+**If checkpoint FAILS:** Do NOT call `attempt_completion`. Review failures:
+- Missing `child_spawn` → you forgot to delegate a phase
+- Forbidden violations → you did specialist work yourself; re-run with proper delegation
+
+**If checkpoint PASSES:** Proceed to `attempt_completion` with the decomposition summary.
 
 ---
 
@@ -269,31 +320,11 @@ One commit per bead. The branch becomes the PR when the epic is complete.
 
 ---
 
-## Critical Rules
-
-### Bead Quality
-- Each bead must be **self-contained enough** that an agent can execute it without
-  reading the decomposition session. The bead description IS the spec.
-- Include file paths, acceptance criteria, and verification commands in descriptions.
-- Don't create more than 10 subtasks — if you need more, the epic needs sub-epics.
-
-### Scope Discipline
-- Stay within the epic's acceptance criteria. Don't add aspirational work.
-- If you discover work that doesn't fit the epic, create a separate bead (not a child).
-- Optional/nice-to-have items get P3 and a note in the description.
-
-### Ordering Heuristic
-- Architecture/contracts/types first (foundations)
-- Core implementation second (the meat)
-- Tests third (verification)
-- Integration/wiring last (connecting to the rest of the system)
-- Docs alongside or after (never before implementation)
-
----
-
 ## Related Workflows
 
-- [`/start-task`](./start-task.md) — Task-level preparation (discover/explore/prepare)
-- [`/execute-task`](./execute-task.md) — Task execution (after decomposition)
+- [`/start-task`](./start-task.md) — Task-level preparation (same delegation pattern)
+- [`/discover-phase`](./discover-phase.md) — Specialist child: task/epic discovery
+- [`/explore-phase`](./explore-phase.md) — Specialist child: codebase exploration
+- [`/prepare-phase`](./prepare-phase.md) — Specialist child: sequential thinking prep
+- [`/execute-task`](./execute-task.md) — Implementation phase (after decomposition)
 - [`/execute-subtask`](./execute-subtask.md) — Single bounded implementation unit
-- [`/prepare-phase`](./prepare-phase.md) — Sequential thinking preparation (task-level)
