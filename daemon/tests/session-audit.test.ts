@@ -553,6 +553,19 @@ describe("SessionAudit — detectToolAdherenceDeviation", () => {
 // 6. Detector: detectIncompleteSubtaskTree
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/** Create a mock for subtask tree tests: single child with given status. */
+function createSubtreeAudit(
+  childStatus: { punch_count: string; has_quality_gate: string },
+) {
+  return createMockAudit((sql, params) => {
+    if (sql.includes("child_rels")) return [{ child_id: "child-1" }];
+    if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && params?.[0] === "child-1") {
+      return [childStatus];
+    }
+    return [];
+  });
+}
+
 describe("SessionAudit — detectIncompleteSubtaskTree", () => {
   it("returns no findings when session has no children", async () => {
     const { audit } = createMockAudit((sql) => {
@@ -565,14 +578,7 @@ describe("SessionAudit — detectIncompleteSubtaskTree", () => {
   });
 
   it("returns critical finding for child with zero punches", async () => {
-    const { audit } = createMockAudit((sql, params) => {
-      if (sql.includes("child_rels")) return [{ child_id: "child-1" }];
-      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && params?.[0] === "child-1") {
-        return [{ punch_count: "0", has_quality_gate: "0" }];
-      }
-      return [];
-    });
-
+    const { audit } = createSubtreeAudit({ punch_count: "0", has_quality_gate: "0" });
     const findings = await audit.detectIncompleteSubtaskTree("session-1");
 
     expect(findings).toHaveLength(1);
@@ -583,14 +589,7 @@ describe("SessionAudit — detectIncompleteSubtaskTree", () => {
   });
 
   it("returns warning for child with punches but no quality gate", async () => {
-    const { audit } = createMockAudit((sql, params) => {
-      if (sql.includes("child_rels")) return [{ child_id: "child-1" }];
-      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && params?.[0] === "child-1") {
-        return [{ punch_count: "10", has_quality_gate: "0" }];
-      }
-      return [];
-    });
-
+    const { audit } = createSubtreeAudit({ punch_count: "10", has_quality_gate: "0" });
     const findings = await audit.detectIncompleteSubtaskTree("session-1");
 
     expect(findings).toHaveLength(1);
@@ -600,14 +599,7 @@ describe("SessionAudit — detectIncompleteSubtaskTree", () => {
   });
 
   it("returns no findings when children are healthy", async () => {
-    const { audit } = createMockAudit((sql, params) => {
-      if (sql.includes("child_rels")) return [{ child_id: "child-1" }];
-      if (sql.includes("COUNT(*)") && sql.includes("gate_pass") && params?.[0] === "child-1") {
-        return [{ punch_count: "15", has_quality_gate: "2" }];
-      }
-      return [];
-    });
-
+    const { audit } = createSubtreeAudit({ punch_count: "15", has_quality_gate: "2" });
     const findings = await audit.detectIncompleteSubtaskTree("session-1");
     expect(findings).toHaveLength(0);
   });
