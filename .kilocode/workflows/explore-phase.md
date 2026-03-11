@@ -57,6 +57,27 @@ Verify external library APIs. Training data is stale.
 
 ---
 
+## Step 3b: Interface Appendix (MANDATORY when cross-boundary interfaces exist)
+
+**See:** [`.kilocode/rules/interface-discipline.md`](../rules/interface-discipline.md)
+
+If the task touches **any** cross-boundary identifier — SDK methods, database columns,
+API parameters, event names, CLI flags, cross-module function signatures — you MUST
+produce an Interface Appendix as part of your structured output.
+
+For each interface the task will consume or produce:
+1. **Look it up** — use Context7, `read_file` on schema/type files, `codebase-retrieval`, or docs
+2. **Record the exact identifier** — spelling, casing, shape
+3. **Cite the source** — tool used, file path and line, or documentation URL
+
+If the task is purely internal with no cross-boundary interfaces, state that explicitly
+and omit the appendix table.
+
+**This step prevents the most expensive class of agent bug: near-miss identifiers
+that look correct but fail at runtime.**
+
+---
+
 ## Step 4: Structured Output
 
 Return via `attempt_completion` with this structure:
@@ -85,6 +106,14 @@ Return via `attempt_completion` with this structure:
 ### Constraints
 - Layer boundaries: [from repomap.toml]
 - API contracts: [verified via Context7]
+
+### Interface Appendix
+<!-- Include this section when the task touches cross-boundary identifiers.
+     Omit only if the task is purely internal with no external interfaces. -->
+
+| Identifier | Actual Value | Source | Citation |
+|------------|-------------|--------|----------|
+| [description] | `exact.identifier` | [source type] | [tool/file:line/URL] |
 
 ### Evidence
 - runtime_model_reported: [model]

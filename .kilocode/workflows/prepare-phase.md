@@ -21,7 +21,7 @@ summaries into an executable implementation plan, then export the session.
 
 - `task_id` — the bead identifier
 - `discovery_summary` — output from discover-phase child
-- `exploration_summary` — output from explore-phase child
+- `exploration_summary` — output from explore-phase child (includes Interface Appendix if present)
 - `objective` — what to prepare for
 
 ---
@@ -147,6 +147,14 @@ Return via `attempt_completion` with this structure:
 
 ### Risks and Mitigations
 - Risk: [description] → Mitigation: [approach]
+
+### Interface Appendix
+<!-- Forward verbatim from exploration summary. Do not summarize or drop entries.
+     If empty/absent from explore output, state "No cross-boundary interfaces identified." -->
+
+| Identifier | Actual Value | Source | Citation |
+|------------|-------------|--------|----------|
+| [forwarded from explore] | ... | ... | ... |
 
 ### Session Export
 - Path: `.kilocode/thinking/task-{task-id}-prep-{YYYY-MM-DD}.json`
