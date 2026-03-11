@@ -76,3 +76,6 @@ docs/comms/
 .kilocode/prompts/monorepo-migration-hlr.md
 .kilocode/prompts/factory-onboarding-attestation-response.md
 .beads/backup/
+
+# Ad-hoc operational scripts (audit, backfill, one-offs) — local only
+daemon/scripts/
