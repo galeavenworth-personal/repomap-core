@@ -77,5 +77,5 @@ docs/comms/
 .kilocode/prompts/factory-onboarding-attestation-response.md
 .beads/backup/
 
-# Ad-hoc operational scripts (audit, backfill, one-offs) — local only
-daemon/scripts/
+# Ad-hoc operational scripts — local-only one-offs go in daemon/scripts/local/
+daemon/scripts/local/
