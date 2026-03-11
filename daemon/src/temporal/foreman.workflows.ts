@@ -78,6 +78,7 @@ export const pauseSignal = defineSignal("foreman.pause");
 export const resumeSignal = defineSignal("foreman.resume");
 export const shutdownSignal = defineSignal<[{ reason: string }]>("foreman.shutdown");
 export const forceDispatchSignal = defineSignal<[{ beadId: string }]>("foreman.forceDispatch");
+export const approveDispatchSignal = defineSignal<[{ beadId: string }]>("foreman.approveDispatch");
 export const skipBeadSignal = defineSignal<[{ beadId: string; reason: string }]>("foreman.skipBead");
 export const updateConfigSignal = defineSignal<[Partial<ForemanInput>]>("foreman.updateConfig");
 
@@ -657,6 +658,10 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
   });
 
   setHandler(forceDispatchSignal, ({ beadId }) => {
+    state.forceDispatchQueue.push(beadId);
+  });
+
+  setHandler(approveDispatchSignal, ({ beadId }) => {
     state.forceDispatchQueue.push(beadId);
   });
 

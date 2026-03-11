@@ -7,7 +7,7 @@
  *   3. Quality Gate Results — last pass/fail per quality gate
  *   4. Cost Summary      — total spend, per-session breakdown, cheap zone classification
  *   5. Subtask Tree Health — parent-child completeness, orphaned sessions
- *   6. Daemon Health      — kilo serve, Dolt write latency, Temporal status
+ *   6. Daemon Health      — kilo serve, Dolt query latency, Temporal status
  *
  * Key design decisions:
  *   - Each section independently succeeds or fails (one unhealthy section
@@ -140,7 +140,7 @@ export type DaemonHealthStatus = SectionResult<{
   kiloServe: SubsystemHealth;
   dolt: SubsystemHealth;
   temporal: SubsystemHealth;
-  doltWriteLatencyMs: number | null;
+  doltQueryLatencyMs: number | null;
 }>;
 
 // ── Key Metrics ──
@@ -300,6 +300,36 @@ function buildSubsystemHealth(
       ? "degraded"
       : status;
   return { status: effectiveStatus, message, latencyMs };
+}
+
+function parseTemporalAddress(address: string): {
+  host: string;
+  port: number;
+  display: string;
+} {
+  const trimmed = address.trim();
+  if (!trimmed) {
+    return { host: "localhost", port: 7233, display: "localhost:7233" };
+  }
+
+  const bracketMatch = /^\[(.+)\](?::(\d+))?$/.exec(trimmed);
+  if (bracketMatch) {
+    const host = bracketMatch[1] ?? "localhost";
+    const parsedPort = Number.parseInt(bracketMatch[2] ?? "7233", 10);
+    const port = Number.isFinite(parsedPort) ? parsedPort : 7233;
+    return { host, port, display: `${host}:${port}` };
+  }
+
+  const lastColon = trimmed.lastIndexOf(":");
+  if (lastColon > 0 && lastColon < trimmed.length - 1) {
+    const host = trimmed.slice(0, lastColon);
+    const parsedPort = Number.parseInt(trimmed.slice(lastColon + 1), 10);
+    if (Number.isFinite(parsedPort)) {
+      return { host, port: parsedPort, display: `${host}:${parsedPort}` };
+    }
+  }
+
+  return { host: trimmed, port: 7233, display: `${trimmed}:7233` };
 }
 
 // ── Section Collectors ──
@@ -677,7 +707,7 @@ async function collectDaemonHealth(
 
     // Check Dolt via TCP
     let dolt: SubsystemHealth;
-    let doltWriteLatencyMs: number | null = null;
+    let doltQueryLatencyMs: number | null = null;
     try {
       const { elapsedMs } = await timed(async () => {
         await new Promise<void>((resolveConn, reject) => {
@@ -697,27 +727,34 @@ async function collectDaemonHealth(
       });
       dolt = buildSubsystemHealth("up", elapsedMs, `TCP ${config.doltHost}:${config.doltPort}`);
 
-      // Measure write latency via a lightweight query
+      // Measure query latency via a lightweight query
       try {
-        const conn = await mysql.createConnection({
-          host: config.doltHost,
-          port: config.doltPort,
-          database: config.doltDatabase,
-          user: "root",
-          connectTimeout: HEALTH_CHECK_TIMEOUT_MS,
-        });
-        const { elapsedMs: writeMs } = await timed(async () => {
-          await conn.execute("SELECT 1");
-        });
-        doltWriteLatencyMs = writeMs;
-        await conn.end();
+        let conn: Connection | null = null;
+        try {
+          conn = await mysql.createConnection({
+            host: config.doltHost,
+            port: config.doltPort,
+            database: config.doltDatabase,
+            user: "root",
+            connectTimeout: HEALTH_CHECK_TIMEOUT_MS,
+          });
+          const activeConn = conn;
+          const { elapsedMs: queryMs } = await timed(async () => {
+            await activeConn.execute("SELECT 1");
+          });
+          doltQueryLatencyMs = queryMs;
+        } finally {
+          if (conn) {
+            await conn.end();
+          }
+        }
       } catch {
-        // Write latency probe failed, but TCP was up — degrade the message
-        dolt = buildSubsystemHealth(
-          "up",
-          elapsedMs,
-          `TCP up, but query latency probe failed`,
-        );
+        // Query latency probe failed, but TCP was up.
+        dolt = {
+          status: "degraded",
+          latencyMs: elapsedMs,
+          message: "TCP up, but query latency probe failed",
+        };
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -729,12 +766,13 @@ async function collectDaemonHealth(
     if (config.insideTemporal) {
       temporal = { status: "up", message: "implicit: running inside Temporal activity", latencyMs: 0 };
     } else {
-      // TCP check against default Temporal port
+      // TCP check against configured Temporal address
+      const temporalEndpoint = parseTemporalAddress(process.env.TEMPORAL_ADDRESS ?? "localhost:7233");
       try {
         const { elapsedMs } = await timed(async () => {
           await new Promise<void>((resolveConn, reject) => {
             const sock = createConnection(
-              { host: "127.0.0.1", port: 7233 },
+              { host: temporalEndpoint.host, port: temporalEndpoint.port },
               () => {
                 sock.destroy();
                 resolveConn();
@@ -747,10 +785,10 @@ async function collectDaemonHealth(
             });
           });
         });
-        temporal = buildSubsystemHealth("up", elapsedMs, "TCP 127.0.0.1:7233");
+        temporal = buildSubsystemHealth("up", elapsedMs, `TCP ${temporalEndpoint.display}`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        temporal = { status: "down", message: `TCP 127.0.0.1:7233 failed: ${msg}`, latencyMs: null };
+        temporal = { status: "down", message: `TCP ${temporalEndpoint.display} failed: ${msg}`, latencyMs: null };
       }
     }
 
@@ -759,7 +797,7 @@ async function collectDaemonHealth(
 
     return {
       status: anyDown ? "unhealthy" : anyDegraded ? "degraded" : "ok",
-      data: { kiloServe, dolt, temporal, doltWriteLatencyMs },
+      data: { kiloServe, dolt, temporal, doltQueryLatencyMs },
       error: null,
     };
   } catch (e) {

@@ -22,7 +22,8 @@
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   generatePlantHealthReport,
@@ -33,6 +34,9 @@ import {
   type SectionStatus,
   type CostZone,
 } from "../src/temporal/plant-health.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers

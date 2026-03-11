@@ -299,10 +299,33 @@ function formatStatus(status: ForemanStatus): string {
 // ── Temporal Client ──
 
 async function createClient(): Promise<Client> {
+  if (temporalClient) {
+    return temporalClient;
+  }
+
   const address = process.env.TEMPORAL_ADDRESS ?? "localhost:7233";
   const namespace = process.env.TEMPORAL_NAMESPACE ?? "default";
-  const connection = await Connection.connect({ address });
-  return new Client({ connection, namespace });
+  temporalConnection = await Connection.connect({ address });
+  temporalClient = new Client({ connection: temporalConnection, namespace });
+  return temporalClient;
+}
+
+let temporalConnection: Connection | null = null;
+let temporalClient: Client | null = null;
+
+async function closeTemporalConnection(): Promise<void> {
+  const conn = temporalConnection;
+  temporalClient = null;
+  temporalConnection = null;
+  if (!conn) {
+    return;
+  }
+
+  try {
+    await conn.close();
+  } catch {
+    // Best-effort close on CLI shutdown
+  }
 }
 
 function resolveWorkflowId(parsed: ParsedArgs): string {
@@ -358,7 +381,6 @@ async function handleStart(parsed: ParsedArgs): Promise<void> {
   console.log(`[foreman] Workflow started: ${handle.workflowId}`);
   console.log(`[foreman] Run ID: ${handle.firstExecutionRunId}`);
   console.log(`[foreman] View: http://localhost:8233/namespaces/default/workflows/${wfId}`);
-  process.exit(0);
 }
 
 async function handleStatus(parsed: ParsedArgs): Promise<void> {
@@ -580,7 +602,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  await handler(parsed);
+  try {
+    await handler(parsed);
+  } finally {
+    await closeTemporalConnection();
+  }
+
+  process.exit(0);
 }
 
 main().catch((err) => {
