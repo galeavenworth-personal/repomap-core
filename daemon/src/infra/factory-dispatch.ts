@@ -212,9 +212,11 @@ export function isPm2AppOnline(pm2Bin: string, appName: string): boolean {
       encoding: "utf8",
       timeout: 5000,
     });
-    // Match the pattern: "name":"appName" ... "status":"online"
-    const regex = new RegExp(`"name":"${appName}"[^}]*"status":"online"`);
-    return regex.test(output);
+    const procs: Array<{ name: string; pm2_env?: { status?: string } }> =
+      JSON.parse(output);
+    return procs.some(
+      (p) => p.name === appName && p.pm2_env?.status === "online",
+    );
   } catch {
     return false;
   }
