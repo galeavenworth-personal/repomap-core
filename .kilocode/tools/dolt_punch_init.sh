@@ -17,4 +17,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Delegate to TypeScript implementation
 export REPO_ROOT
-exec npx tsx "$REPO_ROOT/daemon/src/infra/dolt-schema.cli.ts" init
+TSX="${REPO_ROOT}/daemon/node_modules/.bin/tsx"
+if [[ ! -x "$TSX" ]]; then
+  echo "ERROR: tsx not found at $TSX — run 'npm install' in daemon/" >&2
+  exit 1
+fi
+
+exec "$TSX" "$REPO_ROOT/daemon/src/infra/dolt-schema.cli.ts" init

@@ -20,4 +20,12 @@ COMMIT_MSG="${2:-Apply punch card schema migration}"
 
 # Delegate to TypeScript implementation
 export REPO_ROOT
-exec npx tsx "$REPO_ROOT/daemon/src/infra/dolt-schema.cli.ts" migrate "$SCHEMA_FILE" "$COMMIT_MSG"
+export DOLT_DATABASE="${DOLT_DATABASE:-beads_repomap-core}"
+
+TSX="${REPO_ROOT}/daemon/node_modules/.bin/tsx"
+if [[ ! -x "$TSX" ]]; then
+  echo "ERROR: tsx not found at $TSX — run 'npm install' in daemon/" >&2
+  exit 1
+fi
+
+exec "$TSX" "$REPO_ROOT/daemon/src/infra/dolt-schema.cli.ts" migrate "$SCHEMA_FILE" "$COMMIT_MSG"

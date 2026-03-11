@@ -141,7 +141,7 @@ describe("DoltSchema", () => {
   describe("idempotentDoltCommit", () => {
     it("calls DOLT_ADD and DOLT_COMMIT", async () => {
       const conn = await getMockConnection();
-      const mockQuery = conn.query as ReturnType<typeof vi.fn>;
+      const mockQuery = vi.mocked(conn.query);
       mockQuery.mockResolvedValueOnce([[]]);  // DOLT_ADD
       mockQuery.mockResolvedValueOnce([[{ hash: "abc123" }]]);  // DOLT_COMMIT
 
@@ -156,7 +156,7 @@ describe("DoltSchema", () => {
 
     it("returns null when nothing to commit", async () => {
       const conn = await getMockConnection();
-      const mockQuery = conn.query as ReturnType<typeof vi.fn>;
+      const mockQuery = vi.mocked(conn.query);
       mockQuery.mockResolvedValueOnce([[]]);  // DOLT_ADD
       mockQuery.mockRejectedValueOnce(new Error("nothing to commit"));  // DOLT_COMMIT
 
@@ -167,7 +167,7 @@ describe("DoltSchema", () => {
 
     it("rethrows non-nothing-to-commit errors", async () => {
       const conn = await getMockConnection();
-      const mockQuery = conn.query as ReturnType<typeof vi.fn>;
+      const mockQuery = vi.mocked(conn.query);
       mockQuery.mockResolvedValueOnce([[]]);  // DOLT_ADD
       mockQuery.mockRejectedValueOnce(new Error("connection refused"));
 
@@ -178,7 +178,7 @@ describe("DoltSchema", () => {
 
     it("escapes single quotes in commit messages", async () => {
       const conn = await getMockConnection();
-      const mockQuery = conn.query as ReturnType<typeof vi.fn>;
+      const mockQuery = vi.mocked(conn.query);
       mockQuery.mockResolvedValueOnce([[]]);  // DOLT_ADD
       mockQuery.mockResolvedValueOnce([[{ hash: "def456" }]]);  // DOLT_COMMIT
 
@@ -194,7 +194,7 @@ describe("DoltSchema", () => {
     it("creates database, tables, view, seeds, and commits", async () => {
       const config = makeTestConfig();
       const conn = await getMockConnection();
-      const mockQuery = conn.query as ReturnType<typeof vi.fn>;
+      const mockQuery = vi.mocked(conn.query);
 
       // Setup mock responses for the sequence:
       // 1. CREATE DATABASE (server connection)
@@ -260,7 +260,7 @@ describe("DoltSchema", () => {
 
     it("returns failed on connection error", async () => {
       const config = makeTestConfig({ port: 19999 });
-      const mockCreateConnection = mysql.createConnection as ReturnType<typeof vi.fn>;
+      const mockCreateConnection = vi.mocked(mysql.createConnection);
       mockCreateConnection.mockRejectedValueOnce(new Error("connection refused"));
 
       const log = vi.fn();
@@ -290,7 +290,7 @@ describe("DoltSchema", () => {
     it("reads and applies SQL file via mysql2", async () => {
       const config = makeTestConfig();
       const conn = await getMockConnection();
-      const mockQuery = conn.query as ReturnType<typeof vi.fn>;
+      const mockQuery = vi.mocked(conn.query);
 
       // Reset for full sequence
       mockQuery.mockReset();
@@ -321,7 +321,7 @@ describe("DoltSchema", () => {
     it("returns no_changes when nothing to commit", async () => {
       const config = makeTestConfig();
       const conn = await getMockConnection();
-      const mockQuery = conn.query as ReturnType<typeof vi.fn>;
+      const mockQuery = vi.mocked(conn.query);
 
       // Reset for full sequence
       mockQuery.mockReset();

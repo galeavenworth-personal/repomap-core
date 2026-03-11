@@ -7,13 +7,11 @@
  * See: repomap-core-76q.2
  */
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { Mock } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createServer } from "node:net";
 import {
   type StackConfig,
   type StackHealth,
-  type ComponentHealth,
   defaultConfig,
   checkKiloHealth,
   checkDoltComponent,
@@ -244,9 +242,10 @@ describe("StackManager", () => {
       if (result !== null) {
         expect(typeof result).toBe("string");
         expect(result.length).toBeGreaterThan(0);
-      } else {
-        expect(result).toBeNull();
       }
+      // If result is null, we've already validated the contract:
+      // findTemporalCli returns string | null
+      expect(result === null || typeof result === "string").toBe(true);
     });
   });
 

@@ -262,7 +262,7 @@ export function verifyAuditProof(
   const missingGates = config.requiredGateIds.filter((id) => !found.has(id));
 
   if (missingGates.length > 0) {
-    log(`audit_proof=MISSING gates=[${missingGates.sort().join(", ")}]`);
+    log(`audit_proof=MISSING gates=[${[...missingGates].sort((a, b) => a.localeCompare(b)).join(", ")}]`);
     return { ok: false, missingGates };
   }
 
@@ -374,14 +374,14 @@ export function landPlane(
   // 2. Run gates (unless skipped)
   if (!options.skipGates) {
     const results = runGates(options.beadId, options.runTimestamp, config, log);
-    const lastResult = results[results.length - 1];
+    const lastResult = results.at(-1);
 
-    if (lastResult && lastResult.status === "fault") {
+    if (lastResult?.status === "fault") {
       log(`ERROR: gate_faulted gate_id=${lastResult.gateId} rc=${lastResult.exitCode}`);
       return { exitCode: 2, summary: `Gate faulted: ${lastResult.gateId}` };
     }
 
-    if (lastResult && lastResult.status === "fail") {
+    if (lastResult?.status === "fail") {
       log(`ERROR: gate_failed gate_id=${lastResult.gateId} rc=${lastResult.exitCode}`);
       return { exitCode: 1, summary: `Gate failed: ${lastResult.gateId}` };
     }
@@ -398,12 +398,10 @@ export function landPlane(
 
   // 5. Sync (unless disabled)
   let syncStatus = "YES";
-  if (!options.noSync) {
-    if (!syncBeads(config, log)) {
-      return { exitCode: 4, summary: "bd sync failed" };
-    }
-  } else {
+  if (options.noSync) {
     syncStatus = "SKIPPED";
+  } else if (!syncBeads(config, log)) {
+    return { exitCode: 4, summary: "bd sync failed" };
   }
 
   // Success summary

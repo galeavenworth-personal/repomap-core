@@ -10,7 +10,6 @@ import {
   type GhRunner,
   type BdRunner,
   type ReconcileOptions,
-  type ReconcileItemResult,
   reconcile,
   reconcileOne,
   queryMergedPrs,

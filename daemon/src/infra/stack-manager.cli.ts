@@ -28,6 +28,17 @@ import {
 
 const command = process.argv[2] ?? "ensure";
 
+async function runEnsureStack(config: StackConfig): Promise<number> {
+  const result = await ensureStack(config);
+  if (result.action === "failed") {
+    for (const err of result.errors) {
+      console.error(`ERROR: ${err}`);
+    }
+    return 1;
+  }
+  return 0;
+}
+
 async function main(): Promise<number> {
   const config: StackConfig = defaultConfig();
 
@@ -51,39 +62,18 @@ async function main(): Promise<number> {
     case "ensure":
     case "--ensure": {
       config.manageKilo = true;
-      const result = await ensureStack(config);
-      if (result.action === "failed") {
-        for (const err of result.errors) {
-          console.error(`ERROR: ${err}`);
-        }
-        return 1;
-      }
-      return 0;
+      return runEnsureStack(config);
     }
 
     case "start": {
       config.manageKilo = false;
-      const result = await ensureStack(config);
-      if (result.action === "failed") {
-        for (const err of result.errors) {
-          console.error(`ERROR: ${err}`);
-        }
-        return 1;
-      }
-      return 0;
+      return runEnsureStack(config);
     }
 
     case "with-kilo":
     case "--with-kilo": {
       config.manageKilo = true;
-      const result = await ensureStack(config);
-      if (result.action === "failed") {
-        for (const err of result.errors) {
-          console.error(`ERROR: ${err}`);
-        }
-        return 1;
-      }
-      return 0;
+      return runEnsureStack(config);
     }
 
     case "stop":

@@ -29,13 +29,11 @@ import {
   checkPunchCard,
   defaultCheckConfig,
   type PunchCardCheckConfig,
-  type CheckResult,
 } from "../src/infra/punch-card-check.cli.js";
 
 import {
   fetchAuditTargets,
   auditPunchCards,
-  type AuditResult,
 } from "../src/infra/punch-card-audit.cli.js";
 
 function makeConfig(overrides: Partial<PunchCardCheckConfig> = {}): PunchCardCheckConfig {

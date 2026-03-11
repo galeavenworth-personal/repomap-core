@@ -64,22 +64,27 @@ function parseArgs(argv: string[]): ReturnType<typeof defaultConfig> {
     switch (arg) {
       case "-m":
       case "--mode":
+        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
         config.mode = args[++i];
         break;
       case "-t":
       case "--title":
+        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
         config.title = args[++i];
         break;
       case "-h":
       case "--host":
+        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
         config.host = args[++i];
         break;
       case "-p":
       case "--port":
+        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
         config.port = Number(args[++i]);
         break;
       case "-w":
       case "--wait":
+        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
         config.maxWait = Number(args[++i]);
         break;
       case "-q":
@@ -87,6 +92,7 @@ function parseArgs(argv: string[]): ReturnType<typeof defaultConfig> {
         config.quiet = true;
         break;
       case "--poll":
+        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
         config.pollInterval = Number(args[++i]);
         break;
       case "--no-monitor":

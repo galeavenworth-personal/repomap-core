@@ -23,4 +23,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-exec npx tsx "$REPO_ROOT/daemon/src/infra/pr-threads.cli.ts" "$@"
+TSX="${REPO_ROOT}/daemon/node_modules/.bin/tsx"
+if [[ ! -x "$TSX" ]]; then
+  echo "ERROR: tsx not found at $TSX — run 'npm install' in daemon/" >&2
+  exit 1
+fi
+
+exec "$TSX" "$REPO_ROOT/daemon/src/infra/pr-threads.cli.ts" "$@"

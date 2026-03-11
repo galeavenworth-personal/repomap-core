@@ -31,6 +31,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 
+type FetchInput = string | URL | Request;
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 function makeTestConfig(overrides: Partial<FactoryDispatchConfig> = {}): FactoryDispatchConfig {
@@ -445,7 +447,7 @@ describe("FactoryDispatch", () => {
 
       // First call: children endpoint, second: messages endpoint
       let callCount = 0;
-      const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const mockFetch = vi.fn(async (url: FetchInput) => {
         const urlStr = typeof url === "string" ? url : url.toString();
         if (urlStr.includes("/children")) {
           return mockFetchResponse([]);
@@ -476,7 +478,7 @@ describe("FactoryDispatch", () => {
       const config = makeTestConfig({ maxWait: 0.05, pollInterval: 0.01, idleConfirm: 1 });
       const log = vi.fn();
 
-      const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const mockFetch = vi.fn(async (url: FetchInput) => {
         const urlStr = typeof url === "string" ? url : url.toString();
         if (urlStr.includes("/children")) {
           return mockFetchResponse([]);
@@ -502,7 +504,7 @@ describe("FactoryDispatch", () => {
       const log = vi.fn();
 
       let pollCount = 0;
-      const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const mockFetch = vi.fn(async (url: FetchInput) => {
         const urlStr = typeof url === "string" ? url : url.toString();
         if (urlStr.includes("/children")) {
           pollCount++;

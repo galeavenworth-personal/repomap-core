@@ -6,7 +6,7 @@
  * needed.
  */
 
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +18,6 @@ import type {
 import {
   defaultConfig,
   verifyAuditProof,
-  runGate,
   runGates,
   closeBead,
   syncBeads,
@@ -154,7 +153,7 @@ describe("LandPlane", () => {
       const result = verifyAuditProof(BEAD_ID, RUN_TS, config, noop);
 
       expect(result.ok).toBe(false);
-      expect(result.missingGates.sort()).toEqual([...REQUIRED_GATES].sort());
+      expect(result.missingGates.toSorted((a, b) => a.localeCompare(b))).toEqual([...REQUIRED_GATES].toSorted((a, b) => a.localeCompare(b)));
     });
 
     it("ignores records with wrong run_timestamp", () => {
@@ -164,7 +163,7 @@ describe("LandPlane", () => {
       const result = verifyAuditProof(BEAD_ID, RUN_TS, config, noop);
 
       expect(result.ok).toBe(false);
-      expect(result.missingGates.sort()).toEqual([...REQUIRED_GATES].sort());
+      expect(result.missingGates.toSorted((a, b) => a.localeCompare(b))).toEqual([...REQUIRED_GATES].toSorted((a, b) => a.localeCompare(b)));
     });
 
     it("ignores records with status != pass", () => {
@@ -181,7 +180,7 @@ describe("LandPlane", () => {
       const result = verifyAuditProof(BEAD_ID, RUN_TS, config, noop);
 
       expect(result.ok).toBe(false);
-      expect(result.missingGates.sort()).toEqual([...REQUIRED_GATES].sort());
+      expect(result.missingGates.toSorted((a, b) => a.localeCompare(b))).toEqual([...REQUIRED_GATES].toSorted((a, b) => a.localeCompare(b)));
     });
 
     it("handles malformed JSONL lines gracefully", () => {
@@ -217,7 +216,7 @@ describe("LandPlane", () => {
       const result = verifyAuditProof(BEAD_ID, RUN_TS, config, noop);
 
       expect(result.ok).toBe(false);
-      expect(result.missingGates.sort()).toEqual([...REQUIRED_GATES].sort());
+      expect(result.missingGates.toSorted((a, b) => a.localeCompare(b))).toEqual([...REQUIRED_GATES].toSorted((a, b) => a.localeCompare(b)));
     });
   });
 

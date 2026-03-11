@@ -129,7 +129,7 @@ export function closeBead(
  */
 export function sanitizeError(raw: unknown, maxLen = 200): string {
   const msg = raw instanceof Error ? raw.message : String(raw);
-  const collapsed = msg.replace(/\s+/g, " ").trim();
+  const collapsed = msg.replaceAll(/\s+/g, " ").trim();
   return collapsed.length > maxLen ? collapsed.slice(0, maxLen) + "…" : collapsed;
 }
 

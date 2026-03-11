@@ -22,6 +22,9 @@
  * See: repomap-core-76q.3
  */
 
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import mysql from "mysql2/promise";
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -213,10 +216,12 @@ export async function checkPunchCard(
 function formatCheckResult(result: CheckResult): string {
   const lines: string[] = [];
 
-  lines.push("Punch Card Check");
-  lines.push(`- Session: ${result.sessionId}`);
-  lines.push(`- Card: ${result.cardId}`);
-  lines.push("- Engine: mysql2");
+  lines.push(
+    "Punch Card Check",
+    `- Session: ${result.sessionId}`,
+    `- Card: ${result.cardId}`,
+    "- Engine: mysql2",
+  );
   if (result.enforcedOnly) {
     lines.push("- Mode: enforced-only (exit gate)");
   }
@@ -226,18 +231,14 @@ function formatCheckResult(result: CheckResult): string {
 
   for (const req of result.requirements) {
     const desc = req.description ? ` \u2014 ${req.description}` : "";
-    if (req.kind === "forbidden") {
-      if (req.passed) {
-        lines.push(`\u2705 FORBIDDEN ${req.punchType}:${req.punchKeyPattern} absent${desc}`);
-      } else {
-        lines.push(`\uD83D\uDEAB FORBIDDEN ${req.punchType}:${req.punchKeyPattern} observed ${req.count} time(s)${desc}`);
-      }
+    if (req.kind === "forbidden" && req.passed) {
+      lines.push(`\u2705 FORBIDDEN ${req.punchType}:${req.punchKeyPattern} absent${desc}`);
+    } else if (req.kind === "forbidden") {
+      lines.push(`\uD83D\uDEAB FORBIDDEN ${req.punchType}:${req.punchKeyPattern} observed ${req.count} time(s)${desc}`);
+    } else if (req.passed) {
+      lines.push(`\u2705 REQUIRED ${req.punchType}:${req.punchKeyPattern} satisfied (${req.count})${desc}`);
     } else {
-      if (req.passed) {
-        lines.push(`\u2705 REQUIRED ${req.punchType}:${req.punchKeyPattern} satisfied (${req.count})${desc}`);
-      } else {
-        lines.push(`\u274C REQUIRED ${req.punchType}:${req.punchKeyPattern} missing${desc}`);
-      }
+      lines.push(`\u274C REQUIRED ${req.punchType}:${req.punchKeyPattern} missing${desc}`);
     }
   }
 
@@ -344,8 +345,8 @@ async function main(): Promise<number> {
 
 // Only run CLI when executed directly (not when imported for testing)
 const isDirectRun =
-  process.argv[1] &&
-  import.meta.url.endsWith(process.argv[1].replace(/.*\//, ""));
+  process.argv[1] != null &&
+  resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
 
 if (isDirectRun) {
   const code = await main();

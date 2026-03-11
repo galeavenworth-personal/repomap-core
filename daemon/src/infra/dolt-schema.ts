@@ -16,7 +16,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import mysql from "mysql2/promise";
 
 // ── Configuration ────────────────────────────────────────────────────────
@@ -41,7 +42,7 @@ const HOME = process.env.HOME ?? "/home/user";
 export function defaultSchemaConfig(): DoltSchemaConfig {
   // Resolve repo root relative to this file: daemon/src/infra/ -> repo root
   const repoRoot =
-    process.env.REPO_ROOT ?? resolve(import.meta.dirname ?? __dirname, "../../..");
+    process.env.REPO_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
   return {
     host: process.env.DOLT_HOST ?? "127.0.0.1",
@@ -169,6 +170,8 @@ const TABLE_DDL: string[] = [
     ) NOT NULL,
     punch_key_pattern VARCHAR(200) NOT NULL,
     required          BOOLEAN      NOT NULL DEFAULT TRUE,
+    forbidden         BOOLEAN      NOT NULL DEFAULT FALSE,
+    enforced          BOOLEAN      NOT NULL DEFAULT FALSE,
     description       VARCHAR(200) DEFAULT NULL,
 
     PRIMARY KEY (card_id, punch_type, punch_key_pattern)
@@ -396,7 +399,7 @@ export async function idempotentDoltCommit(
 ): Promise<string | null> {
   await conn.query("CALL DOLT_ADD('.')");
   try {
-    const [rows] = await conn.query(`CALL DOLT_COMMIT('-m', '${message.replace(/'/g, "''")}')`);
+    const [rows] = await conn.query(`CALL DOLT_COMMIT('-m', '${message.replaceAll("'", "''")}')`);
     const result = rows as Array<Record<string, string>>;
     if (result.length > 0) {
       return Object.values(result[0])[0] ?? null;

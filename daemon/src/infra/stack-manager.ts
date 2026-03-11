@@ -287,13 +287,14 @@ export async function checkStack(
     checkDoltComponent(config),
     checkTemporalServer(config.kiloHost, config.temporalPort),
   ]);
-  components.push(kilo);
-  components.push(dolt);
-
-  // pm2 checks are synchronous (execSync)
-  components.push(checkOcDaemon(config.pm2Bin));
-  components.push(temporal);
-  components.push(checkTemporalWorker(config.pm2Bin));
+  components.push(
+    kilo,
+    dolt,
+    // pm2 checks are synchronous (execSync)
+    checkOcDaemon(config.pm2Bin),
+    temporal,
+    checkTemporalWorker(config.pm2Bin),
+  );
 
   const healthy = components.filter((c) => c.ok).length;
   return {

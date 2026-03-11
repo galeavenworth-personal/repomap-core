@@ -19,4 +19,10 @@ export DOLT_HOST="${DOLT_HOST:-127.0.0.1}"
 export DOLT_PORT="${DOLT_PORT:-3307}"
 export DOLT_DATABASE="${DOLT_DATABASE:-beads_repomap-core}"
 
-exec npx --prefix "${REPO_ROOT}/daemon" tsx "${REPO_ROOT}/daemon/src/infra/punch-card-check.cli.ts" "$@"
+TSX="${REPO_ROOT}/daemon/node_modules/.bin/tsx"
+if [[ ! -x "$TSX" ]]; then
+  echo "ERROR: tsx not found at $TSX — run 'npm install' in daemon/" >&2
+  exit 1
+fi
+
+exec "$TSX" "${REPO_ROOT}/daemon/src/infra/punch-card-check.cli.ts" "$@"

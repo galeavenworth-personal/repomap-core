@@ -320,12 +320,11 @@ export function buildPromptPayload(promptArg: string, mode: string): PromptPaylo
       }
       return data;
     } catch (e) {
-      // If file doesn't exist or isn't valid JSON, treat as text
       const err = e as NodeJS.ErrnoException;
       if (err.code === "ENOENT") {
         throw new Error(`Prompt file not found: ${promptArg}`);
       }
-      throw e;
+      // Invalid JSON — fall through to treat .json path as plain text prompt
     }
   }
 
@@ -560,6 +559,8 @@ export async function monitorSession(
       if (idleCount < config.idleConfirm) {
         log(`${timestamp()} [${elapsed}s] Idle check ${idleCount}/${config.idleConfirm}, confirming...`);
         await sleep(config.pollInterval * 1000);
+        elapsed += config.pollInterval;
+        if (elapsed >= config.maxWait) break;
         continue;
       }
 

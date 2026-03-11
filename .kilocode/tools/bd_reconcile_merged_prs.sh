@@ -22,4 +22,10 @@ if [[ ! -f "${TS_CLI}" ]]; then
   exit 2
 fi
 
-exec npx --prefix "${ROOT_DIR}/daemon" tsx "${TS_CLI}" "$@"
+TSX="${ROOT_DIR}/daemon/node_modules/.bin/tsx"
+if [[ ! -x "$TSX" ]]; then
+  echo "ERROR: tsx not found at $TSX — run 'npm install' in daemon/" >&2
+  exit 1
+fi
+
+exec "$TSX" "${TS_CLI}" "$@"

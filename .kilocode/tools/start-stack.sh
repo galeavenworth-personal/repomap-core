@@ -33,10 +33,6 @@ find_tsx() {
         command -v tsx
         return 0
     fi
-    if command -v npx >/dev/null 2>&1; then
-        echo "npx tsx"
-        return 0
-    fi
     return 1
 }
 

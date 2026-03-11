@@ -27,6 +27,9 @@
  * See: repomap-core-76q.3
  */
 
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import mysql from "mysql2/promise";
 
 import {
@@ -274,8 +277,8 @@ async function main(): Promise<number> {
 
 // Only run CLI when executed directly (not when imported for testing)
 const isDirectRun =
-  process.argv[1] &&
-  import.meta.url.endsWith(process.argv[1].replace(/.*\//, ""));
+  process.argv[1] != null &&
+  resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
 
 if (isDirectRun) {
   const code = await main();
