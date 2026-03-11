@@ -425,6 +425,31 @@ This is separate from the punch card Dolt at `~/.kilocode/dolt/plant/`.
 - Get measures: `mcp3_get_component_measures` with `metricKeys` like `coverage`, `new_bugs`
 - Security hotspots must be **reviewed in the SonarQube web UI**
 
+### Duplication gate (MANDATORY after any code change)
+
+After every factory dispatch or manual code change that touches `daemon/` files,
+verify duplication is under threshold **before** considering the work done:
+
+```bash
+# Check SonarQube duplication on the PR
+mcp3_get_component_measures with:
+  projectKey: "galeavenworth-personal_repomap-core"
+  metricKeys: ["new_duplicated_lines_density", "new_duplicated_lines", "duplicated_blocks"]
+  pullRequest: "<PR_NUMBER>"
+```
+
+**Thresholds:**
+- `new_duplicated_lines_density` must be ≤ 3.0%
+- If above threshold, identify the duplicated file(s) and extract shared helpers
+- **Test files are the #1 source of duplication** — look for repeated mock setup,
+  fixture construction, and assertion patterns that can be consolidated into helpers
+
+**Common deduplication patterns:**
+- Repeated mock activity setup → `setupScenario()` helper with options object
+- Repeated state extraction → `runAndExtractState()` wrapper
+- Repeated signal/query registration checks → `expectHandlerRegistered(...names)` helper
+- Repeated fixture construction → parameterized factory functions
+
 ### Local tests
 
 ```bash
