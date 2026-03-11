@@ -22,6 +22,9 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { createConnection } from "node:net";
 
+import { resolveCardExitPrompt, injectCardExitPrompt } from "../optimization/prompt-injection.js";
+import { PunchCardValidator } from "../governor/punch-card-validator.js";
+
 // ── Configuration ────────────────────────────────────────────────────────
 
 export interface FactoryDispatchConfig {
@@ -53,6 +56,8 @@ export interface FactoryDispatchConfig {
   temporalPort: number;
   /** Path to pm2 binary */
   pm2Bin: string;
+  /** Override punch card ID (bypasses mode-card-map lookup) */
+  cardId: string;
 }
 
 export function defaultConfig(): FactoryDispatchConfig {
@@ -72,6 +77,7 @@ export function defaultConfig(): FactoryDispatchConfig {
     doltPort: Number(process.env.DOLT_PORT ?? "3307"),
     temporalPort: Number(process.env.TEMPORAL_PORT ?? "7233"),
     pm2Bin: `${repoRoot}/daemon/node_modules/.bin/pm2`,
+    cardId: "",
   };
 }
 
@@ -134,6 +140,14 @@ export interface PreflightResult {
   components: PreflightComponent[];
 }
 
+/** Post-session audit result. */
+export interface AuditResult {
+  cardId: string;
+  status: "pass" | "fail";
+  missing: string[];
+  violations: string[];
+}
+
 /** Dispatch result for JSON output mode. */
 export interface DispatchResult {
   session_id: string;
@@ -143,6 +157,7 @@ export interface DispatchResult {
   elapsed_seconds: number;
   result: string;
   child_session_ids: string[];
+  audit?: AuditResult;
 }
 
 /** Exit codes matching the shell script. */
@@ -690,6 +705,28 @@ export async function runDispatch(
   // Inject SESSION_ID into prompt
   injectSessionId(payload, sessionId);
 
+  // Phase 3b: Inject card exit prompt
+  try {
+    const cardResolution = config.cardId
+      ? await resolveCardExitPrompt(config.mode, config.cardId)
+      : await resolveCardExitPrompt(config.mode);
+    if (cardResolution.prompt) {
+      for (const part of payload.parts) {
+        if (part.type === "text" && typeof part.text === "string") {
+          part.text = injectCardExitPrompt(part.text, cardResolution.prompt);
+          break;
+        }
+      }
+      log(
+        `${timestamp()} Card exit prompt injected (card=${cardResolution.cardId}, source=${cardResolution.source})`,
+      );
+    } else {
+      log(`${timestamp()} No card exit prompt found for mode=${config.mode}${config.cardId ? ` card=${config.cardId}` : ""}`);
+    }
+  } catch (e) {
+    log(`${timestamp()} Warning: card exit prompt resolution failed: ${(e as Error).message}`);
+  }
+
   // Phase 4: Dispatch prompt
   try {
     await dispatchPrompt(baseUrl, sessionId, payload, fetchFn);
@@ -740,6 +777,23 @@ export async function runDispatch(
     childIds = children.map((c) => c.id).filter(Boolean);
   }
 
+  // Phase 7b: Post-session punch card audit
+  let audit: AuditResult | null = null;
+  const resolvedCardId = config.cardId || undefined;
+  if (resolvedCardId) {
+    audit = await runPostSessionAudit(sessionId, resolvedCardId, config, log);
+  } else {
+    // Try mode-card-map fallback
+    try {
+      const cardResolution = await resolveCardExitPrompt(config.mode);
+      if (cardResolution.cardId) {
+        audit = await runPostSessionAudit(sessionId, cardResolution.cardId, config, log);
+      }
+    } catch {
+      // Non-fatal — audit is best-effort
+    }
+  }
+
   // Phase 8: Output
   if (config.jsonOutput) {
     const output: DispatchResult = {
@@ -750,6 +804,7 @@ export async function runDispatch(
       elapsed_seconds: monitor.elapsed,
       result,
       child_session_ids: childIds,
+      ...(audit ? { audit } : {}),
     };
     process.stdout.write(JSON.stringify(output, null, 2) + "\n");
   } else {
@@ -772,6 +827,60 @@ export async function runDispatch(
   );
 
   return ExitCode.SUCCESS;
+}
+
+// ── Phase 10: Post-session punch card audit ──────────────────────────────
+
+/**
+ * Run a punch card audit after session completion.
+ * Validates the session's punches against the resolved card and writes
+ * the result to Dolt's checkpoints table.
+ *
+ * This is the "governor without kill" — post-hoc enforcement that creates
+ * the training signal DSPy needs to learn from workflow deviations.
+ */
+export async function runPostSessionAudit(
+  sessionId: string,
+  cardId: string,
+  config: FactoryDispatchConfig,
+  log: Logger,
+): Promise<AuditResult | null> {
+  const validator = new PunchCardValidator({
+    host: config.host === "127.0.0.1" ? config.host : "127.0.0.1",
+    port: config.doltPort,
+    database: process.env.DOLT_DATABASE ?? "punch_cards",
+    user: "root",
+  });
+
+  try {
+    await validator.connect();
+    const result = await validator.validatePunchCard(sessionId, cardId);
+    const audit: AuditResult = {
+      cardId,
+      status: result.status,
+      missing: result.missing.map((m) => `${m.punchType}:${m.punchKeyPattern}`),
+      violations: result.violations.map((v) => `${v.punchType}:${v.punchKeyPattern} (${v.count}x)`),
+    };
+
+    if (result.status === "pass") {
+      log(`${timestamp()} ✅ AUDIT PASS: card=${cardId} session=${sessionId}`);
+    } else {
+      log(`${timestamp()} ❌ AUDIT FAIL: card=${cardId} session=${sessionId}`);
+      if (audit.missing.length > 0) {
+        log(`${timestamp()}   Missing: ${audit.missing.join(", ")}`);
+      }
+      if (audit.violations.length > 0) {
+        log(`${timestamp()}   Violations: ${audit.violations.join(", ")}`);
+      }
+    }
+
+    return audit;
+  } catch (e) {
+    log(`${timestamp()} Warning: post-session audit failed: ${(e as Error).message}`);
+    return null;
+  } finally {
+    await validator.disconnect();
+  }
 }
 
 // ── Prompt file writing (used by thin shell wrapper) ─────────────────────

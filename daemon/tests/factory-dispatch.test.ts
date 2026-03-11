@@ -68,6 +68,7 @@ describe("FactoryDispatch", () => {
       expect(config.noMonitor).toBe(false);
       expect(config.jsonOutput).toBe(false);
       expect(config.idleConfirm).toBeGreaterThan(0);
+      expect(config.cardId).toBe("");
     });
   });
 
