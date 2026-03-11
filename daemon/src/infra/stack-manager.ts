@@ -15,7 +15,7 @@
  * See: repomap-core-76q.2
  */
 
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -64,7 +64,7 @@ const HOME = process.env.HOME ?? "/home/user";
 
 function findRepoRoot(): string {
   try {
-    return execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
   } catch {
     return process.cwd();
   }
@@ -147,7 +147,7 @@ function resolveBin(name: string, ...candidates: string[]): string | null {
     if (existsSync(p)) return p;
   }
   try {
-    const found = execSync(`command -v ${name} 2>/dev/null`, { encoding: "utf8" }).trim();
+    const found = execFileSync("which", [name], { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] }).trim();
     if (found) return found;
   } catch {
     // Not on PATH
@@ -290,7 +290,7 @@ export async function checkStack(
   components.push(
     kilo,
     dolt,
-    // pm2 checks are synchronous (execSync)
+    // pm2 checks are synchronous (execFileSync)
     checkOcDaemon(config.pm2Bin),
     temporal,
     checkTemporalWorker(config.pm2Bin),
@@ -389,7 +389,7 @@ export function applyPunchCardSchema(config: StackConfig, log: Logger): void {
   if (!existsSync(scriptPath)) {
     throw new Error(`Schema migration script not found: ${scriptPath}`);
   }
-  execSync(scriptPath, {
+  execFileSync("bash", [scriptPath], {
     encoding: "utf8",
     timeout: 30000,
     env: {
@@ -407,7 +407,7 @@ export function applyPunchCardSchema(config: StackConfig, log: Logger): void {
 export function ensureNodeModules(config: StackConfig, log: Logger): void {
   if (existsSync(join(config.daemonDir, "node_modules"))) return;
   log(`${timestamp()} Installing daemon dependencies...`);
-  execSync("npm install --silent", {
+  execFileSync("npm", ["install", "--silent"], {
     cwd: config.daemonDir,
     encoding: "utf8",
     timeout: 120000,
@@ -476,19 +476,16 @@ export async function ensurePm2Ecosystem(
 ): Promise<void> {
   log(`${timestamp()} Starting pm2-managed processes...`);
 
-  execSync(
-    `"${config.pm2Bin}" start "${config.ecosystemConfig}"`,
-    {
-      encoding: "utf8",
-      timeout: 30000,
-      env: {
-        ...process.env,
-        KILO_HOST: config.kiloHost,
-        KILO_PORT: String(config.kiloPort),
-        DOLT_PORT: String(config.doltPort),
-      },
+  execFileSync(config.pm2Bin, ["start", config.ecosystemConfig], {
+    encoding: "utf8",
+    timeout: 30000,
+    env: {
+      ...process.env,
+      KILO_HOST: config.kiloHost,
+      KILO_PORT: String(config.kiloPort),
+      DOLT_PORT: String(config.doltPort),
     },
-  );
+  });
 
   // Wait up to 15s for both to come online
   for (let i = 0; i < 15; i++) {
@@ -621,14 +618,15 @@ export async function stopStack(
 
   // Stop pm2-managed Node.js processes
   try {
-    const jlist = execSync(`"${config.pm2Bin}" jlist 2>/dev/null`, {
+    const jlist = execFileSync(config.pm2Bin, ["jlist"], {
       encoding: "utf8",
       timeout: 5000,
+      stdio: ["pipe", "pipe", "ignore"],
     });
     const processes = JSON.parse(jlist) as unknown[];
     if (processes.length > 0) {
-      execSync(`"${config.pm2Bin}" stop all 2>/dev/null`, { encoding: "utf8", timeout: 10000 });
-      execSync(`"${config.pm2Bin}" delete all 2>/dev/null`, { encoding: "utf8", timeout: 10000 });
+      execFileSync(config.pm2Bin, ["stop", "all"], { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "ignore"] });
+      execFileSync(config.pm2Bin, ["delete", "all"], { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "ignore"] });
       log(`${timestamp()} pm2 processes stopped (oc-daemon, temporal-worker).`);
     } else {
       log(`${timestamp()} No pm2 processes to stop.`);
@@ -641,9 +639,10 @@ export async function stopStack(
   const temporalOk = await checkPort(config.kiloHost, config.temporalPort);
   if (temporalOk) {
     try {
-      execSync('pkill -f "temporal server start-dev" 2>/dev/null || true', {
+      execFileSync("pkill", ["-f", "temporal server start-dev"], {
         encoding: "utf8",
         timeout: 5000,
+        stdio: ["pipe", "pipe", "ignore"],
       });
       log(`${timestamp()} Temporal server stopped.`);
     } catch {

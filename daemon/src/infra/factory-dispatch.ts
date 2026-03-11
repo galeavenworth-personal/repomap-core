@@ -19,7 +19,7 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createConnection } from "node:net";
 
 import { resolveCardExitPrompt, injectCardExitPrompt } from "../optimization/prompt-injection.js";
@@ -83,7 +83,7 @@ export function defaultConfig(): FactoryDispatchConfig {
 
 function findRepoRoot(): string {
   try {
-    return execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
   } catch {
     return process.cwd();
   }
@@ -223,9 +223,10 @@ export function checkPort(host: string, port: number, timeoutMs = 2000): Promise
  */
 export function isPm2AppOnline(pm2Bin: string, appName: string): boolean {
   try {
-    const output = execSync(`"${pm2Bin}" jlist 2>/dev/null`, {
+    const output = execFileSync(pm2Bin, ["jlist"], {
       encoding: "utf8",
       timeout: 5000,
+      stdio: ["pipe", "pipe", "ignore"],
     });
     const procs: Array<{ name: string; pm2_env?: { status?: string } }> =
       JSON.parse(output);
