@@ -122,6 +122,17 @@ export function clearBdStateFiles(config: DoltLifecycleConfig): number {
   return cleared;
 }
 
+function clearBdStateFilesWithLog(
+  config: DoltLifecycleConfig,
+  log: (msg: string) => void,
+): number {
+  const cleared = clearBdStateFiles(config);
+  if (cleared > 0) {
+    log(`  Cleared ${cleared} stale bd state files`);
+  }
+  return cleared;
+}
+
 // ── Server validation ────────────────────────────────────────────────────
 
 /**
@@ -329,10 +340,7 @@ export async function ensureHealthy(
   const status = await checkServerHealth(config);
 
   if (status.state === "healthy") {
-    const cleared = clearBdStateFiles(config);
-    if (cleared > 0) {
-      log(`  Cleared ${cleared} stale bd state files`);
-    }
+    clearBdStateFilesWithLog(config, log);
     log(
       `✓ Dolt server already running on ${config.host}:${config.port} (databases verified)`,
     );
@@ -356,19 +364,13 @@ export async function ensureHealthy(
     const killed = killAllDoltServers();
     log(`  Killed ${killed.length} Dolt process(es): ${killed.join(", ")}`);
 
-    const cleared = clearBdStateFiles(config);
-    if (cleared > 0) {
-      log(`  Cleared ${cleared} stale bd state files`);
-    }
+    clearBdStateFilesWithLog(config, log);
 
     // Wait for port to be released
     await sleep(1500);
   } else {
     // state === "down"
-    const cleared = clearBdStateFiles(config);
-    if (cleared > 0) {
-      log(`  Cleared ${cleared} stale bd state files`);
-    }
+    clearBdStateFilesWithLog(config, log);
   }
 
   // Start the server

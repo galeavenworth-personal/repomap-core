@@ -713,6 +713,10 @@ function mockExecFileSequence(
   );
 }
 
+function mockHealthyGitAndBeads() {
+  mockExecFileSequence([{ stdout: "" }, { stdout: "[]" }]);
+}
+
 describe("checkStackHealth", () => {
   const baseInput: CheckStackHealthInput = {
     repoPath: REPO_PATH,
@@ -750,10 +754,7 @@ describe("checkStackHealth", () => {
   it("returns 'fail' when kilo serve is down", async () => {
     mockFetchFailure("Connection refused");
     mockMysqlSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
+    mockHealthyGitAndBeads();
 
     const result = await checkStackHealth(baseInput);
 
@@ -765,10 +766,7 @@ describe("checkStackHealth", () => {
   it("returns 'fail' when Dolt is down", async () => {
     mockFetchSuccess();
     mockMysqlFailure("ECONNREFUSED");
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
+    mockHealthyGitAndBeads();
 
     const result = await checkStackHealth(baseInput);
 
@@ -835,10 +833,7 @@ describe("checkStackHealth", () => {
   it("temporal is always 'up' (implicit check)", async () => {
     mockFetchSuccess();
     mockMysqlSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
+    mockHealthyGitAndBeads();
 
     const result = await checkStackHealth(baseInput);
 
@@ -885,10 +880,7 @@ describe("checkStackHealth", () => {
   it("returns correct ISO 8601 checkedAt timestamp", async () => {
     mockFetchSuccess();
     mockMysqlSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
+    mockHealthyGitAndBeads();
 
     const before = new Date().toISOString();
     const result = await checkStackHealth(baseInput);
@@ -901,10 +893,7 @@ describe("checkStackHealth", () => {
   it("classifies HTTP non-200 as down", async () => {
     mockFetchSuccess(503, "Service Unavailable");
     mockMysqlSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
+    mockHealthyGitAndBeads();
 
     const result = await checkStackHealth(baseInput);
 
@@ -915,10 +904,7 @@ describe("checkStackHealth", () => {
   it("reports latencyMs for successful checks", async () => {
     mockFetchSuccess();
     mockMysqlSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
+    mockHealthyGitAndBeads();
 
     const result = await checkStackHealth(baseInput);
 

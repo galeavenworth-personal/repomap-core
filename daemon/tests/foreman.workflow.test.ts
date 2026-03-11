@@ -137,6 +137,31 @@ function setMockActivity(name: string, impl: (...args: unknown[]) => unknown) {
   mockActivities[name] = impl;
 }
 
+function setPassHealthAndNoWork(): void {
+  setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+  setMockActivity("selectNextBead", () => null);
+}
+
+async function runWorkflowExpectContinueAsNew(
+  input: ForemanInput,
+): Promise<unknown[] | null> {
+  try {
+    await foremanWorkflow(input);
+    return continueAsNewCalled ? (continueAsNewArgs as unknown[]) : null;
+  } catch (e) {
+    if (e instanceof ContinueAsNewError) {
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+      return e.args as unknown[];
+    }
+    throw e;
+  }
+}
+
+async function runWorkflowAllowContinueAsNew(input: ForemanInput): Promise<void> {
+  await runWorkflowExpectContinueAsNew(input);
+}
+
 // ── Import workflow (after mocks) ──
 
 import { foremanWorkflow } from "../src/temporal/foreman.workflows.js";
@@ -282,13 +307,7 @@ describe("happy path", () => {
     // 3. iterationCount = 1
     // 4. Select → null → idle → sleep → iterationCount = 2
     // 5. shouldContinueAsNew → true → throws ContinueAsNewError
-    try {
-      await foremanWorkflow(input);
-      // If it completes (unlikely in this setup), that's also fine
-    } catch (e) {
-      // ContinueAsNewError is expected
-      if (!(e instanceof ContinueAsNewError)) throw e;
-    }
+    await runWorkflowAllowContinueAsNew(input);
 
     // Verify the bead was dispatched
     expect(startChildCalls.length).toBe(1);
@@ -304,17 +323,12 @@ describe("happy path", () => {
 
 describe("no work available", () => {
   it("idles and re-polls when selectNextBead returns null", async () => {
-    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
-    setMockActivity("selectNextBead", () => null);
+    setPassHealthAndNoWork();
 
     // maxIterations = 2 to exit after 2 idle loops
     const input = makeInput({ maxIterations: 2 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch (e) {
-      if (!(e instanceof ContinueAsNewError)) throw e;
-    }
+    await runWorkflowAllowContinueAsNew(input);
 
     // Should have slept twice (idle backoff) 
     expect(sleepCalls.length).toBeGreaterThanOrEqual(2);
@@ -336,11 +350,7 @@ describe("health gate blocked", () => {
 
     const input = makeInput({ maxIterations: 2 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch (e) {
-      if (!(e instanceof ContinueAsNewError)) throw e;
-    }
+    await runWorkflowAllowContinueAsNew(input);
 
     // Should have slept (idle due to health failure)
     expect(sleepCalls.length).toBeGreaterThanOrEqual(2);
@@ -359,11 +369,7 @@ describe("health gate blocked", () => {
 
     const input = makeInput({ maxIterations: 2 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch (e) {
-      if (!(e instanceof ContinueAsNewError)) throw e;
-    }
+    await runWorkflowAllowContinueAsNew(input);
 
     // selectNextBead should have been called (degraded allows dispatch)
     expect(selectCalls).toBeGreaterThanOrEqual(1);
@@ -374,16 +380,11 @@ describe("health gate blocked", () => {
 
 describe("pause/resume", () => {
   it("registers pause and resume signal handlers", async () => {
-    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
-    setMockActivity("selectNextBead", () => null);
+    setPassHealthAndNoWork();
 
     const input = makeInput({ maxIterations: 1 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch {
-      // Expected: continueAsNew
-    }
+    await runWorkflowAllowContinueAsNew(input);
 
     // Verify signal handlers were registered
     expect(signalHandlers.has("foreman.pause")).toBe(true);
@@ -421,16 +422,11 @@ describe("shutdown", () => {
   });
 
   it("registers shutdown signal handler", async () => {
-    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
-    setMockActivity("selectNextBead", () => null);
+    setPassHealthAndNoWork();
 
     const input = makeInput({ maxIterations: 1 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch {
-      // Expected
-    }
+    await runWorkflowAllowContinueAsNew(input);
 
     expect(signalHandlers.has("foreman.shutdown")).toBe(true);
   });
@@ -440,34 +436,25 @@ describe("shutdown", () => {
 
 describe("continue-as-new", () => {
   it("triggers after maxIterations is reached", async () => {
-    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
-    setMockActivity("selectNextBead", () => null);
+    setPassHealthAndNoWork();
 
     const input = makeInput({ maxIterations: 3 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch (e) {
-      if (e instanceof ContinueAsNewError) {
-        continueAsNewCalled = true;
-        continueAsNewArgs = e.args;
-      } else {
-        throw e;
-      }
-    }
+    const args = await runWorkflowExpectContinueAsNew(input);
+    continueAsNewCalled = args !== null;
+    continueAsNewArgs = args;
 
     expect(continueAsNewCalled).toBe(true);
     // The args should include carriedState
     expect(continueAsNewArgs).toBeDefined();
-    const args = continueAsNewArgs as unknown[];
-    const carriedInput = args[0] as ForemanInput;
+    const carriedArgs = continueAsNewArgs as unknown[];
+    const carriedInput = carriedArgs[0] as ForemanInput;
     expect(carriedInput.carriedState).not.toBeNull();
     expect(carriedInput.carriedState!.totalIterations).toBeGreaterThanOrEqual(3);
   });
 
   it("carries forward counters across continue-as-new", async () => {
-    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
-    setMockActivity("selectNextBead", () => null);
+    setPassHealthAndNoWork();
 
     const input = makeInput({
       maxIterations: 2,
@@ -488,20 +475,13 @@ describe("continue-as-new", () => {
       },
     });
 
-    try {
-      await foremanWorkflow(input);
-    } catch (e) {
-      if (e instanceof ContinueAsNewError) {
-        continueAsNewCalled = true;
-        continueAsNewArgs = e.args;
-      } else {
-        throw e;
-      }
-    }
+    const args = await runWorkflowExpectContinueAsNew(input);
+    continueAsNewCalled = args !== null;
+    continueAsNewArgs = args;
 
     expect(continueAsNewCalled).toBe(true);
-    const args = continueAsNewArgs as unknown[];
-    const carriedInput = args[0] as ForemanInput;
+    const carriedArgs = continueAsNewArgs as unknown[];
+    const carriedInput = carriedArgs[0] as ForemanInput;
     expect(carriedInput.carriedState!.totalIterations).toBeGreaterThanOrEqual(102);
     expect(carriedInput.carriedState!.totalDispatches).toBe(50);
     expect(carriedInput.carriedState!.totalCompletions).toBe(45);
@@ -552,18 +532,14 @@ describe("retry and escalation", () => {
 
     const input = makeInput({ maxIterations: 3, maxRetriesPerBead: 2 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch (e) {
-      if (!(e instanceof ContinueAsNewError)) throw e;
-      continueAsNewCalled = true;
-      continueAsNewArgs = e.args;
-    }
+    const args = await runWorkflowExpectContinueAsNew(input);
+    continueAsNewCalled = args !== null;
+    continueAsNewArgs = args;
 
     // The continue-as-new state should have the retry ledger entry
     expect(continueAsNewCalled).toBe(true);
-    const args = continueAsNewArgs as unknown[];
-    const carriedInput = args[0] as ForemanInput;
+    const carriedArgs = continueAsNewArgs as unknown[];
+    const carriedInput = carriedArgs[0] as ForemanInput;
     const ledger = carriedInput.carriedState!.retryLedger;
     expect(ledger.length).toBe(1);
     expect(ledger[0].beadId).toBe("bead-fail");
@@ -616,13 +592,9 @@ describe("retry and escalation", () => {
 
     const input = makeInput({ maxIterations: 3 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch (e) {
-      if (!(e instanceof ContinueAsNewError)) throw e;
-      continueAsNewCalled = true;
-      continueAsNewArgs = e.args;
-    }
+    const args = await runWorkflowExpectContinueAsNew(input);
+    continueAsNewCalled = args !== null;
+    continueAsNewArgs = args;
 
     // Should have set bead back to ready (unclaim)
     const unclaimCall = updateStatusCalls.find((c) => c.status === "ready");
@@ -630,8 +602,8 @@ describe("retry and escalation", () => {
     expect(unclaimCall!.beadId).toBe("bead-nonretry");
 
     // Escalation counter should be incremented
-    const args = continueAsNewArgs as unknown[];
-    const carriedInput = args[0] as ForemanInput;
+    const carriedArgs = continueAsNewArgs as unknown[];
+    const carriedInput = carriedArgs[0] as ForemanInput;
     expect(carriedInput.carriedState!.totalEscalations).toBe(1);
     expect(carriedInput.carriedState!.totalFailures).toBe(1);
   });
@@ -641,16 +613,11 @@ describe("retry and escalation", () => {
 
 describe("skip bead signal", () => {
   it("registers skipBead signal handler", async () => {
-    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
-    setMockActivity("selectNextBead", () => null);
+    setPassHealthAndNoWork();
 
     const input = makeInput({ maxIterations: 1 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch {
-      // Expected
-    }
+    await runWorkflowAllowContinueAsNew(input);
 
     expect(signalHandlers.has("foreman.skipBead")).toBe(true);
   });
@@ -660,16 +627,11 @@ describe("skip bead signal", () => {
 
 describe("force dispatch signal", () => {
   it("registers forceDispatch signal handler", async () => {
-    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
-    setMockActivity("selectNextBead", () => null);
+    setPassHealthAndNoWork();
 
     const input = makeInput({ maxIterations: 1 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch {
-      // Expected
-    }
+    await runWorkflowAllowContinueAsNew(input);
 
     expect(signalHandlers.has("foreman.forceDispatch")).toBe(true);
   });
@@ -679,16 +641,11 @@ describe("force dispatch signal", () => {
 
 describe("config update signal", () => {
   it("registers updateConfig signal handler", async () => {
-    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
-    setMockActivity("selectNextBead", () => null);
+    setPassHealthAndNoWork();
 
     const input = makeInput({ maxIterations: 1 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch {
-      // Expected
-    }
+    await runWorkflowAllowContinueAsNew(input);
 
     expect(signalHandlers.has("foreman.updateConfig")).toBe(true);
   });
@@ -698,16 +655,11 @@ describe("config update signal", () => {
 
 describe("query handlers", () => {
   it("registers status query handler", async () => {
-    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
-    setMockActivity("selectNextBead", () => null);
+    setPassHealthAndNoWork();
 
     const input = makeInput({ maxIterations: 1 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch {
-      // Expected
-    }
+    await runWorkflowAllowContinueAsNew(input);
 
     expect(queryHandlers.has("foreman.status")).toBe(true);
     expect(queryHandlers.has("foreman.health")).toBe(true);
@@ -761,17 +713,13 @@ describe("dispatch outcome recording", () => {
 
     const input = makeInput({ maxIterations: 3 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch (e) {
-      if (!(e instanceof ContinueAsNewError)) throw e;
-      continueAsNewCalled = true;
-      continueAsNewArgs = e.args;
-    }
+    const args = await runWorkflowExpectContinueAsNew(input);
+    continueAsNewCalled = args !== null;
+    continueAsNewArgs = args;
 
     expect(continueAsNewCalled).toBe(true);
-    const args = continueAsNewArgs as unknown[];
-    const carriedInput = args[0] as ForemanInput;
+    const carriedArgs = continueAsNewArgs as unknown[];
+    const carriedInput = carriedArgs[0] as ForemanInput;
     const outcomes = carriedInput.carriedState!.recentOutcomes;
     expect(outcomes.length).toBe(1);
     expect(outcomes[0].beadId).toBe("bead-record");
@@ -846,11 +794,7 @@ describe("aborted dispatch", () => {
 
     const input = makeInput({ maxIterations: 3 });
 
-    try {
-      await foremanWorkflow(input);
-    } catch (e) {
-      if (!(e instanceof ContinueAsNewError)) throw e;
-    }
+    await runWorkflowAllowContinueAsNew(input);
 
     // Should have unclaimed the bead (set back to ready)
     const unclaimCall = updateStatusCalls.find(
@@ -908,17 +852,13 @@ describe("retry backoff", () => {
     const retryBackoffMs = 30_000;
     const input = makeInput({ maxIterations: 3, maxRetriesPerBead: 2, retryBackoffMs });
 
-    try {
-      await foremanWorkflow(input);
-    } catch (e) {
-      if (!(e instanceof ContinueAsNewError)) throw e;
-      continueAsNewCalled = true;
-      continueAsNewArgs = e.args;
-    }
+    const args = await runWorkflowExpectContinueAsNew(input);
+    continueAsNewCalled = args !== null;
+    continueAsNewArgs = args;
 
     expect(continueAsNewCalled).toBe(true);
-    const args = continueAsNewArgs as unknown[];
-    const carriedInput = args[0] as ForemanInput;
+    const carriedArgs = continueAsNewArgs as unknown[];
+    const carriedInput = carriedArgs[0] as ForemanInput;
     const ledger = carriedInput.carriedState!.retryLedger;
 
     // Verify retry ledger has the entry

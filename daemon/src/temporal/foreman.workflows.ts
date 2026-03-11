@@ -511,6 +511,130 @@ async function handleDispatchOutcome(
   }
 }
 
+function incrementIterationCounters(state: ForemanState): void {
+  state.iterationCount++;
+  state.totalIterations++;
+}
+
+function getShutdownResult(state: ForemanState): ForemanResult | null {
+  if (!state.shutdownRequested) {
+    return null;
+  }
+  return makeResult("shutdown", state, state.shutdownReason);
+}
+
+async function handlePausePhase(state: ForemanState): Promise<ForemanResult | null> {
+  if (!state.pauseRequested) {
+    return null;
+  }
+
+  state.phase = "paused";
+  await condition(() => !state.pauseRequested || state.shutdownRequested);
+  return getShutdownResult(state);
+}
+
+async function runHealthCheckPhase(
+  state: ForemanState,
+  config: ForemanInput,
+): Promise<boolean> {
+  if (shouldRunHealthCheck(state, config)) {
+    state.phase = "health_check";
+    state.lastHealthCheck = await quick.checkStackHealth({
+      repoPath: config.repoPath,
+      doltHost: config.doltHost,
+      doltPort: config.doltPort,
+      doltDatabase: config.doltDatabase,
+      kiloHost: config.kiloHost,
+      kiloPort: config.kiloPort,
+    });
+    state.lastHealthCheckAt = state.lastHealthCheck.checkedAt;
+  }
+
+  if (state.lastHealthCheck?.overall !== "fail") {
+    return false;
+  }
+
+  state.phase = "idle";
+  await sleep(config.pollIntervalMs);
+  incrementIterationCounters(state);
+  return true;
+}
+
+async function selectCandidatePhase(
+  state: ForemanState,
+  config: ForemanInput,
+): Promise<BeadCandidate | null> {
+  const forcedBeadId = state.forceDispatchQueue.shift() ?? null;
+  const candidate = await selectCandidate(state, config, forcedBeadId);
+
+  if (candidate) {
+    return candidate;
+  }
+
+  state.phase = "idle";
+  await sleep(config.pollIntervalMs);
+  incrementIterationCounters(state);
+  return null;
+}
+
+async function dispatchCandidatePhase(
+  state: ForemanState,
+  config: ForemanInput,
+  candidate: BeadCandidate,
+): Promise<void> {
+  state.phase = "dispatching";
+  state.currentBeadId = candidate.beadId;
+  const plan = buildDispatchPlan(candidate, config);
+
+  await quick.updateBeadStatus(config.repoPath, candidate.beadId, "in_progress");
+
+  const childInput = buildChildInput(plan, config);
+  const childWorkflowId = `foreman-dispatch-${candidate.beadId}-${Date.now()}`;
+  state.currentWorkflowId = childWorkflowId;
+
+  state.phase = "monitoring";
+  const dispatchStartedAt = new Date().toISOString();
+
+  const childHandle = await startChild(agentTaskWorkflow, {
+    workflowId: childWorkflowId,
+    args: [childInput],
+    taskQueue: config.taskQueue,
+  });
+
+  const agentResult = await childHandle.result();
+
+  const dispatchCompletedAt = new Date().toISOString();
+  const dispatchResult = toDispatchResult(agentResult);
+  const durationMs = Date.parse(dispatchCompletedAt) - Date.parse(dispatchStartedAt);
+
+  const currentAttempt =
+    (state.retryLedger.find((e) => e.beadId === candidate.beadId)?.attempts ?? 0) + 1;
+
+  const outcome: DispatchOutcome = {
+    beadId: candidate.beadId,
+    workflowId: childWorkflowId,
+    sessionId: agentResult.sessionId,
+    startedAt: dispatchStartedAt,
+    completedAt: dispatchCompletedAt,
+    durationMs,
+    totalCost: agentResult.totalCost,
+    tokensInput: agentResult.tokensInput,
+    tokensOutput: agentResult.tokensOutput,
+    result: dispatchResult,
+    audit: agentResult.audit,
+    attempt: currentAttempt,
+  };
+
+  await handleDispatchOutcome(
+    state,
+    config,
+    candidate,
+    dispatchResult,
+    outcome,
+    dispatchCompletedAt,
+  );
+}
+
 // ── Workflow ──
 
 export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResult> {
@@ -564,7 +688,6 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
 
   try {
     while (true) {
-      // -- Check continue-as-new thresholds --
       if (shouldContinueAsNew(state, config)) {
         await continueAsNew<typeof foremanWorkflow>({
           ...config,
@@ -572,111 +695,28 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
         });
       }
 
-      // -- Check operator signals --
-      if (state.shutdownRequested) {
-        return makeResult("shutdown", state, state.shutdownReason);
+      const shutdownResult = getShutdownResult(state);
+      if (shutdownResult) {
+        return shutdownResult;
       }
 
-      if (state.pauseRequested) {
-        state.phase = "paused";
-        await condition(() => !state.pauseRequested || state.shutdownRequested);
-        if (state.shutdownRequested) {
-          return makeResult("shutdown", state, state.shutdownReason);
-        }
-        continue; // Re-enter loop after resume
+      const pauseResult = await handlePausePhase(state);
+      if (pauseResult) {
+        return pauseResult;
       }
 
-      // -- Phase: Health Check (throttled) --
-      if (shouldRunHealthCheck(state, config)) {
-        state.phase = "health_check";
-        state.lastHealthCheck = await quick.checkStackHealth({
-          repoPath: config.repoPath,
-          doltHost: config.doltHost,
-          doltPort: config.doltPort,
-          doltDatabase: config.doltDatabase,
-          kiloHost: config.kiloHost,
-          kiloPort: config.kiloPort,
-        });
-        state.lastHealthCheckAt = state.lastHealthCheck.checkedAt;
-      }
-
-      // If health gate fails, idle and retry
-      if (state.lastHealthCheck?.overall === "fail") {
-        state.phase = "idle";
-        await sleep(config.pollIntervalMs);
-        state.iterationCount++;
-        state.totalIterations++;
+      const healthBlocked = await runHealthCheckPhase(state, config);
+      if (healthBlocked) {
         continue;
       }
 
-      // -- Phase: Select --
-      const forcedBeadId = state.forceDispatchQueue.shift() ?? null;
-      const candidate = await selectCandidate(state, config, forcedBeadId);
-
+      const candidate = await selectCandidatePhase(state, config);
       if (!candidate) {
-        state.phase = "idle";
-        await sleep(config.pollIntervalMs);
-        state.iterationCount++;
-        state.totalIterations++;
         continue;
       }
 
-      // -- Phase: Dispatch & Monitor --
-      state.phase = "dispatching";
-      state.currentBeadId = candidate.beadId;
-      const plan = buildDispatchPlan(candidate, config);
-
-      await quick.updateBeadStatus(config.repoPath, candidate.beadId, "in_progress");
-
-      const childInput = buildChildInput(plan, config);
-      const childWorkflowId = `foreman-dispatch-${candidate.beadId}-${Date.now()}`;
-      state.currentWorkflowId = childWorkflowId;
-
-      state.phase = "monitoring";
-      const dispatchStartedAt = new Date().toISOString();
-
-      const childHandle = await startChild(agentTaskWorkflow, {
-        workflowId: childWorkflowId,
-        args: [childInput],
-        taskQueue: config.taskQueue,
-      });
-
-      const agentResult = await childHandle.result();
-
-      const dispatchCompletedAt = new Date().toISOString();
-      const dispatchResult = toDispatchResult(agentResult);
-      const durationMs = Date.parse(dispatchCompletedAt) - Date.parse(dispatchStartedAt);
-
-      const currentAttempt =
-        (state.retryLedger.find((e) => e.beadId === candidate.beadId)?.attempts ?? 0) + 1;
-
-      const outcome: DispatchOutcome = {
-        beadId: candidate.beadId,
-        workflowId: childWorkflowId,
-        sessionId: agentResult.sessionId,
-        startedAt: dispatchStartedAt,
-        completedAt: dispatchCompletedAt,
-        durationMs,
-        totalCost: agentResult.totalCost,
-        tokensInput: agentResult.tokensInput,
-        tokensOutput: agentResult.tokensOutput,
-        result: dispatchResult,
-        audit: agentResult.audit,
-        attempt: currentAttempt,
-      };
-
-      // -- Handle outcome (extracted helper) --
-      await handleDispatchOutcome(
-        state,
-        config,
-        candidate,
-        dispatchResult,
-        outcome,
-        dispatchCompletedAt,
-      );
-
-      state.iterationCount++;
-      state.totalIterations++;
+      await dispatchCandidatePhase(state, config, candidate);
+      incrementIterationCounters(state);
     }
   } catch (err: unknown) {
     if (isCancellation(err)) {

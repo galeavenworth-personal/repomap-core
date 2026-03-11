@@ -248,6 +248,59 @@ function comparePriority(a: BeadCandidate, b: BeadCandidate): number {
   return (PRIORITY_ORDER[a.priority] ?? 4) - (PRIORITY_ORDER[b.priority] ?? 4);
 }
 
+interface RetrySelectionSets {
+  skipSet: Set<string>;
+  backoffPendingSet: Set<string>;
+  retryByBeadId: Map<string, SelectNextBeadInput["retryLedger"][number]>;
+}
+
+function buildRetrySelectionSets(
+  retryLedger: SelectNextBeadInput["retryLedger"],
+  skipList: string[],
+  nowMs: number,
+): RetrySelectionSets {
+  const skipSet = new Set(skipList);
+  const retryByBeadId = new Map(retryLedger.map((entry) => [entry.beadId, entry] as const));
+  const backoffPendingSet = new Set<string>();
+
+  for (const entry of retryLedger) {
+    if (entry.exhausted) {
+      skipSet.add(entry.beadId);
+      continue;
+    }
+    if (entry.nextRetryAfter && Date.parse(entry.nextRetryAfter) > nowMs) {
+      backoffPendingSet.add(entry.beadId);
+    }
+  }
+
+  return { skipSet, backoffPendingSet, retryByBeadId };
+}
+
+function classifyEligibleCandidates(
+  rawItems: BdReadyItem[],
+  skipSet: Set<string>,
+  backoffPendingSet: Set<string>,
+  retryByBeadId: Map<string, SelectNextBeadInput["retryLedger"][number]>,
+): { retryEligible: BeadCandidate[]; freshCandidates: BeadCandidate[] } {
+  const retryEligible: BeadCandidate[] = [];
+  const freshCandidates: BeadCandidate[] = [];
+
+  for (const raw of rawItems) {
+    const candidate = toBeadCandidate(raw);
+    if (!candidate) continue;
+    if (skipSet.has(candidate.beadId)) continue;
+    if (backoffPendingSet.has(candidate.beadId)) continue;
+
+    if (retryByBeadId.has(candidate.beadId)) {
+      retryEligible.push(candidate);
+      continue;
+    }
+    freshCandidates.push(candidate);
+  }
+
+  return { retryEligible, freshCandidates };
+}
+
 // ── Health Gate Helpers ──
 
 /** Timeout for individual subsystem health checks (5 seconds). */
@@ -508,41 +561,18 @@ export async function selectNextBead(
     );
   }
 
-  // Build skip set from explicit skipList + exhausted retry entries
-  const skipSet = new Set(skipList);
-  const now = Date.now();
-  const retryByBeadId = new Map(
-    retryLedger.map((entry) => [entry.beadId, entry] as const),
+  const { skipSet, backoffPendingSet, retryByBeadId } = buildRetrySelectionSets(
+    retryLedger,
+    skipList,
+    Date.now(),
   );
 
-  // Build backoff-pending set: non-exhausted entries whose nextRetryAfter is in the future
-  const backoffPendingSet = new Set<string>();
-  for (const entry of retryLedger) {
-    if (entry.exhausted) {
-      skipSet.add(entry.beadId);
-    } else if (entry.nextRetryAfter && Date.parse(entry.nextRetryAfter) > now) {
-      backoffPendingSet.add(entry.beadId);
-    }
-  }
-
-  // Transform, filter, split into retry-eligible and fresh candidates
-  const retryEligible: BeadCandidate[] = [];
-  const freshCandidates: BeadCandidate[] = [];
-
-  for (const raw of rawItems) {
-    const candidate = toBeadCandidate(raw);
-    if (!candidate) continue;
-    if (skipSet.has(candidate.beadId)) continue;
-    if (backoffPendingSet.has(candidate.beadId)) continue;
-
-    const ledgerEntry = retryByBeadId.get(candidate.beadId);
-    if (ledgerEntry) {
-      // Backoff has elapsed — retry-eligible
-      retryEligible.push(candidate);
-    } else {
-      freshCandidates.push(candidate);
-    }
-  }
+  const { retryEligible, freshCandidates } = classifyEligibleCandidates(
+    rawItems,
+    skipSet,
+    backoffPendingSet,
+    retryByBeadId,
+  );
 
   // Prefer retry-eligible beads whose backoff has elapsed
   const pool = retryEligible.length > 0 ? retryEligible : freshCandidates;
