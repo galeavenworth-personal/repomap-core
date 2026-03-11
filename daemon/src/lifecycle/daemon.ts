@@ -76,11 +76,23 @@ function pickDate(record: Record<string, unknown>, ...keys: string[]): Date | un
 }
 
 function pickTimestamp(record: Record<string, unknown>): number {
-  const ts = pickNumber(record, "ts", "timestamp", "time", "createdAtMs");
+  // Direct numeric timestamp fields
+  const ts = pickNumber(record, "ts", "timestamp", "createdAtMs");
   if (typeof ts === "number") return ts;
+
+  // Current SDK shape: nested `time` object with epoch ms fields
+  const timeObj = record.time;
+  if (timeObj && typeof timeObj === "object") {
+    const t = timeObj as Record<string, unknown>;
+    const nested = pickNumber(t, "start", "end", "created", "updated", "completed");
+    if (typeof nested === "number") return nested;
+  }
+
+  // Legacy ISO string dates
   const created = pickDate(record, "createdAt", "updatedAt");
   if (created) return created.getTime();
-  console.warn("[oc-daemon] Missing timestamp fields in message part; using Date.now() fallback");
+
+  // Only warn once per event type to reduce log spam
   return Date.now();
 }
 
@@ -113,6 +125,10 @@ function extractRawEventSessionId(event: RawEvent): string {
     const part = asRecord(properties.part);
     return pickString(part, "sessionID", "sessionId", "taskId") ?? "unknown";
   }
+  if (event.type === "message.updated" || event.type === "message.removed") {
+    const info = asRecord(properties.info);
+    return pickString(info, "sessionID", "sessionId") ?? pickString(properties, "sessionID") ?? "unknown";
+  }
   if (event.type.startsWith("session.")) {
     const info = asRecord(properties.info);
     return pickString(info, "id", "sessionId", "taskId") ?? "unknown";
@@ -122,16 +138,35 @@ function extractRawEventSessionId(event: RawEvent): string {
 
 function extractRawEventTs(event: RawEvent): Date | undefined {
   const properties = asRecord(event.properties);
+
+  // Direct top-level date fields (legacy)
   const direct = pickDate(properties, "ts", "timestamp", "createdAt", "updatedAt");
   if (direct) return direct;
 
   if (event.type === "message.part.updated") {
     const part = asRecord(properties.part);
+    // Current SDK: part.time.start / part.time.end (epoch ms)
+    const timeObj = asRecord(part.time);
+    const epochMs = pickNumber(timeObj, "start", "end", "created");
+    if (typeof epochMs === "number") return new Date(epochMs);
     return new Date(pickTimestamp(part));
+  }
+
+  if (event.type === "message.updated") {
+    const info = asRecord(properties.info);
+    // AssistantMessage: info.time.created / info.time.completed (epoch ms)
+    const timeObj = asRecord(info.time);
+    const epochMs = pickNumber(timeObj, "completed", "created");
+    if (typeof epochMs === "number") return new Date(epochMs);
   }
 
   if (event.type.startsWith("session.")) {
     const info = asRecord(properties.info);
+    // Current SDK: info.time.created / info.time.updated (epoch ms)
+    const timeObj = asRecord(info.time);
+    const epochMs = pickNumber(timeObj, "updated", "created");
+    if (typeof epochMs === "number") return new Date(epochMs);
+    // Legacy fallback
     return pickDate(info, "updatedAt", "createdAt", "startedAt", "completedAt");
   }
 
@@ -306,28 +341,64 @@ async function recordSessionChildren(
 }
 
 async function projectSessionEvent(writer: DoltWriter, rawEvent: RawEvent): Promise<void> {
-  if (rawEvent.type !== "session.created" && rawEvent.type !== "session.updated") return;
-
   const properties = asRecord(rawEvent.properties);
-  const info = asRecord(properties.info);
-  const sessionId =
-    pickString(info, "id", "sessionId", "taskId") ?? extractRawEventSessionId(rawEvent);
-  const tokens = asRecord(info.tokens);
 
-  await writer.writeSession({
-    sessionId,
-    taskId: pickString(info, "taskId", "id"),
-    mode: pickString(info, "mode"),
-    model: pickString(info, "model", "inferenceModel"),
-    status: pickString(info, "status"),
-    totalCost: pickNumber(info, "totalCost", "cost", "costUsd"),
-    tokensIn: pickNumber(info, "tokensIn") ?? pickNumber(tokens, "input"),
-    tokensOut: pickNumber(info, "tokensOut") ?? pickNumber(tokens, "output"),
-    tokensReasoning: pickNumber(info, "tokensReasoning") ?? pickNumber(tokens, "reasoning"),
-    startedAt: pickDate(info, "startedAt", "createdAt"),
-    completedAt: pickDate(info, "completedAt"),
-    outcome: pickString(info, "outcome"),
-  });
+  // Handle session.created / session.updated — current SDK Session shape
+  if (rawEvent.type === "session.created" || rawEvent.type === "session.updated") {
+    const info = asRecord(properties.info);
+    const sessionId =
+      pickString(info, "id", "sessionId", "taskId") ?? extractRawEventSessionId(rawEvent);
+
+    // Current SDK: time.created / time.updated are epoch ms
+    const timeObj = asRecord(info.time);
+    const createdMs = pickNumber(timeObj, "created");
+    const updatedMs = pickNumber(timeObj, "updated");
+
+    await writer.writeSession({
+      sessionId,
+      taskId: pickString(info, "taskId") ?? sessionId,
+      // Session type has no mode/model/status/cost — those come from message.updated
+      startedAt: createdMs ? new Date(createdMs) : pickDate(info, "startedAt", "createdAt"),
+    });
+    return;
+  }
+
+  // Handle message.updated — AssistantMessage carries cost, tokens, mode, model, finish
+  if (rawEvent.type === "message.updated") {
+    const info = asRecord(properties.info);
+    const sessionId = pickString(info, "sessionID", "sessionId") ?? extractRawEventSessionId(rawEvent);
+    const role = pickString(info, "role");
+
+    // Only assistant messages carry cost/token/mode data
+    if (role !== "assistant") return;
+
+    const tokens = asRecord(info.tokens);
+    const timeObj = asRecord(info.time);
+    const completedMs = pickNumber(timeObj, "completed");
+    const finish = pickString(info, "finish");
+
+    // Determine session status from the finish field
+    // finish values: undefined (still running), "end" (completed), "abort", "error", etc.
+    let status: string | undefined;
+    if (finish === "end") status = "completed";
+    else if (finish === "abort" || finish === "error") status = finish;
+    else if (finish) status = finish;
+
+    await writer.writeSession({
+      sessionId,
+      taskId: pickString(info, "taskId") ?? sessionId,
+      mode: pickString(info, "mode"),
+      model: pickString(info, "modelID"),
+      status,
+      totalCost: pickNumber(info, "cost"),
+      tokensIn: pickNumber(tokens, "input"),
+      tokensOut: pickNumber(tokens, "output"),
+      tokensReasoning: pickNumber(tokens, "reasoning"),
+      completedAt: completedMs ? new Date(completedMs) : undefined,
+      outcome: finish,
+    });
+    return;
+  }
 }
 
 /** Process a single SSE event through the classify → write pipeline. */
@@ -403,8 +474,11 @@ async function processEvent(
 
   if (punch.punchKey === "session_completed") {
     await recordSessionChildren(client, writer, punch.taskId);
+    // For message.updated events, mode is on the AssistantMessage info directly
+    // For session.updated events (legacy), mode was on the session info
     const info = asRecord(properties.info);
-    await validateSessionCheckpoint(writer, config, punch.taskId, pickString(info, "mode"));
+    const mode = pickString(info, "mode");
+    await validateSessionCheckpoint(writer, config, punch.taskId, mode);
   }
 }
 

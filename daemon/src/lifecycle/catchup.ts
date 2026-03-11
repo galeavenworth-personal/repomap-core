@@ -7,9 +7,14 @@ type Client = ReturnType<typeof createOpencodeClient>;
 
 interface Session {
   id: string;
-  updatedAt: string;
-  status: string;
+  // Current SDK shape: time.created / time.updated as epoch ms
+  time?: { created?: number; updated?: number };
+  // Legacy fields (may not exist in current SDK)
+  updatedAt?: string;
+  status?: string;
   createdAt?: string;
+  parentID?: string;
+  title?: string;
   [key: string]: unknown;
 }
 
@@ -52,8 +57,17 @@ function pickDate(record: Record<string, unknown>, ...keys: string[]): Date | un
 }
 
 function pickTimestamp(record: Record<string, unknown>): number {
-  const ts = pickNumber(record, "ts", "timestamp", "time", "createdAtMs");
+  const ts = pickNumber(record, "ts", "timestamp", "createdAtMs");
   if (typeof ts === "number") return ts;
+
+  // Current SDK shape: nested `time` object with epoch ms fields
+  const timeObj = record.time;
+  if (timeObj && typeof timeObj === "object") {
+    const t = timeObj as Record<string, unknown>;
+    const nested = pickNumber(t, "start", "end", "created", "updated", "completed");
+    if (typeof nested === "number") return nested;
+  }
+
   const createdAt = pickDate(record, "createdAt", "updatedAt");
   return createdAt ? createdAt.getTime() : Date.now();
 }
@@ -132,9 +146,11 @@ async function replayMessageParts(
   if (msgError || !messages) return;
 
   for (const message of messages) {
-    const typedMessage = message as unknown as Message;
-    const parts = typedMessage.parts || [];
-    const messageRole = typedMessage.role ?? "assistant";
+    const wrapper = asRecord(message);
+    // SDK returns {info, parts} — unwrap
+    const msgInfo = asRecord(wrapper.info);
+    const parts = (wrapper.parts as Record<string, unknown>[]) || [];
+    const messageRole = pickString(msgInfo, "role") ?? "assistant";
     for (const part of parts) {
       const partRecord = asRecord(part);
       const punch = classifyEvent({
@@ -171,12 +187,12 @@ async function replayChildren(
 
 /** Process a single session during catch-up. */
 async function catchUpSession(client: Client, session: Session, writer: DoltWriter): Promise<void> {
+  const createdMs = session.time?.created;
   await writer.writeSession({
     sessionId: session.id,
     taskId: session.id,
     status: session.status,
-    startedAt: pickDate(session, "createdAt"),
-    completedAt: session.status === "completed" ? pickDate(session, "updatedAt") : undefined,
+    startedAt: createdMs ? new Date(createdMs) : pickDate(session, "createdAt"),
   });
   await replayLifecycleEvents(session, writer);
   await replayMessageParts(client, session, writer);
@@ -193,10 +209,15 @@ export async function runCatchUp(client: Client, writer: DoltWriter) {
       return;
     }
 
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const recentSessions = (sessions as unknown as Session[]).filter(
-      (s) => new Date(s.updatedAt) > oneDayAgo
-    );
+    const oneDayAgoMs = Date.now() - 24 * 60 * 60 * 1000;
+    const recentSessions = (sessions as unknown as Session[]).filter((s) => {
+      // Current SDK: time.updated is epoch ms
+      const updatedMs = s.time?.updated;
+      if (typeof updatedMs === "number") return updatedMs > oneDayAgoMs;
+      // Legacy fallback: updatedAt as ISO string
+      if (s.updatedAt) return new Date(s.updatedAt).getTime() > oneDayAgoMs;
+      return false;
+    });
 
     console.log(`[oc-daemon] Found ${recentSessions.length} sessions to catch up.`);
 

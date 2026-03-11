@@ -53,6 +53,14 @@ The message SHOULD contain a fenced JSON object (`handoff_packet`) as the first 
     - `must_create` (boolean)
 - `dependencies` (array[string])
   - Other tasks/contracts the child must align with.
+- `interface_appendix` (array[object])
+  - Verified cross-boundary identifiers from the explore phase. Each entry:
+    - `identifier` (string) — human description of the interface point
+    - `actual_value` (string) — exact spelling/casing as it appears in the source
+    - `source` (string) — source type (e.g., "SDK docs", "schema file", "type definition")
+    - `citation` (string) — tool used, file path and line, or documentation URL
+  - See [`.kilocode/rules/interface-discipline.md`](../../rules/interface-discipline.md).
+  - Forward verbatim from explore → prepare → execute. Do not summarize or drop entries.
 - `notes` (array[string])
   - Compact context not covered above.
 

@@ -251,14 +251,17 @@ describe("classifyEvent", () => {
     expect(result?.punchKey).toBe("session_completed");
   });
 
-  it("returns null for non-punch-worthy part and session states", () => {
+  it("maps non-completed session.updated to session_lifecycle/session_updated", () => {
     const nonCompletedSession = classifyEvent(
       makeEvent("session.updated", {
         info: { id: "id-5", projectID: "p1", status: "running" },
       })
     );
 
-    expect(nonCompletedSession).toBeNull();
+    expect(nonCompletedSession).not.toBeNull();
+    expect(nonCompletedSession?.taskId).toBe("id-5");
+    expect(nonCompletedSession?.punchType).toBe("session_lifecycle");
+    expect(nonCompletedSession?.punchKey).toBe("session_updated");
   });
 
   it("maps message.part.updated text parts to message/text_response", () => {
@@ -283,6 +286,48 @@ describe("classifyEvent", () => {
     expect(result?.taskId).toBe("id-step-finish");
     expect(result?.punchType).toBe("step_complete");
     expect(result?.punchKey).toBe("step_finished");
+  });
+
+  it("maps message.updated with finish=end to step_complete/session_completed", () => {
+    const result = classifyEvent(
+      makeEvent("message.updated", {
+        info: { sessionID: "ses-1", role: "assistant", finish: "end", mode: "code" },
+      })
+    );
+    expect(result).not.toBeNull();
+    expect(result?.taskId).toBe("ses-1");
+    expect(result?.punchType).toBe("step_complete");
+    expect(result?.punchKey).toBe("session_completed");
+  });
+
+  it("maps message.updated with finish=abort to session_lifecycle", () => {
+    const result = classifyEvent(
+      makeEvent("message.updated", {
+        info: { sessionID: "ses-2", role: "assistant", finish: "abort" },
+      })
+    );
+    expect(result).not.toBeNull();
+    expect(result?.taskId).toBe("ses-2");
+    expect(result?.punchType).toBe("session_lifecycle");
+    expect(result?.punchKey).toBe("session_abort");
+  });
+
+  it("returns null for message.updated without finish field", () => {
+    const result = classifyEvent(
+      makeEvent("message.updated", {
+        info: { sessionID: "ses-3", role: "assistant" },
+      })
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null for message.updated from non-assistant role", () => {
+    const result = classifyEvent(
+      makeEvent("message.updated", {
+        info: { sessionID: "ses-4", role: "user", finish: "end" },
+      })
+    );
+    expect(result).toBeNull();
   });
 
   it("maps session lifecycle events", () => {
