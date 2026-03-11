@@ -1,18 +1,18 @@
 /**
- * Foreman Type Surface â Shared Serializable Contract Layer
+ * Foreman Type Surface — Shared Serializable Contract Layer
  *
  * All TypeScript types that foreman-facing modules import. Derived from
  * the foreman architecture ADR (docs/infra/foreman-architecture.md) and
  * the five foreman contracts (.kilocode/contracts/foreman/).
  *
  * Every type here is Temporal-safe and JSON-serializable: no functions,
- * no classes, no Date objects â only plain objects, strings, numbers,
+ * no classes, no Date objects — only plain objects, strings, numbers,
  * booleans, arrays, and null.
  */
 
 import type { AuditSummary } from "./workflows.js";
 
-// ââ Workflow Phases (S3.2) ââ
+// ── Workflow Phases (S3.2) ──
 
 /**
  * Named phases of the foreman control loop. The phase is the primary
@@ -32,7 +32,7 @@ export type ForemanPhase =
   | "paused"
   | "shutting_down";
 
-// ââ Workflow Input (S4.1) ââ
+// ── Workflow Input (S4.1) ──
 
 /**
  * Initial input when starting the foreman workflow.
@@ -74,7 +74,7 @@ export interface ForemanInput {
   carriedState: ForemanContinueAsNewState | null;
 }
 
-// ââ Continue-As-New State (S4.2) ââ
+// ── Continue-As-New State (S4.2) ──
 
 /**
  * Serialized state carried across continue-as-new boundaries.
@@ -106,7 +106,7 @@ export interface ForemanContinueAsNewState {
   lastContinueAsNewAt: string | null; // ISO 8601
 }
 
-// ââ Health Check (S4.3) ââ
+// ── Health Check (S4.3) ──
 
 /** Aggregate stack health result. All subsystems must pass before dispatch. */
 export interface HealthCheckResult {
@@ -128,7 +128,7 @@ export interface SubsystemHealth {
   latencyMs: number | null;
 }
 
-// ââ Bead Candidate (S4.4) ââ
+// ── Bead Candidate (S4.4) ──
 
 /** A bead eligible for dispatch, as returned by the bead selector activity. */
 export interface BeadCandidate {
@@ -138,9 +138,10 @@ export interface BeadCandidate {
   labels: string[];
   dependsOn: string[];
   estimatedComplexity: "trivial" | "small" | "medium" | "large" | "unknown";
+  description?: string;
 }
 
-// ââ Dispatchability (S4.5) ââ
+// ── Dispatchability (S4.5) ──
 
 /**
  * The foreman's decision about whether a bead can be dispatched.
@@ -165,7 +166,7 @@ export interface DispatchPlan {
   enforcedOnly: boolean;
 }
 
-// ââ Dispatch Outcome (S4.6) ââ
+// ── Dispatch Outcome (S4.6) ──
 
 /**
  * Durable record of what happened when a bead was dispatched.
@@ -199,7 +200,7 @@ export type DispatchResult =
   | { kind: "timeout"; elapsedMs: number; timeoutMs: number }
   | { kind: "aborted"; reason: string };
 
-// ââ Retry Ledger (S4.7) ââ
+// ── Retry Ledger (S4.7) ──
 
 /** Tracks retry state for a bead across attempts. */
 export interface RetryLedgerEntry {
@@ -213,7 +214,7 @@ export interface RetryLedgerEntry {
   exhausted: boolean;
 }
 
-// ââ Operator Signals (S4.8) ââ
+// ── Operator Signals (S4.8) ──
 
 /**
  * Discriminated union for operator signals sent to the foreman.
@@ -227,7 +228,7 @@ export type ForemanSignal =
   | { type: "skipBead"; beadId: string; reason: string }
   | { type: "updateConfig"; config: Partial<ForemanInput> };
 
-// ââ Operator Queries (S4.9) ââ
+// ── Operator Queries (S4.9) ──
 
 /** Response type for the foreman.status query. */
 export interface ForemanStatus {
@@ -248,7 +249,7 @@ export interface ForemanStatus {
   shuttingDown: boolean;
 }
 
-// ââ Foreman Result ââ
+// ── Foreman Result ──
 
 /** Terminal result of the foreman workflow. */
 export interface ForemanResult {
@@ -262,7 +263,7 @@ export interface ForemanResult {
   error: string | null;
 }
 
-// ââ Activity Payloads (S5.1âS5.7) ââ
+// ── Activity Payloads (S5.1–S5.7) ──
 
 /** Input for the checkStackHealth activity (S5.1). */
 export interface CheckStackHealthInput {

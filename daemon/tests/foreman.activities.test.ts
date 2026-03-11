@@ -31,13 +31,13 @@ vi.mock("node:child_process", () => ({
   execFile: vi.fn(),
 }));
 
-// Mock node:net for health check TCP tests
-vi.mock("node:net", () => ({
+// Mock mysql2/promise for Dolt health check
+vi.mock("mysql2/promise", () => ({
   createConnection: vi.fn(),
 }));
 
 import { execFile } from "node:child_process";
-import { createConnection } from "node:net";
+import { createConnection } from "mysql2/promise";
 import {
   execBd,
   parseBdJson,
@@ -334,6 +334,62 @@ describe("selectNextBead", () => {
     expect(result!.beadId).toBe("bead-ok");
   });
 
+  it("defers beads whose nextRetryAfter is in the future", async () => {
+    const output = makeBdReadyOutput([
+      { id: "bead-backoff", title: "Backoff", priority: "P0" },
+      { id: "bead-ok", title: "OK", priority: "P1" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const futureRetry = new Date(Date.now() + 60_000).toISOString();
+
+    const result = await selectNextBead({
+      ...baseInput,
+      retryLedger: [
+        {
+          beadId: "bead-backoff",
+          attempts: 1,
+          maxAttempts: 3,
+          lastAttemptAt: new Date().toISOString(),
+          lastError: "temporary-failure",
+          lastResult: { kind: "failed", error: "temporary-failure", retryable: true },
+          nextRetryAfter: futureRetry,
+          exhausted: false,
+        },
+      ],
+    });
+
+    expect(result!.beadId).toBe("bead-ok");
+  });
+
+  it("selects beads whose nextRetryAfter has passed", async () => {
+    const output = makeBdReadyOutput([
+      { id: "bead-ready-again", title: "Ready Again", priority: "P0" },
+      { id: "bead-lower", title: "Lower priority", priority: "P1" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const pastRetry = new Date(Date.now() - 60_000).toISOString();
+
+    const result = await selectNextBead({
+      ...baseInput,
+      retryLedger: [
+        {
+          beadId: "bead-ready-again",
+          attempts: 1,
+          maxAttempts: 3,
+          lastAttemptAt: new Date().toISOString(),
+          lastError: "temporary-failure",
+          lastResult: { kind: "failed", error: "temporary-failure", retryable: true },
+          nextRetryAfter: pastRetry,
+          exhausted: false,
+        },
+      ],
+    });
+
+    expect(result!.beadId).toBe("bead-ready-again");
+  });
+
   it("returns null when all beads are filtered out", async () => {
     const output = makeBdReadyOutput([
       { id: "bead-1", title: "Skip", priority: "P0" },
@@ -504,6 +560,26 @@ describe("updateBeadStatus", () => {
       updateBeadStatus(REPO_PATH, "bead-1", "in_progress"),
     ).rejects.toThrow(BeadsTransientError);
   });
+
+  it("wraps non-transient errors as BeadsTransientError for retry safety", async () => {
+    // Simulate an unexpected error type (not BeadsTransientError)
+    vi.mocked(execFile).mockImplementation(
+      ((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
+        throw new TypeError("unexpected internal error");
+      }) as typeof execFile,
+    );
+
+    await expect(
+      updateBeadStatus(REPO_PATH, "bead-1", "in_progress"),
+    ).rejects.toThrow(BeadsTransientError);
+
+    try {
+      await updateBeadStatus(REPO_PATH, "bead-1", "in_progress");
+    } catch (e) {
+      expect(e).toBeInstanceOf(BeadsTransientError);
+      expect((e as BeadsTransientError).exitCode).toBeNull();
+    }
+  });
 });
 
 // ── 6. closeBead ──
@@ -576,6 +652,67 @@ describe("error classification", () => {
 
 // ── 8. checkStackHealth ──
 
+// Helper: mock fetch globally
+function mockFetchSuccess(status = 200, statusText = "OK") {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      statusText,
+    }),
+  );
+}
+
+function mockFetchFailure(errorMessage = "Connection refused") {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockRejectedValue(new Error(errorMessage)),
+  );
+}
+
+// Helper: mock mysql2/promise createConnection for Dolt health check
+function mockMysqlSuccess() {
+  const mockConn = {
+    query: vi.fn().mockResolvedValue([[], []]),
+    end: vi.fn().mockResolvedValue(undefined),
+  };
+  vi.mocked(createConnection).mockResolvedValue(mockConn as any);
+}
+
+function mockMysqlFailure(errorMessage = "ECONNREFUSED") {
+  vi.mocked(createConnection).mockRejectedValue(new Error(errorMessage));
+}
+
+// Helper: mock execFile for git and bd checks
+// The mock needs to handle multiple sequential calls (git status + bd ready)
+function mockExecFileSequence(
+  calls: Array<{
+    stdout: string;
+    stderr?: string;
+    error?: Error | null;
+  }>,
+) {
+  const mock = vi.mocked(execFile);
+  let callIndex = 0;
+  mock.mockImplementation(
+    ((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
+      const call = calls[callIndex] ?? calls.at(-1);
+      callIndex++;
+      const callback = cb as (
+        error: Error | null,
+        stdout: string,
+        stderr: string,
+      ) => void;
+      if (call.error) {
+        callback(call.error, "", call.stderr ?? "");
+      } else {
+        callback(null, call.stdout, call.stderr ?? "");
+      }
+    }) as typeof execFile,
+  );
+}
+
 describe("checkStackHealth", () => {
   const baseInput: CheckStackHealthInput = {
     repoPath: REPO_PATH,
@@ -586,96 +723,13 @@ describe("checkStackHealth", () => {
     kiloPort: 4096,
   };
 
-  // Helper: mock fetch globally
-  function mockFetchSuccess(status = 200, statusText = "OK") {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: status >= 200 && status < 300,
-        status,
-        statusText,
-      }),
-    );
-  }
-
-  function mockFetchFailure(errorMessage = "Connection refused") {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockRejectedValue(new Error(errorMessage)),
-    );
-  }
-
-  // Helper: mock createConnection (TCP) for Dolt check
-  function mockTcpSuccess() {
-    const mockSocket = {
-      destroy: vi.fn(),
-      on: vi.fn(),
-      setTimeout: vi.fn(),
-    };
-    vi.mocked(createConnection).mockImplementation(
-      ((_opts: unknown, cb: unknown) => {
-        // Call the connect callback on next tick to simulate async connect
-        const callback = cb as () => void;
-        setTimeout(() => callback(), 0);
-        return mockSocket;
-      }) as typeof createConnection,
-    );
-  }
-
-  function mockTcpFailure(errorMessage = "ECONNREFUSED") {
-    const mockSocket = {
-      destroy: vi.fn(),
-      on: vi.fn().mockImplementation((event: string, handler: (err: Error) => void) => {
-        if (event === "error") {
-          setTimeout(() => handler(new Error(errorMessage)), 0);
-        }
-        return mockSocket;
-      }),
-      setTimeout: vi.fn(),
-    };
-    vi.mocked(createConnection).mockImplementation(
-      ((_opts: unknown, _cb: unknown) => {
-        return mockSocket;
-      }) as typeof createConnection,
-    );
-  }
-
-  // Helper: mock execFile for git and bd checks
-  // The mock needs to handle multiple sequential calls (git status + bd ready)
-  function mockExecFileSequence(
-    calls: Array<{
-      stdout: string;
-      stderr?: string;
-      error?: Error | null;
-    }>,
-  ) {
-    const mock = vi.mocked(execFile);
-    let callIndex = 0;
-    mock.mockImplementation(
-      ((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
-        const call = calls[callIndex] ?? calls[calls.length - 1];
-        callIndex++;
-        const callback = cb as (
-          error: Error | null,
-          stdout: string,
-          stderr: string,
-        ) => void;
-        if (call.error) {
-          callback(call.error, "", call.stderr ?? "");
-        } else {
-          callback(null, call.stdout, call.stderr ?? "");
-        }
-      }) as typeof execFile,
-    );
-  }
-
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
   it("returns 'pass' when all subsystems are healthy", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
+    mockMysqlSuccess();
     // execFile is called for: git status (clean) and bd ready (valid JSON array)
     mockExecFileSequence([
       { stdout: "" },              // git status --porcelain: clean
@@ -695,7 +749,7 @@ describe("checkStackHealth", () => {
 
   it("returns 'fail' when kilo serve is down", async () => {
     mockFetchFailure("Connection refused");
-    mockTcpSuccess();
+    mockMysqlSuccess();
     mockExecFileSequence([
       { stdout: "" },
       { stdout: "[]" },
@@ -710,7 +764,7 @@ describe("checkStackHealth", () => {
 
   it("returns 'fail' when Dolt is down", async () => {
     mockFetchSuccess();
-    mockTcpFailure("ECONNREFUSED");
+    mockMysqlFailure("ECONNREFUSED");
     mockExecFileSequence([
       { stdout: "" },
       { stdout: "[]" },
@@ -725,7 +779,7 @@ describe("checkStackHealth", () => {
 
   it("returns 'fail' when git has merge conflicts", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
+    mockMysqlSuccess();
     mockExecFileSequence([
       { stdout: "UU conflicted-file.ts\n" }, // merge conflict
       { stdout: "[]" },
@@ -738,9 +792,9 @@ describe("checkStackHealth", () => {
     expect(result.subsystems.git.message).toContain("merge conflicts");
   });
 
-  it("returns 'pass' with git uncommitted changes (not conflicts)", async () => {
+  it("returns 'degraded' with git uncommitted changes (not conflicts)", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
+    mockMysqlSuccess();
     mockExecFileSequence([
       { stdout: " M src/changed.ts\n" }, // modified file, no conflict
       { stdout: "[]" },
@@ -748,15 +802,15 @@ describe("checkStackHealth", () => {
 
     const result = await checkStackHealth(baseInput);
 
-    // git is "up" (uncommitted changes don't make it down), overall is pass
-    expect(result.subsystems.git.status).toBe("up");
+    // git is "degraded" per health gate contract, overall is "degraded"
+    expect(result.subsystems.git.status).toBe("degraded");
     expect(result.subsystems.git.message).toContain("uncommitted changes");
-    expect(result.overall).toBe("pass");
+    expect(result.overall).toBe("degraded");
   });
 
   it("returns 'fail' when beads CLI fails", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
+    mockMysqlSuccess();
 
     // git succeeds, then bd fails
     const gitError = null;
@@ -780,7 +834,7 @@ describe("checkStackHealth", () => {
 
   it("temporal is always 'up' (implicit check)", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
+    mockMysqlSuccess();
     mockExecFileSequence([
       { stdout: "" },
       { stdout: "[]" },
@@ -795,7 +849,7 @@ describe("checkStackHealth", () => {
   it("never throws — returns fail result instead", async () => {
     // All subsystems fail
     mockFetchFailure("ECONNREFUSED");
-    mockTcpFailure("ECONNREFUSED");
+    mockMysqlFailure("ECONNREFUSED");
 
     const gitError = new Error("not a git repo") as Error & {
       code: number;
@@ -830,7 +884,7 @@ describe("checkStackHealth", () => {
 
   it("returns correct ISO 8601 checkedAt timestamp", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
+    mockMysqlSuccess();
     mockExecFileSequence([
       { stdout: "" },
       { stdout: "[]" },
@@ -846,7 +900,7 @@ describe("checkStackHealth", () => {
 
   it("classifies HTTP non-200 as down", async () => {
     mockFetchSuccess(503, "Service Unavailable");
-    mockTcpSuccess();
+    mockMysqlSuccess();
     mockExecFileSequence([
       { stdout: "" },
       { stdout: "[]" },
@@ -860,7 +914,7 @@ describe("checkStackHealth", () => {
 
   it("reports latencyMs for successful checks", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
+    mockMysqlSuccess();
     mockExecFileSequence([
       { stdout: "" },
       { stdout: "[]" },
@@ -878,7 +932,7 @@ describe("checkStackHealth", () => {
 
   it("reports null latencyMs for failed checks", async () => {
     mockFetchFailure("ECONNREFUSED");
-    mockTcpFailure("ECONNREFUSED");
+    mockMysqlFailure("ECONNREFUSED");
 
     const error = new Error("fail") as Error & { code: number; killed: boolean };
     error.code = 1;

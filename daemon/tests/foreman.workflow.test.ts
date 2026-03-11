@@ -115,7 +115,7 @@ vi.mock("@temporalio/workflow", () => {
         taskQueue: options.taskQueue as string,
       });
       return {
-        result: async () => childResults[idx] ?? childResults[childResults.length - 1],
+        result: async () => childResults[idx] ?? childResults.at(-1),
       };
     }),
 
@@ -142,9 +142,7 @@ function setMockActivity(name: string, impl: (...args: unknown[]) => unknown) {
 import { foremanWorkflow } from "../src/temporal/foreman.workflows.js";
 import type {
   ForemanInput,
-  ForemanStatus,
   HealthCheckResult,
-  DispatchOutcome,
 } from "../src/temporal/foreman.types.js";
 import type { AgentTaskResult } from "../src/temporal/workflows.js";
 
@@ -166,7 +164,7 @@ function makeInput(overrides: Partial<ForemanInput> = {}): ForemanInput {
     maxWallClockMs: 14_400_000,
     maxConcurrentDispatches: 1,
     defaultTimeoutMs: 7_200_000,
-    defaultCostBudgetUsd: 5.0,
+    defaultCostBudgetUsd: 5,
     maxRetriesPerBead: 2,
     retryBackoffMs: 30_000,
     carriedState: null,
@@ -240,7 +238,7 @@ describe("happy path", () => {
     // Strategy: after closing the bead, the second selectNextBead returns null,
     // then we trigger shutdown on the third iteration.
     let selectCallCount = 0;
-    let iterationCount = 0;
+     const iterationCount = 0;
 
     setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
     setMockActivity("selectNextBead", () => {
@@ -259,6 +257,16 @@ describe("happy path", () => {
       // We do this by checking if we should signal shutdown
       return null;
     });
+    setMockActivity("getBeadDetail", (_repoPath: unknown, beadId: unknown) => ({
+      beadId,
+      title: "Fix the bug",
+      priority: "P1",
+      labels: [],
+      dependsOn: [],
+      description: "Detailed description of the bug",
+      estimatedComplexity: "small",
+      status: "ready",
+    }));
     setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
     setMockActivity("closeBead", () => ({ closed: true, error: null }));
 
@@ -521,6 +529,16 @@ describe("retry and escalation", () => {
       }
       return null;
     });
+    setMockActivity("getBeadDetail", (_repoPath: unknown, beadId: unknown) => ({
+      beadId,
+      title: "Will fail",
+      priority: "P1",
+      labels: [],
+      dependsOn: [],
+      description: "",
+      estimatedComplexity: "small",
+      status: "ready",
+    }));
     setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
     setMockActivity("closeBead", () => ({ closed: true, error: null }));
 
@@ -555,7 +573,7 @@ describe("retry and escalation", () => {
 
   it("escalates when a non-retryable failure occurs", async () => {
     let selectCalls = 0;
-    let updateStatusCalls: Array<{ beadId: string; status: string }> = [];
+    const updateStatusCalls: Array<{ beadId: string; status: string }> = [];
 
     setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
     setMockActivity("selectNextBead", () => {
@@ -572,6 +590,16 @@ describe("retry and escalation", () => {
       }
       return null;
     });
+    setMockActivity("getBeadDetail", (_repoPath: unknown, beadId: unknown) => ({
+      beadId,
+      title: "Non-retryable failure",
+      priority: "P1",
+      labels: [],
+      dependsOn: [],
+      description: "",
+      estimatedComplexity: "small",
+      status: "ready",
+    }));
     setMockActivity("updateBeadStatus", (_repoPath: unknown, beadId: unknown, status: unknown) => {
       updateStatusCalls.push({ beadId: beadId as string, status: status as string });
       return { updated: true, error: null };
@@ -581,7 +609,7 @@ describe("retry and escalation", () => {
     childResults = [
       makeAgentResult({
         status: "budget_exceeded",
-        totalCost: 10.0,
+        totalCost: 10,
         error: "Cost budget exceeded",
       }),
     ];
@@ -708,6 +736,16 @@ describe("dispatch outcome recording", () => {
       }
       return null;
     });
+    setMockActivity("getBeadDetail", (_repoPath: unknown, beadId: unknown) => ({
+      beadId,
+      title: "Record test",
+      priority: "P2",
+      labels: ["test"],
+      dependsOn: [],
+      description: "A test bead for recording",
+      estimatedComplexity: "trivial",
+      status: "ready",
+    }));
     setMockActivity("updateBeadStatus", () => ({ updated: true, error: null }));
     setMockActivity("closeBead", () => ({ closed: true, error: null }));
 
@@ -767,7 +805,7 @@ describe("error handling", () => {
 describe("aborted dispatch", () => {
   it("unclaims bead when child workflow is aborted", async () => {
     let selectCalls = 0;
-    let updateStatusCalls: Array<{ beadId: string; status: string }> = [];
+    const updateStatusCalls: Array<{ beadId: string; status: string }> = [];
 
     setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
     setMockActivity("selectNextBead", () => {
@@ -784,6 +822,16 @@ describe("aborted dispatch", () => {
       }
       return null;
     });
+    setMockActivity("getBeadDetail", (_repoPath: unknown, beadId: unknown) => ({
+      beadId,
+      title: "Will be aborted",
+      priority: "P1",
+      labels: [],
+      dependsOn: [],
+      description: "",
+      estimatedComplexity: "small",
+      status: "ready",
+    }));
     setMockActivity("updateBeadStatus", (_repoPath: unknown, beadId: unknown, status: unknown) => {
       updateStatusCalls.push({ beadId: beadId as string, status: status as string });
       return { updated: true, error: null };
@@ -807,6 +855,88 @@ describe("aborted dispatch", () => {
     // Should have unclaimed the bead (set back to ready)
     const unclaimCall = updateStatusCalls.find(
       (c) => c.beadId === "bead-abort" && c.status === "ready",
+    );
+    expect(unclaimCall).toBeDefined();
+  });
+});
+
+// ── 15. Retry backoff computation ──
+
+describe("retry backoff", () => {
+  it("uses fixed backoff (not linear scaling) and unclaims bead for re-selection", async () => {
+    let selectCalls = 0;
+    const updateStatusCalls: Array<{ beadId: string; status: string }> = [];
+
+    setMockActivity("checkStackHealth", () => makeHealthResult("pass"));
+    setMockActivity("selectNextBead", () => {
+      selectCalls++;
+      if (selectCalls === 1) {
+        return {
+          beadId: "bead-retry",
+          title: "Retry backoff test",
+          priority: "P1",
+          labels: [],
+          dependsOn: [],
+          estimatedComplexity: "small",
+        };
+      }
+      return null;
+    });
+    setMockActivity("getBeadDetail", (_repoPath: unknown, beadId: unknown) => ({
+      beadId,
+      title: "Retry backoff test",
+      priority: "P1",
+      labels: [],
+      dependsOn: [],
+      description: "Test bead for retry backoff validation",
+      estimatedComplexity: "small",
+      status: "ready",
+    }));
+    setMockActivity("updateBeadStatus", (_repoPath: unknown, beadId: unknown, status: unknown) => {
+      updateStatusCalls.push({ beadId: beadId as string, status: status as string });
+      return { updated: true, error: null };
+    });
+
+    // Child workflow returns a retryable failure (timeout)
+    childResults = [
+      makeAgentResult({
+        status: "failed",
+        error: "ECONNREFUSED: connection refused",
+      }),
+    ];
+
+    const retryBackoffMs = 30_000;
+    const input = makeInput({ maxIterations: 3, maxRetriesPerBead: 2, retryBackoffMs });
+
+    try {
+      await foremanWorkflow(input);
+    } catch (e) {
+      if (!(e instanceof ContinueAsNewError)) throw e;
+      continueAsNewCalled = true;
+      continueAsNewArgs = e.args;
+    }
+
+    expect(continueAsNewCalled).toBe(true);
+    const args = continueAsNewArgs as unknown[];
+    const carriedInput = args[0] as ForemanInput;
+    const ledger = carriedInput.carriedState!.retryLedger;
+
+    // Verify retry ledger has the entry
+    expect(ledger.length).toBe(1);
+    expect(ledger[0].beadId).toBe("bead-retry");
+    expect(ledger[0].attempts).toBe(1);
+    expect(ledger[0].exhausted).toBe(false);
+
+    // Verify FIXED backoff: nextRetryAfter = lastAttemptAt + retryBackoffMs
+    // (not lastAttemptAt + retryBackoffMs * attempts)
+    const lastAttemptMs = Date.parse(ledger[0].lastAttemptAt);
+    const nextRetryMs = Date.parse(ledger[0].nextRetryAfter);
+    const actualBackoff = nextRetryMs - lastAttemptMs;
+    expect(actualBackoff).toBe(retryBackoffMs);
+
+    // Verify the bead was unclaimed (set back to "ready") for future re-selection
+    const unclaimCall = updateStatusCalls.find(
+      (c) => c.beadId === "bead-retry" && c.status === "ready",
     );
     expect(unclaimCall).toBeDefined();
   });

@@ -180,7 +180,7 @@ function updateRetryLedger(
   const attempts = (existing?.attempts ?? 0) + 1;
   const maxAttempts = maxRetries + 1; // maxRetries is retries-after-first, so total = maxRetries + 1
   const exhausted = attempts >= maxAttempts;
-  const nextRetryAfter = new Date(Date.parse(nowIso) + backoffMs * attempts).toISOString();
+  const nextRetryAfter = new Date(Date.parse(nowIso) + backoffMs).toISOString();
   const error = "error" in result ? (result as { error: string }).error : result.kind;
 
   const entry: RetryLedgerEntry = {
@@ -382,9 +382,12 @@ function buildChildInput(plan: DispatchPlan, input: ForemanInput): AgentTaskInpu
  * For now, the workflow constructs it directly from config defaults.
  */
 function buildDispatchPlan(candidate: BeadCandidate, input: ForemanInput): DispatchPlan {
+  const descBlock = candidate.description
+    ? `\n\nDescription:\n${candidate.description}`
+    : "";
   return {
     beadId: candidate.beadId,
-    prompt: `Execute bead ${candidate.beadId}: ${candidate.title}`,
+    prompt: `Execute bead ${candidate.beadId}: ${candidate.title}${descBlock}`,
     agent: "code",
     title: `foreman: ${candidate.beadId} — ${candidate.title}`,
     timeoutMs: input.defaultTimeoutMs,
@@ -392,6 +395,120 @@ function buildDispatchPlan(candidate: BeadCandidate, input: ForemanInput): Dispa
     cardId: null,
     enforcedOnly: false,
   };
+}
+
+// ── Extracted Helpers (reduce cognitive complexity of main loop) ──
+
+/**
+ * Select a bead candidate: forced dispatch takes priority, otherwise
+ * poll the bead selector activity. Populates description via getBeadDetail.
+ */
+async function selectCandidate(
+  state: ForemanState,
+  config: ForemanInput,
+  forcedBeadId: string | null,
+): Promise<BeadCandidate | null> {
+  state.phase = "selecting";
+
+  if (forcedBeadId) {
+    const detail = await quick.getBeadDetail(config.repoPath, forcedBeadId);
+    return {
+      beadId: detail.beadId,
+      title: detail.title,
+      priority: detail.priority,
+      labels: detail.labels,
+      dependsOn: detail.dependsOn,
+      estimatedComplexity: detail.estimatedComplexity,
+      description: detail.description,
+    };
+  }
+
+  const candidate = await quick.selectNextBead({
+    repoPath: config.repoPath,
+    retryLedger: state.retryLedger,
+    skipList: state.skipList,
+  });
+
+  if (candidate) {
+    // Enrich with description for the dispatch prompt
+    const detail = await quick.getBeadDetail(config.repoPath, candidate.beadId);
+    candidate.description = detail.description;
+  }
+
+  return candidate;
+}
+
+/**
+ * Handle a dispatch outcome: update state, close/retry/escalate/unclaim
+ * as appropriate. Extracted from the main loop to reduce cognitive complexity.
+ */
+async function handleDispatchOutcome(
+  state: ForemanState,
+  config: ForemanInput,
+  candidate: BeadCandidate,
+  dispatchResult: DispatchResult,
+  outcome: DispatchOutcome,
+  dispatchCompletedAt: string,
+): Promise<void> {
+  state.recentOutcomes = pushOutcome(state.recentOutcomes, outcome);
+  state.currentBeadId = null;
+  state.currentWorkflowId = null;
+  state.totalDispatches++;
+
+  switch (dispatchResult.kind) {
+    case "completed": {
+      state.phase = "completing";
+      await durable.closeBead({
+        repoPath: config.repoPath,
+        beadId: candidate.beadId,
+        outcome,
+      });
+      state.totalCompletions++;
+      removeFromRetryLedger(state.retryLedger, candidate.beadId);
+      break;
+    }
+
+    case "failed":
+    case "timeout":
+    case "validation_failed": {
+      state.phase = "failing";
+      const retryEntry = updateRetryLedger(
+        state.retryLedger,
+        candidate.beadId,
+        dispatchResult,
+        config.maxRetriesPerBead,
+        config.retryBackoffMs,
+        dispatchCompletedAt,
+      );
+
+      if (!retryEntry.exhausted && isRetryable(dispatchResult)) {
+        state.phase = "retrying";
+        // Backoff is enforced by nextRetryAfter in the ledger;
+        // the bead will be skipped by selectNextBead until backoff expires
+        await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
+      } else {
+        state.phase = "escalating";
+        // Unclaim the bead so human can re-trigger
+        await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
+        state.totalFailures++;
+        state.totalEscalations++;
+      }
+      break;
+    }
+
+    case "budget_exceeded": {
+      state.phase = "escalating";
+      await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
+      state.totalFailures++;
+      state.totalEscalations++;
+      break;
+    }
+
+    case "aborted": {
+      await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
+      break;
+    }
+  }
 }
 
 // ── Workflow ──
@@ -469,9 +586,6 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
         continue; // Re-enter loop after resume
       }
 
-      // -- Check for forced dispatch --
-      const forcedBeadId = state.forceDispatchQueue.shift() ?? null;
-
       // -- Phase: Health Check (throttled) --
       if (shouldRunHealthCheck(state, config)) {
         state.phase = "health_check";
@@ -496,27 +610,8 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
       }
 
       // -- Phase: Select --
-      state.phase = "selecting";
-      let candidate: BeadCandidate | null = null;
-
-      if (forcedBeadId) {
-        // Force dispatch: fetch the specific bead detail
-        const detail = await quick.getBeadDetail(config.repoPath, forcedBeadId);
-        candidate = {
-          beadId: detail.beadId,
-          title: detail.title,
-          priority: detail.priority,
-          labels: detail.labels,
-          dependsOn: detail.dependsOn,
-          estimatedComplexity: detail.estimatedComplexity,
-        };
-      } else {
-        candidate = await quick.selectNextBead({
-          repoPath: config.repoPath,
-          retryLedger: state.retryLedger,
-          skipList: state.skipList,
-        });
-      }
+      const forcedBeadId = state.forceDispatchQueue.shift() ?? null;
+      const candidate = await selectCandidate(state, config, forcedBeadId);
 
       if (!candidate) {
         state.phase = "idle";
@@ -526,20 +621,17 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
         continue;
       }
 
-      // -- Phase: Dispatch --
+      // -- Phase: Dispatch & Monitor --
       state.phase = "dispatching";
       state.currentBeadId = candidate.beadId;
       const plan = buildDispatchPlan(candidate, config);
 
-      // Claim the bead
       await quick.updateBeadStatus(config.repoPath, candidate.beadId, "in_progress");
 
-      // Start child workflow
       const childInput = buildChildInput(plan, config);
       const childWorkflowId = `foreman-dispatch-${candidate.beadId}-${Date.now()}`;
       state.currentWorkflowId = childWorkflowId;
 
-      // -- Phase: Monitor --
       state.phase = "monitoring";
       const dispatchStartedAt = new Date().toISOString();
 
@@ -549,12 +641,14 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
         taskQueue: config.taskQueue,
       });
 
-      // Wait for child completion
       const agentResult = await childHandle.result();
 
       const dispatchCompletedAt = new Date().toISOString();
       const dispatchResult = toDispatchResult(agentResult);
       const durationMs = Date.parse(dispatchCompletedAt) - Date.parse(dispatchStartedAt);
+
+      const currentAttempt =
+        (state.retryLedger.find((e) => e.beadId === candidate.beadId)?.attempts ?? 0) + 1;
 
       const outcome: DispatchOutcome = {
         beadId: candidate.beadId,
@@ -568,69 +662,18 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
         tokensOutput: agentResult.tokensOutput,
         result: dispatchResult,
         audit: agentResult.audit,
-        attempt: (state.retryLedger.find((e) => e.beadId === candidate!.beadId)?.attempts ?? 0) + 1,
+        attempt: currentAttempt,
       };
 
-      // -- Record outcome --
-      state.recentOutcomes = pushOutcome(state.recentOutcomes, outcome);
-      state.currentBeadId = null;
-      state.currentWorkflowId = null;
-      state.totalDispatches++;
-
-      // -- Phase: Handle Outcome --
-      switch (dispatchResult.kind) {
-        case "completed": {
-          state.phase = "completing";
-          await durable.closeBead({
-            repoPath: config.repoPath,
-            beadId: candidate.beadId,
-            outcome,
-          });
-          state.totalCompletions++;
-          removeFromRetryLedger(state.retryLedger, candidate.beadId);
-          break;
-        }
-
-        case "failed":
-        case "timeout":
-        case "validation_failed": {
-          state.phase = "failing";
-          const retryEntry = updateRetryLedger(
-            state.retryLedger,
-            candidate.beadId,
-            dispatchResult,
-            config.maxRetriesPerBead,
-            config.retryBackoffMs,
-            dispatchCompletedAt,
-          );
-
-          if (!retryEntry.exhausted && isRetryable(dispatchResult)) {
-            state.phase = "retrying";
-            // Backoff is enforced by nextRetryAfter in the ledger;
-            // the bead will be skipped by selectNextBead until backoff expires
-          } else {
-            state.phase = "escalating";
-            // Unclaim the bead so human can re-trigger
-            await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
-            state.totalFailures++;
-            state.totalEscalations++;
-          }
-          break;
-        }
-
-        case "budget_exceeded": {
-          state.phase = "escalating";
-          await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
-          state.totalFailures++;
-          state.totalEscalations++;
-          break;
-        }
-
-        case "aborted": {
-          await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
-          break;
-        }
-      }
+      // -- Handle outcome (extracted helper) --
+      await handleDispatchOutcome(
+        state,
+        config,
+        candidate,
+        dispatchResult,
+        outcome,
+        dispatchCompletedAt,
+      );
 
       state.iterationCount++;
       state.totalIterations++;

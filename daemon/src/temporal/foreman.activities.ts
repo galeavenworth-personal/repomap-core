@@ -14,7 +14,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { createConnection } from "node:net";
+import { createConnection } from "mysql2/promise";
 import { resolve } from "node:path";
 import { log } from "@temporalio/activity";
 
@@ -312,35 +312,30 @@ async function checkKiloServe(host: string, port: number): Promise<SubsystemHeal
 }
 
 /**
- * Check Dolt server health via TCP connection test.
- * Pattern adapted from dispatch.ts canConnectTcp.
- *
- * NOTE: The health gate contract specifies `SELECT 1` for a full check.
- * This implementation uses a TCP connect test to avoid importing a MySQL
- * driver (mysql2 is not in daemon's dependencies). A TCP connect confirms
- * the port is listening, which is sufficient for the health gate. A future
- * iteration can upgrade to `SELECT 1` if mysql2 is added.
+ * Check Dolt server health via `SELECT 1` query.
+ * Uses mysql2/promise to verify the Dolt SQL server is responding to queries,
+ * per the health gate contract.
  */
-async function checkDolt(host: string, port: number): Promise<SubsystemHealth> {
+async function checkDolt(host: string, port: number, database: string): Promise<SubsystemHealth> {
   try {
     const { elapsedMs } = await timed(async () => {
-      await new Promise<void>((resolveConn, reject) => {
-        const sock = createConnection({ host, port }, () => {
-          sock.destroy();
-          resolveConn();
-        });
-        sock.on("error", reject);
-        sock.setTimeout(HEALTH_CHECK_TIMEOUT_MS, () => {
-          sock.destroy();
-          reject(new Error("timeout"));
-        });
+      const conn = await createConnection({
+        host,
+        port,
+        database,
+        connectTimeout: HEALTH_CHECK_TIMEOUT_MS,
       });
+      try {
+        await conn.query("SELECT 1");
+      } finally {
+        await conn.end();
+      }
     });
 
-    return buildSubsystemHealth("up", elapsedMs, `TCP ${host}:${port}`);
+    return buildSubsystemHealth("up", elapsedMs, `SELECT 1 OK (${host}:${port})`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { status: "down", message: `TCP ${host}:${port} failed: ${msg}`, latencyMs: null };
+    return { status: "down", message: `Dolt ${host}:${port} failed: ${msg}`, latencyMs: null };
   }
 }
 
@@ -380,7 +375,7 @@ async function checkGit(repoPath: string): Promise<SubsystemHealth> {
     }
 
     if (trimmed.length > 0) {
-      return buildSubsystemHealth("up", elapsedMs, "uncommitted changes present");
+      return { status: "degraded", message: "uncommitted changes present", latencyMs: elapsedMs };
     }
 
     return buildSubsystemHealth("up", elapsedMs, "clean working tree");
@@ -416,7 +411,7 @@ async function checkBeads(repoPath: string): Promise<SubsystemHealth> {
     try {
       const parsed = JSON.parse(result.stdout.trim()) as unknown;
       if (Array.isArray(parsed) && parsed.length === 0) {
-        return buildSubsystemHealth("up", elapsedMs, "bd ready: no beads (empty queue)");
+        return { status: "degraded", message: "bd ready: no beads (empty queue)", latencyMs: elapsedMs };
       }
       return buildSubsystemHealth("up", elapsedMs, "bd ready: OK");
     } catch {
@@ -436,9 +431,9 @@ async function checkBeads(repoPath: string): Promise<SubsystemHealth> {
 function aggregateHealth(
   subsystems: HealthCheckResult["subsystems"],
 ): HealthCheckResult["overall"] {
-  const statuses = Object.values(subsystems).map((s) => s.status);
-  if (statuses.includes("down")) return "fail";
-  if (statuses.includes("degraded")) return "degraded";
+  const statuses = new Set(Object.values(subsystems).map((s) => s.status));
+  if (statuses.has("down")) return "fail";
+  if (statuses.has("degraded")) return "degraded";
   return "pass";
 }
 
@@ -458,7 +453,7 @@ function aggregateHealth(
 export async function checkStackHealth(
   input: CheckStackHealthInput,
 ): Promise<HealthCheckResult> {
-  const { repoPath, doltHost, doltPort, kiloHost, kiloPort } = input;
+  const { repoPath, doltHost, doltPort, doltDatabase, kiloHost, kiloPort } = input;
 
   log.info(
     `checkStackHealth: checking 5 subsystems (kilo=${kiloHost}:${kiloPort}, dolt=${doltHost}:${doltPort})`,
@@ -467,7 +462,7 @@ export async function checkStackHealth(
   // Run all checks in parallel for speed
   const [kiloServe, dolt, git, temporal, beads] = await Promise.all([
     checkKiloServe(kiloHost, kiloPort),
-    checkDolt(doltHost, doltPort),
+    checkDolt(doltHost, doltPort, doltDatabase),
     checkGit(repoPath),
     Promise.resolve(checkTemporal()),
     checkBeads(repoPath),
@@ -515,26 +510,47 @@ export async function selectNextBead(
 
   // Build skip set from explicit skipList + exhausted retry entries
   const skipSet = new Set(skipList);
+  const now = Date.now();
+  const retryByBeadId = new Map(
+    retryLedger.map((entry) => [entry.beadId, entry] as const),
+  );
+
+  // Build backoff-pending set: non-exhausted entries whose nextRetryAfter is in the future
+  const backoffPendingSet = new Set<string>();
   for (const entry of retryLedger) {
     if (entry.exhausted) {
       skipSet.add(entry.beadId);
+    } else if (entry.nextRetryAfter && Date.parse(entry.nextRetryAfter) > now) {
+      backoffPendingSet.add(entry.beadId);
     }
   }
 
-  // Transform, filter, sort
-  const candidates: BeadCandidate[] = [];
+  // Transform, filter, split into retry-eligible and fresh candidates
+  const retryEligible: BeadCandidate[] = [];
+  const freshCandidates: BeadCandidate[] = [];
+
   for (const raw of rawItems) {
     const candidate = toBeadCandidate(raw);
-    if (candidate && !skipSet.has(candidate.beadId)) {
-      candidates.push(candidate);
+    if (!candidate) continue;
+    if (skipSet.has(candidate.beadId)) continue;
+    if (backoffPendingSet.has(candidate.beadId)) continue;
+
+    const ledgerEntry = retryByBeadId.get(candidate.beadId);
+    if (ledgerEntry) {
+      // Backoff has elapsed — retry-eligible
+      retryEligible.push(candidate);
+    } else {
+      freshCandidates.push(candidate);
     }
   }
 
-  candidates.sort(comparePriority);
+  // Prefer retry-eligible beads whose backoff has elapsed
+  const pool = retryEligible.length > 0 ? retryEligible : freshCandidates;
+  pool.sort(comparePriority);
 
-  const selected = candidates[0] ?? null;
+  const selected = pool[0] ?? null;
   log.info(
-    `selectNextBead: ${rawItems.length} raw, ${candidates.length} eligible, selected=${selected?.beadId ?? "none"}`,
+    `selectNextBead: ${rawItems.length} raw, ${pool.length} eligible (retryPreferred=${retryEligible.length > 0}), selected=${selected?.beadId ?? "none"}`,
   );
 
   return selected;
@@ -626,10 +642,12 @@ export async function updateBeadStatus(
       );
       throw e; // Let Temporal retry
     }
-    // Unexpected error — wrap as transient to be safe
+    // Unexpected error — wrap as transient so Temporal retries
     const msg = e instanceof Error ? e.message : String(e);
-    log.warn(`updateBeadStatus: ${beadId} -> ${status} failed: ${msg}`);
-    return { updated: false, error: msg };
+    log.warn(
+      `updateBeadStatus: ${beadId} -> ${status} failed (wrapped as transient): ${msg}`,
+    );
+    throw new BeadsTransientError(msg, null, "");
   }
 }
 
