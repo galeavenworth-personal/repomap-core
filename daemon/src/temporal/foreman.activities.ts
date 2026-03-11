@@ -14,6 +14,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createConnection } from "mysql2/promise";
 import { resolve } from "node:path";
 import { log } from "@temporalio/activity";
@@ -83,6 +84,17 @@ function resolveBdPath(repoPath: string): string {
 
 /** Default timeout for bd commands (15 seconds). */
 const BD_TIMEOUT_MS = 15_000;
+
+/**
+ * Resolve the absolute path to the git binary.
+ * Checks well-known fixed paths to avoid insecure PATH resolution (SonarQube S4036).
+ */
+function resolveGitBin(): string {
+  for (const p of ["/usr/bin/git", "/usr/local/bin/git"]) {
+    if (existsSync(p)) return p;
+  }
+  return "git"; // fallback — will use PATH if no fixed path found
+}
 
 /**
  * Execute a bd CLI command with proper path resolution and error handling.
@@ -403,7 +415,7 @@ async function checkGit(repoPath: string): Promise<SubsystemHealth> {
     const { result: stdout, elapsedMs } = await timed(async () => {
       return new Promise<string>((resolveGit, reject) => {
         execFile(
-          "git",
+          resolveGitBin(),
           ["status", "--porcelain"],
           { cwd: repoPath, timeout: HEALTH_CHECK_TIMEOUT_MS },
           (error, stdout) => {
