@@ -10,3 +10,15 @@ export {
   dependencyWatchWorkflow,
   reportQuery,
 } from "./dep-watch.workflows.js";
+export {
+  foremanWorkflow,
+  pauseSignal,
+  resumeSignal,
+  shutdownSignal,
+  forceDispatchSignal,
+  skipBeadSignal,
+  updateConfigSignal,
+  foremanStatusQuery,
+  foremanHealthQuery,
+  foremanHistoryQuery,
+} from "./foreman.workflows.js";

@@ -30,7 +30,9 @@ export type ForemanPhase =
   | "escalating"
   | "idle"
   | "paused"
-  | "shutting_down";
+  | "shutting_down"
+  | "awaiting_intervention"
+  | "awaiting_approval";
 
 // ── Workflow Input (S4.1) ──
 
@@ -69,6 +71,9 @@ export interface ForemanInput {
   // Retry config
   maxRetriesPerBead: number;
   retryBackoffMs: number;
+
+  // Health failure escalation
+  healthFailureThreshold?: number;
 
   // Carried-forward state (set by continue-as-new, null on fresh start)
   carriedState: ForemanContinueAsNewState | null;
@@ -226,7 +231,12 @@ export type ForemanSignal =
   | { type: "shutdown"; reason: string }
   | { type: "forceDispatch"; beadId: string }
   | { type: "skipBead"; beadId: string; reason: string }
-  | { type: "updateConfig"; config: Partial<ForemanInput> };
+  | { type: "updateConfig"; config: Partial<ForemanInput> }
+  | { type: "approveDispatch"; beadId: string }
+  | { type: "approveOutcome"; beadId: string; decision: ApprovalDecision };
+
+/** Operator decision for outcome approval. */
+export type ApprovalDecision = "close" | "retry" | "skip";
 
 // ── Operator Queries (S4.9) ──
 
@@ -247,6 +257,8 @@ export interface ForemanStatus {
   retryLedger: RetryLedgerEntry[];
   paused: boolean;
   shuttingDown: boolean;
+  interventionReason?: string | null;
+  awaitingInterventionSince?: string | null;
 }
 
 // ── Foreman Result ──
