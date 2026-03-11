@@ -160,8 +160,15 @@ do_check() {
 
     components=$((components + 1))
     if is_dolt_running; then
-        log "✅ Dolt server: running (port ${DOLT_PORT})"
-        healthy=$((healthy + 1))
+        # Port is listening — verify it has the correct databases (repomap-core-4hw)
+        if DOLT_DATA_DIR="$DOLT_DATA_DIR" "$REPO_ROOT/.kilocode/tools/dolt_start.sh" --check 2>&1 | "$GREP" -q "databases verified"; then
+            log "✅ Dolt server: running (port ${DOLT_PORT}, databases verified)"
+            healthy=$((healthy + 1))
+        else
+            log "⚠️  Dolt server: port ${DOLT_PORT} occupied but WRONG databases (rogue server?)"
+            log "   Fix: .kilocode/tools/dolt_start.sh  (kills rogue, starts correct)"
+            ok=false
+        fi
     else
         log "❌ Dolt server: NOT running on port ${DOLT_PORT}"
         ok=false
@@ -303,42 +310,19 @@ do_start() {
     start_kilo_if_needed
     log "✅ kilo serve is healthy."
 
-    # ── Step 2: Start Dolt server ────────────────────────────────────────
-    if is_dolt_running; then
-        log "✅ Dolt server already running on port ${DOLT_PORT}."
-    else
-        log "Starting Dolt server on port ${DOLT_PORT}..."
-        local dolt_cli
-        dolt_cli=$(find_dolt_cli) || {
-            log "ERROR: 'dolt' CLI not found. Install via: curl -L https://github.com/dolthub/dolt/releases/latest/download/install.sh | sudo bash"
-            exit 1
-        }
-
-        if [[ ! -d "$DOLT_DATA_DIR" ]]; then
-            log "ERROR: Dolt data directory not found: $DOLT_DATA_DIR"
-            log "Initialize with: mkdir -p $DOLT_DATA_DIR && cd $DOLT_DATA_DIR && dolt init"
-            exit 1
-        fi
-
-        nohup "$dolt_cli" sql-server \
-            --host 127.0.0.1 \
-            --port "$DOLT_PORT" \
-            --data-dir "$DOLT_DATA_DIR" \
-            > /tmp/dolt-server.log 2>&1 &
-        log "Dolt server starting (PID $!)..."
-
-        for i in $(seq 1 10); do
-            if is_dolt_running; then break; fi
-            sleep 1
-        done
-
-        if ! is_dolt_running; then
-            log "ERROR: Dolt server failed to start within 10s"
-            log "Check /tmp/dolt-server.log for details"
-            exit 3
-        fi
-        log "✅ Dolt server started."
+    # ── Step 2: Start Dolt server (delegated to dolt_start.sh) ──────────
+    # dolt_start.sh is the single authority for Dolt lifecycle. It:
+    #   - Validates the running server has the correct databases
+    #   - Kills rogue servers started by bd from .beads/dolt/
+    #   - Clears stale bd state files (.beads/dolt-server.port etc.)
+    #   - Starts the correct server from ~/.dolt-data/beads/
+    # See: repomap-core-4hw
+    log "Ensuring Dolt server with correct databases..."
+    if ! DOLT_DATA_DIR="$DOLT_DATA_DIR" "$REPO_ROOT/.kilocode/tools/dolt_start.sh"; then
+        log "ERROR: Dolt server failed to start. Check /tmp/dolt-server.log"
+        exit 3
     fi
+    log "✅ Dolt server verified (databases: beads_repomap-core, punch_cards)."
 
     # ── Step 2.5: Ensure punch card schema is migrated ────────────────────
     log "Applying idempotent punch card schema migration..."

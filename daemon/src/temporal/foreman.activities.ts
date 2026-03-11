@@ -14,19 +14,16 @@
  */
 
 import { execFile } from "node:child_process";
-import { createConnection } from "node:net";
+import { existsSync } from "node:fs";
+import { createConnection } from "mysql2/promise";
 import { resolve } from "node:path";
 import { log } from "@temporalio/activity";
 
 import type {
-  AnnotateBeadInput,
-  AnnotateBeadOutput,
   BeadCandidate,
   CheckStackHealthInput,
   CloseBeadInput,
   CloseBeadOutput,
-  CreateEscalationInput,
-  CreateEscalationOutput,
   HealthCheckResult,
   SelectNextBeadInput,
   SubsystemHealth,
@@ -87,6 +84,17 @@ function resolveBdPath(repoPath: string): string {
 
 /** Default timeout for bd commands (15 seconds). */
 const BD_TIMEOUT_MS = 15_000;
+
+/**
+ * Resolve the absolute path to the git binary.
+ * Checks well-known fixed paths to avoid insecure PATH resolution (SonarQube S4036).
+ */
+function resolveGitBin(): string {
+  for (const p of ["/usr/bin/git", "/usr/local/bin/git"]) {
+    if (existsSync(p)) return p;
+  }
+  return "git"; // fallback — will use PATH if no fixed path found
+}
 
 /**
  * Execute a bd CLI command with proper path resolution and error handling.
@@ -252,6 +260,59 @@ function comparePriority(a: BeadCandidate, b: BeadCandidate): number {
   return (PRIORITY_ORDER[a.priority] ?? 4) - (PRIORITY_ORDER[b.priority] ?? 4);
 }
 
+interface RetrySelectionSets {
+  skipSet: Set<string>;
+  backoffPendingSet: Set<string>;
+  retryByBeadId: Map<string, SelectNextBeadInput["retryLedger"][number]>;
+}
+
+function buildRetrySelectionSets(
+  retryLedger: SelectNextBeadInput["retryLedger"],
+  skipList: string[],
+  nowMs: number,
+): RetrySelectionSets {
+  const skipSet = new Set(skipList);
+  const retryByBeadId = new Map(retryLedger.map((entry) => [entry.beadId, entry] as const));
+  const backoffPendingSet = new Set<string>();
+
+  for (const entry of retryLedger) {
+    if (entry.exhausted) {
+      skipSet.add(entry.beadId);
+      continue;
+    }
+    if (entry.nextRetryAfter && Date.parse(entry.nextRetryAfter) > nowMs) {
+      backoffPendingSet.add(entry.beadId);
+    }
+  }
+
+  return { skipSet, backoffPendingSet, retryByBeadId };
+}
+
+function classifyEligibleCandidates(
+  rawItems: BdReadyItem[],
+  skipSet: Set<string>,
+  backoffPendingSet: Set<string>,
+  retryByBeadId: Map<string, SelectNextBeadInput["retryLedger"][number]>,
+): { retryEligible: BeadCandidate[]; freshCandidates: BeadCandidate[] } {
+  const retryEligible: BeadCandidate[] = [];
+  const freshCandidates: BeadCandidate[] = [];
+
+  for (const raw of rawItems) {
+    const candidate = toBeadCandidate(raw);
+    if (!candidate) continue;
+    if (skipSet.has(candidate.beadId)) continue;
+    if (backoffPendingSet.has(candidate.beadId)) continue;
+
+    if (retryByBeadId.has(candidate.beadId)) {
+      retryEligible.push(candidate);
+      continue;
+    }
+    freshCandidates.push(candidate);
+  }
+
+  return { retryEligible, freshCandidates };
+}
+
 // ── Health Gate Helpers ──
 
 /** Timeout for individual subsystem health checks (5 seconds). */
@@ -316,35 +377,30 @@ async function checkKiloServe(host: string, port: number): Promise<SubsystemHeal
 }
 
 /**
- * Check Dolt server health via TCP connection test.
- * Pattern adapted from dispatch.ts canConnectTcp.
- *
- * NOTE: The health gate contract specifies `SELECT 1` for a full check.
- * This implementation uses a TCP connect test to avoid importing a MySQL
- * driver (mysql2 is not in daemon's dependencies). A TCP connect confirms
- * the port is listening, which is sufficient for the health gate. A future
- * iteration can upgrade to `SELECT 1` if mysql2 is added.
+ * Check Dolt server health via `SELECT 1` query.
+ * Uses mysql2/promise to verify the Dolt SQL server is responding to queries,
+ * per the health gate contract.
  */
-async function checkDolt(host: string, port: number): Promise<SubsystemHealth> {
+async function checkDolt(host: string, port: number, database: string): Promise<SubsystemHealth> {
   try {
     const { elapsedMs } = await timed(async () => {
-      await new Promise<void>((resolveConn, reject) => {
-        const sock = createConnection({ host, port }, () => {
-          sock.destroy();
-          resolveConn();
-        });
-        sock.on("error", reject);
-        sock.setTimeout(HEALTH_CHECK_TIMEOUT_MS, () => {
-          sock.destroy();
-          reject(new Error("timeout"));
-        });
+      const conn = await createConnection({
+        host,
+        port,
+        database,
+        connectTimeout: HEALTH_CHECK_TIMEOUT_MS,
       });
+      try {
+        await conn.query("SELECT 1");
+      } finally {
+        await conn.end();
+      }
     });
 
-    return buildSubsystemHealth("up", elapsedMs, `TCP ${host}:${port}`);
+    return buildSubsystemHealth("up", elapsedMs, `SELECT 1 OK (${host}:${port})`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { status: "down", message: `TCP ${host}:${port} failed: ${msg}`, latencyMs: null };
+    return { status: "down", message: `Dolt ${host}:${port} failed: ${msg}`, latencyMs: null };
   }
 }
 
@@ -359,7 +415,7 @@ async function checkGit(repoPath: string): Promise<SubsystemHealth> {
     const { result: stdout, elapsedMs } = await timed(async () => {
       return new Promise<string>((resolveGit, reject) => {
         execFile(
-          "git",
+          resolveGitBin(),
           ["status", "--porcelain"],
           { cwd: repoPath, timeout: HEALTH_CHECK_TIMEOUT_MS },
           (error, stdout) => {
@@ -384,7 +440,7 @@ async function checkGit(repoPath: string): Promise<SubsystemHealth> {
     }
 
     if (trimmed.length > 0) {
-      return buildSubsystemHealth("up", elapsedMs, "uncommitted changes present");
+      return { status: "degraded", message: "uncommitted changes present", latencyMs: elapsedMs };
     }
 
     return buildSubsystemHealth("up", elapsedMs, "clean working tree");
@@ -420,7 +476,7 @@ async function checkBeads(repoPath: string): Promise<SubsystemHealth> {
     try {
       const parsed = JSON.parse(result.stdout.trim()) as unknown;
       if (Array.isArray(parsed) && parsed.length === 0) {
-        return buildSubsystemHealth("up", elapsedMs, "bd ready: no beads (empty queue)");
+        return { status: "degraded", message: "bd ready: no beads (empty queue)", latencyMs: elapsedMs };
       }
       return buildSubsystemHealth("up", elapsedMs, "bd ready: OK");
     } catch {
@@ -440,9 +496,9 @@ async function checkBeads(repoPath: string): Promise<SubsystemHealth> {
 function aggregateHealth(
   subsystems: HealthCheckResult["subsystems"],
 ): HealthCheckResult["overall"] {
-  const statuses = Object.values(subsystems).map((s) => s.status);
-  if (statuses.includes("down")) return "fail";
-  if (statuses.includes("degraded")) return "degraded";
+  const statuses = new Set(Object.values(subsystems).map((s) => s.status));
+  if (statuses.has("down")) return "fail";
+  if (statuses.has("degraded")) return "degraded";
   return "pass";
 }
 
@@ -462,7 +518,7 @@ function aggregateHealth(
 export async function checkStackHealth(
   input: CheckStackHealthInput,
 ): Promise<HealthCheckResult> {
-  const { repoPath, doltHost, doltPort, kiloHost, kiloPort } = input;
+  const { repoPath, doltHost, doltPort, doltDatabase, kiloHost, kiloPort } = input;
 
   log.info(
     `checkStackHealth: checking 5 subsystems (kilo=${kiloHost}:${kiloPort}, dolt=${doltHost}:${doltPort})`,
@@ -471,7 +527,7 @@ export async function checkStackHealth(
   // Run all checks in parallel for speed
   const [kiloServe, dolt, git, temporal, beads] = await Promise.all([
     checkKiloServe(kiloHost, kiloPort),
-    checkDolt(doltHost, doltPort),
+    checkDolt(doltHost, doltPort, doltDatabase),
     checkGit(repoPath),
     Promise.resolve(checkTemporal()),
     checkBeads(repoPath),
@@ -517,28 +573,26 @@ export async function selectNextBead(
     );
   }
 
-  // Build skip set from explicit skipList + exhausted retry entries
-  const skipSet = new Set(skipList);
-  for (const entry of retryLedger) {
-    if (entry.exhausted) {
-      skipSet.add(entry.beadId);
-    }
-  }
+  const { skipSet, backoffPendingSet, retryByBeadId } = buildRetrySelectionSets(
+    retryLedger,
+    skipList,
+    Date.now(),
+  );
 
-  // Transform, filter, sort
-  const candidates: BeadCandidate[] = [];
-  for (const raw of rawItems) {
-    const candidate = toBeadCandidate(raw);
-    if (candidate && !skipSet.has(candidate.beadId)) {
-      candidates.push(candidate);
-    }
-  }
+  const { retryEligible, freshCandidates } = classifyEligibleCandidates(
+    rawItems,
+    skipSet,
+    backoffPendingSet,
+    retryByBeadId,
+  );
 
-  candidates.sort(comparePriority);
+  // Prefer retry-eligible beads whose backoff has elapsed
+  const pool = retryEligible.length > 0 ? retryEligible : freshCandidates;
+  pool.sort(comparePriority);
 
-  const selected = candidates[0] ?? null;
+  const selected = pool[0] ?? null;
   log.info(
-    `selectNextBead: ${rawItems.length} raw, ${candidates.length} eligible, selected=${selected?.beadId ?? "none"}`,
+    `selectNextBead: ${rawItems.length} raw, ${pool.length} eligible (retryPreferred=${retryEligible.length > 0}), selected=${selected?.beadId ?? "none"}`,
   );
 
   return selected;
@@ -630,10 +684,12 @@ export async function updateBeadStatus(
       );
       throw e; // Let Temporal retry
     }
-    // Unexpected error — wrap as transient to be safe
+    // Unexpected error — wrap as transient so Temporal retries
     const msg = e instanceof Error ? e.message : String(e);
-    log.warn(`updateBeadStatus: ${beadId} -> ${status} failed: ${msg}`);
-    return { updated: false, error: msg };
+    log.warn(
+      `updateBeadStatus: ${beadId} -> ${status} failed (wrapped as transient): ${msg}`,
+    );
+    throw new BeadsTransientError(msg, null, "");
   }
 }
 
@@ -641,7 +697,6 @@ export async function updateBeadStatus(
  * Close a bead after durable success.
  *
  * Runs `bd close <beadId>` in the repository directory.
- * Idempotent: if the bead is already closed, treats as success.
  *
  * ADR Section 5.6.
  */
@@ -657,131 +712,11 @@ export async function closeBead(
     return { closed: true, error: null };
   } catch (e) {
     if (e instanceof BeadsTransientError) {
-      // Idempotency: if bead is already closed, treat as success
-      const msg = e.message.toLowerCase();
-      if (msg.includes("already closed") || msg.includes("already_closed")) {
-        log.info(`closeBead: ${beadId} already closed — treating as success`);
-        return { closed: true, error: null };
-      }
       log.warn(`closeBead: ${beadId} failed (transient): ${e.message}`);
       throw e; // Let Temporal retry
     }
     const msg = e instanceof Error ? e.message : String(e);
     log.warn(`closeBead: ${beadId} failed: ${msg}`);
     return { closed: false, error: msg };
-  }
-}
-
-/**
- * Annotate a bead with a comment preserving the audit trail.
- *
- * Runs `bd comments add <beadId> "<comment>"` in the repository directory.
- * Used to record outcome reasons (failure, timeout, budget exceeded, etc.)
- * on beads that are NOT being closed.
- *
- * Throws BeadsTransientError on CLI failure (Temporal will retry).
- */
-export async function annotateBead(
-  input: AnnotateBeadInput,
-): Promise<AnnotateBeadOutput> {
-  const { repoPath, beadId, comment } = input;
-
-  log.info(`annotateBead: bd comments add ${beadId}`);
-  try {
-    await execBd(repoPath, ["comments", "add", beadId, comment]);
-    log.info(`annotateBead: ${beadId} annotated successfully`);
-    return { annotated: true, error: null };
-  } catch (e) {
-    if (e instanceof BeadsTransientError) {
-      log.warn(`annotateBead: ${beadId} failed (transient): ${e.message}`);
-      throw e; // Let Temporal retry
-    }
-    const msg = e instanceof Error ? e.message : String(e);
-    log.warn(`annotateBead: ${beadId} failed: ${msg}`);
-    return { annotated: false, error: msg };
-  }
-}
-
-/**
- * Create an escalation bead for human intervention.
- *
- * Runs `bd create "Escalation: <title>" --label escalation --label human-required`
- * with a structured description body. This is the foreman's mechanism for
- * requesting human help when autonomous recovery has failed.
- *
- * ADR Section 5.7, Escalation Contract.
- */
-export async function createEscalation(
-  input: CreateEscalationInput,
-): Promise<CreateEscalationOutput> {
-  const { repoPath, beadId, reason, outcomes, retryEntry } = input;
-
-  const title = `Escalation: ${beadId} — ${reason}`;
-  const totalCost = outcomes.reduce((sum, o) => sum + o.totalCost, 0);
-
-  // Build structured description body
-  const lines: string[] = [
-    `## Escalation Summary`,
-    ``,
-    `- **Original bead:** ${beadId}`,
-    `- **Exception class:** ${reason}`,
-    `- **Total attempts:** ${retryEntry.attempts}`,
-    `- **Total cost incurred:** $${totalCost.toFixed(2)}`,
-    ``,
-    `## Dispatch History`,
-    ``,
-  ];
-
-  for (const outcome of outcomes) {
-    lines.push(`### Attempt ${outcome.attempt}`);
-    lines.push(`- **Started:** ${outcome.startedAt}`);
-    lines.push(`- **Duration:** ${outcome.durationMs}ms`);
-    lines.push(`- **Cost:** $${outcome.totalCost.toFixed(2)}`);
-    lines.push(`- **Result:** ${outcome.result.kind}`);
-    if ("error" in outcome.result) {
-      lines.push(`- **Error:** ${(outcome.result as { error: string }).error}`);
-    }
-    lines.push(`- **Session ID:** ${outcome.sessionId ?? "n/a"}`);
-    lines.push(`- **Workflow ID:** ${outcome.workflowId}`);
-    lines.push(``);
-  }
-
-  lines.push(`## Retry Ledger`);
-  lines.push(`- **Max attempts:** ${retryEntry.maxAttempts}`);
-  lines.push(`- **Last error:** ${retryEntry.lastError}`);
-  lines.push(`- **Exhausted:** ${retryEntry.exhausted ? "yes" : "no"}`);
-
-  const description = lines.join("\n");
-
-  log.info(`createEscalation: creating escalation bead for ${beadId}`);
-  try {
-    const result = await execBd(repoPath, [
-      "create",
-      title,
-      "--label", "escalation",
-      "--label", "human-required",
-      "-d", description,
-      "--json",
-    ]);
-
-    // Parse the created bead ID from JSON output
-    const parsed = parseBdJson<{ id?: string }>(result.stdout, "create escalation");
-    const escalationBeadId = parsed.id ?? "unknown";
-
-    log.info(`createEscalation: created ${escalationBeadId} for ${beadId}`);
-    return { escalationBeadId };
-  } catch (e) {
-    if (e instanceof BeadsTransientError) {
-      log.warn(`createEscalation: ${beadId} failed (transient): ${e.message}`);
-      throw e; // Let Temporal retry
-    }
-    const msg = e instanceof Error ? e.message : String(e);
-    log.error(`createEscalation: ${beadId} failed: ${msg}`);
-    // On contract error, still try to return something useful
-    throw new BeadsTransientError(
-      `createEscalation failed: ${msg}`,
-      null,
-      msg,
-    );
   }
 }

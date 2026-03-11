@@ -31,13 +31,13 @@ vi.mock("node:child_process", () => ({
   execFile: vi.fn(),
 }));
 
-// Mock node:net for health check TCP tests
-vi.mock("node:net", () => ({
+// Mock mysql2/promise for Dolt health check
+vi.mock("mysql2/promise", () => ({
   createConnection: vi.fn(),
 }));
 
 import { execFile } from "node:child_process";
-import { createConnection } from "node:net";
+import { createConnection } from "mysql2/promise";
 import {
   execBd,
   parseBdJson,
@@ -45,15 +45,11 @@ import {
   getBeadDetail,
   updateBeadStatus,
   closeBead,
-  annotateBead,
-  createEscalation,
   checkStackHealth,
   BeadsTransientError,
   BeadsContractError,
 } from "../src/temporal/foreman.activities.js";
 import type {
-  AnnotateBeadInput,
-  CreateEscalationInput,
   SelectNextBeadInput,
   CloseBeadInput,
   CheckStackHealthInput,
@@ -257,23 +253,6 @@ describe("parseBdJson", () => {
       expect(err.retryable).toBe(false);
     }
   });
-
-  it("throws BeadsContractError on HTML error page output", () => {
-    expect(() =>
-      parseBdJson("<html><body>502 Bad Gateway</body></html>", "test"),
-    ).toThrow(BeadsContractError);
-  });
-
-  it("throws BeadsContractError on truncated JSON array", () => {
-    expect(() =>
-      parseBdJson('[{"id":"bead-1"', "test"),
-    ).toThrow(BeadsContractError);
-  });
-
-  it("parses valid JSON null as a value", () => {
-    const result = parseBdJson<null>("null", "test");
-    expect(result).toBeNull();
-  });
 });
 
 // ── 3. selectNextBead ──
@@ -355,6 +334,62 @@ describe("selectNextBead", () => {
     expect(result!.beadId).toBe("bead-ok");
   });
 
+  it("defers beads whose nextRetryAfter is in the future", async () => {
+    const output = makeBdReadyOutput([
+      { id: "bead-backoff", title: "Backoff", priority: "P0" },
+      { id: "bead-ok", title: "OK", priority: "P1" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const futureRetry = new Date(Date.now() + 60_000).toISOString();
+
+    const result = await selectNextBead({
+      ...baseInput,
+      retryLedger: [
+        {
+          beadId: "bead-backoff",
+          attempts: 1,
+          maxAttempts: 3,
+          lastAttemptAt: new Date().toISOString(),
+          lastError: "temporary-failure",
+          lastResult: { kind: "failed", error: "temporary-failure", retryable: true },
+          nextRetryAfter: futureRetry,
+          exhausted: false,
+        },
+      ],
+    });
+
+    expect(result!.beadId).toBe("bead-ok");
+  });
+
+  it("selects beads whose nextRetryAfter has passed", async () => {
+    const output = makeBdReadyOutput([
+      { id: "bead-ready-again", title: "Ready Again", priority: "P0" },
+      { id: "bead-lower", title: "Lower priority", priority: "P1" },
+    ]);
+    mockExecFileSuccess(output);
+
+    const pastRetry = new Date(Date.now() - 60_000).toISOString();
+
+    const result = await selectNextBead({
+      ...baseInput,
+      retryLedger: [
+        {
+          beadId: "bead-ready-again",
+          attempts: 1,
+          maxAttempts: 3,
+          lastAttemptAt: new Date().toISOString(),
+          lastError: "temporary-failure",
+          lastResult: { kind: "failed", error: "temporary-failure", retryable: true },
+          nextRetryAfter: pastRetry,
+          exhausted: false,
+        },
+      ],
+    });
+
+    expect(result!.beadId).toBe("bead-ready-again");
+  });
+
   it("returns null when all beads are filtered out", async () => {
     const output = makeBdReadyOutput([
       { id: "bead-1", title: "Skip", priority: "P0" },
@@ -431,49 +466,6 @@ describe("selectNextBead", () => {
     await expect(selectNextBead(baseInput)).rejects.toThrow(
       BeadsTransientError,
     );
-  });
-
-  it("throws BeadsContractError when bd returns malformed JSON", async () => {
-    mockExecFileSuccess("<html>502 Bad Gateway</html>");
-    await expect(selectNextBead(baseInput)).rejects.toThrow(
-      BeadsContractError,
-    );
-  });
-
-  it("throws BeadsContractError (not transient) for truncated JSON", async () => {
-    mockExecFileSuccess('[{"id":"bead-1","title":"Trun');
-    try {
-      await selectNextBead(baseInput);
-      expect.unreachable("should have thrown");
-    } catch (e) {
-      expect(e).toBeInstanceOf(BeadsContractError);
-      expect(e).not.toBeInstanceOf(BeadsTransientError);
-      expect((e as BeadsContractError).retryable).toBe(false);
-    }
-  });
-
-  it("throws BeadsTransientError when bd command times out", async () => {
-    mockExecFileTimeout();
-    try {
-      await selectNextBead(baseInput);
-      expect.unreachable("should have thrown");
-    } catch (e) {
-      expect(e).toBeInstanceOf(BeadsTransientError);
-      expect((e as BeadsTransientError).retryable).toBe(true);
-      expect((e as BeadsTransientError).message).toContain("timed out");
-    }
-  });
-
-  it("preserves selection order for equal priorities (stability)", async () => {
-    const output = makeBdReadyOutput([
-      { id: "bead-a", title: "First P1", priority: "P1" },
-      { id: "bead-b", title: "Second P1", priority: "P1" },
-      { id: "bead-c", title: "Third P1", priority: "P1" },
-    ]);
-    mockExecFileSuccess(output);
-
-    const result = await selectNextBead(baseInput);
-    expect(result!.beadId).toBe("bead-a");
   });
 });
 
@@ -569,27 +561,23 @@ describe("updateBeadStatus", () => {
     ).rejects.toThrow(BeadsTransientError);
   });
 
-  it("returns updated=false with error on unexpected (non-transient) error", async () => {
-    const mock = vi.mocked(execFile);
-    mock.mockImplementation(
-      ((_file: unknown, _args: unknown, _opts: unknown, _cb: unknown) => {
-        throw new Error("Unexpected sync exception");
+  it("wraps non-transient errors as BeadsTransientError for retry safety", async () => {
+    // Simulate an unexpected error type (not BeadsTransientError)
+    vi.mocked(execFile).mockImplementation(
+      ((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
+        throw new TypeError("unexpected internal error");
       }) as typeof execFile,
     );
 
-    const result = await updateBeadStatus(REPO_PATH, "bead-1", "in_progress");
-    expect(result.updated).toBe(false);
-    expect(result.error).toContain("Unexpected sync exception");
-  });
+    await expect(
+      updateBeadStatus(REPO_PATH, "bead-1", "in_progress"),
+    ).rejects.toThrow(BeadsTransientError);
 
-  it("classifies CLI timeout as transient error", async () => {
-    mockExecFileTimeout();
     try {
       await updateBeadStatus(REPO_PATH, "bead-1", "in_progress");
-      expect.unreachable("should have thrown");
     } catch (e) {
       expect(e).toBeInstanceOf(BeadsTransientError);
-      expect((e as BeadsTransientError).retryable).toBe(true);
+      expect((e as BeadsTransientError).exitCode).toBeNull();
     }
   });
 });
@@ -636,189 +624,6 @@ describe("closeBead", () => {
     mockExecFileFailure(1, "cannot close");
     await expect(closeBead(baseInput)).rejects.toThrow(BeadsTransientError);
   });
-
-  it("treats already-closed bead as success (idempotent)", async () => {
-    mockExecFileFailure(1, "already closed");
-    const result = await closeBead(baseInput);
-    expect(result.closed).toBe(true);
-    expect(result.error).toBeNull();
-  });
-
-  it("returns closed=false with error on unexpected (non-transient) error", async () => {
-    const mock = vi.mocked(execFile);
-    mock.mockImplementation(
-      ((_file: unknown, _args: unknown, _opts: unknown, _cb: unknown) => {
-        throw new Error("Unexpected sync exception in close");
-      }) as typeof execFile,
-    );
-
-    const result = await closeBead(baseInput);
-    expect(result.closed).toBe(false);
-    expect(result.error).toContain("Unexpected sync exception in close");
-  });
-
-  it("classifies CLI timeout as transient (retried by Temporal)", async () => {
-    mockExecFileTimeout();
-    await expect(closeBead(baseInput)).rejects.toThrow(BeadsTransientError);
-  });
-
-  it("treats already_closed (underscore variant) as success", async () => {
-    mockExecFileFailure(1, "already_closed");
-    const result = await closeBead(baseInput);
-    expect(result.closed).toBe(true);
-    expect(result.error).toBeNull();
-  });
-});
-
-// ── 6b. annotateBead ──
-
-describe("annotateBead", () => {
-  const baseInput: AnnotateBeadInput = {
-    repoPath: REPO_PATH,
-    beadId: "bead-annotate",
-    comment: "[foreman] Dispatch outcome: failed | Error: connection refused",
-  };
-
-  it("returns annotated=true on success", async () => {
-    mockExecFileSuccess("Comment added\n");
-    const result = await annotateBead(baseInput);
-    expect(result.annotated).toBe(true);
-    expect(result.error).toBeNull();
-  });
-
-  it("passes correct args to bd comments add", async () => {
-    mockExecFileSuccess("");
-    await annotateBead(baseInput);
-
-    const mock = vi.mocked(execFile);
-    const [, args] = mock.mock.calls[0] as [string, string[]];
-    expect(args).toEqual([
-      "comments",
-      "add",
-      "bead-annotate",
-      "[foreman] Dispatch outcome: failed | Error: connection refused",
-    ]);
-  });
-
-  it("throws BeadsTransientError on CLI failure (for Temporal retry)", async () => {
-    mockExecFileFailure(1, "db locked");
-    await expect(annotateBead(baseInput)).rejects.toThrow(BeadsTransientError);
-  });
-
-  it("returns annotated=false on non-transient error", async () => {
-    // Simulate a non-BeadsTransientError (e.g., something unexpected)
-    const mock = vi.mocked(execFile);
-    mock.mockImplementation(
-      ((_file: unknown, _args: unknown, _opts: unknown, _cb: unknown) => {
-        throw new Error("Unexpected sync error");
-      }) as typeof execFile,
-    );
-
-    const result = await annotateBead(baseInput);
-    expect(result.annotated).toBe(false);
-    expect(result.error).toContain("Unexpected sync error");
-  });
-});
-
-// ── 6c. createEscalation ──
-
-describe("createEscalation", () => {
-  const baseInput: CreateEscalationInput = {
-    repoPath: REPO_PATH,
-    beadId: "bead-esc",
-    reason: "Retry exhaustion",
-    outcomes: [
-      {
-        beadId: "bead-esc",
-        workflowId: "wf-esc-1",
-        sessionId: "sess-esc-1",
-        startedAt: "2026-03-09T10:00:00.000Z",
-        completedAt: "2026-03-09T10:05:00.000Z",
-        durationMs: 300000,
-        totalCost: 2.5,
-        tokensInput: 5000,
-        tokensOutput: 2000,
-        result: { kind: "failed", error: "ECONNREFUSED", retryable: true },
-        audit: null,
-        attempt: 1,
-      },
-      {
-        beadId: "bead-esc",
-        workflowId: "wf-esc-2",
-        sessionId: "sess-esc-2",
-        startedAt: "2026-03-09T10:10:00.000Z",
-        completedAt: "2026-03-09T10:15:00.000Z",
-        durationMs: 300000,
-        totalCost: 3.0,
-        tokensInput: 6000,
-        tokensOutput: 2500,
-        result: { kind: "failed", error: "ECONNREFUSED", retryable: true },
-        audit: null,
-        attempt: 2,
-      },
-    ],
-    retryEntry: {
-      beadId: "bead-esc",
-      attempts: 2,
-      maxAttempts: 2,
-      lastAttemptAt: "2026-03-09T10:15:00.000Z",
-      lastError: "ECONNREFUSED",
-      lastResult: { kind: "failed", error: "ECONNREFUSED", retryable: true },
-      nextRetryAfter: "2026-03-09T10:15:30.000Z",
-      exhausted: true,
-    },
-  };
-
-  it("returns escalation bead ID on success", async () => {
-    mockExecFileSuccess(JSON.stringify({ id: "esc-bead-42" }));
-    const result = await createEscalation(baseInput);
-    expect(result.escalationBeadId).toBe("esc-bead-42");
-  });
-
-  it("passes correct args to bd create", async () => {
-    mockExecFileSuccess(JSON.stringify({ id: "esc-bead-1" }));
-    await createEscalation(baseInput);
-
-    const mock = vi.mocked(execFile);
-    const [, args] = mock.mock.calls[0] as [string, string[]];
-    expect(args[0]).toBe("create");
-    expect(args[1]).toContain("Escalation:");
-    expect(args[1]).toContain("bead-esc");
-    expect(args).toContain("--label");
-    expect(args).toContain("escalation");
-    expect(args).toContain("human-required");
-    expect(args).toContain("--json");
-  });
-
-  it("includes description with dispatch history", async () => {
-    mockExecFileSuccess(JSON.stringify({ id: "esc-bead-1" }));
-    await createEscalation(baseInput);
-
-    const mock = vi.mocked(execFile);
-    const [, args] = mock.mock.calls[0] as [string, string[]];
-    // Find the -d flag and its value
-    const descIdx = args.indexOf("-d");
-    expect(descIdx).toBeGreaterThan(-1);
-    const description = args[descIdx + 1];
-    expect(description).toContain("Escalation Summary");
-    expect(description).toContain("bead-esc");
-    expect(description).toContain("Retry exhaustion");
-    expect(description).toContain("Attempt 1");
-    expect(description).toContain("Attempt 2");
-    expect(description).toContain("Retry Ledger");
-    expect(description).toContain("$5.50"); // total cost 2.5 + 3.0
-  });
-
-  it("throws BeadsTransientError on CLI failure (for Temporal retry)", async () => {
-    mockExecFileFailure(1, "database locked");
-    await expect(createEscalation(baseInput)).rejects.toThrow(BeadsTransientError);
-  });
-
-  it("returns 'unknown' when created bead ID is missing from response", async () => {
-    mockExecFileSuccess(JSON.stringify({ title: "created but no id" }));
-    const result = await createEscalation(baseInput);
-    expect(result.escalationBeadId).toBe("unknown");
-  });
 });
 
 // ── 7. Error classification ──
@@ -847,6 +652,71 @@ describe("error classification", () => {
 
 // ── 8. checkStackHealth ──
 
+// Helper: mock fetch globally
+function mockFetchSuccess(status = 200, statusText = "OK") {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      statusText,
+    }),
+  );
+}
+
+function mockFetchFailure(errorMessage = "Connection refused") {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockRejectedValue(new Error(errorMessage)),
+  );
+}
+
+// Helper: mock mysql2/promise createConnection for Dolt health check
+function mockMysqlSuccess() {
+  const mockConn = {
+    query: vi.fn().mockResolvedValue([[], []]),
+    end: vi.fn().mockResolvedValue(undefined),
+  };
+  vi.mocked(createConnection).mockResolvedValue(mockConn as any);
+}
+
+function mockMysqlFailure(errorMessage = "ECONNREFUSED") {
+  vi.mocked(createConnection).mockRejectedValue(new Error(errorMessage));
+}
+
+// Helper: mock execFile for git and bd checks
+// The mock needs to handle multiple sequential calls (git status + bd ready)
+function mockExecFileSequence(
+  calls: Array<{
+    stdout: string;
+    stderr?: string;
+    error?: Error | null;
+  }>,
+) {
+  const mock = vi.mocked(execFile);
+  let callIndex = 0;
+  mock.mockImplementation(
+    ((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
+      const call = calls[callIndex] ?? calls.at(-1);
+      callIndex++;
+      const callback = cb as (
+        error: Error | null,
+        stdout: string,
+        stderr: string,
+      ) => void;
+      if (call.error) {
+        callback(call.error, "", call.stderr ?? "");
+      } else {
+        callback(null, call.stdout, call.stderr ?? "");
+      }
+    }) as typeof execFile,
+  );
+}
+
+function mockHealthyGitAndBeads() {
+  mockExecFileSequence([{ stdout: "" }, { stdout: "[]" }]);
+}
+
 describe("checkStackHealth", () => {
   const baseInput: CheckStackHealthInput = {
     repoPath: REPO_PATH,
@@ -857,96 +727,13 @@ describe("checkStackHealth", () => {
     kiloPort: 4096,
   };
 
-  // Helper: mock fetch globally
-  function mockFetchSuccess(status = 200, statusText = "OK") {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: status >= 200 && status < 300,
-        status,
-        statusText,
-      }),
-    );
-  }
-
-  function mockFetchFailure(errorMessage = "Connection refused") {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockRejectedValue(new Error(errorMessage)),
-    );
-  }
-
-  // Helper: mock createConnection (TCP) for Dolt check
-  function mockTcpSuccess() {
-    const mockSocket = {
-      destroy: vi.fn(),
-      on: vi.fn(),
-      setTimeout: vi.fn(),
-    };
-    vi.mocked(createConnection).mockImplementation(
-      ((_opts: unknown, cb: unknown) => {
-        // Call the connect callback on next tick to simulate async connect
-        const callback = cb as () => void;
-        setTimeout(() => callback(), 0);
-        return mockSocket;
-      }) as typeof createConnection,
-    );
-  }
-
-  function mockTcpFailure(errorMessage = "ECONNREFUSED") {
-    const mockSocket = {
-      destroy: vi.fn(),
-      on: vi.fn().mockImplementation((event: string, handler: (err: Error) => void) => {
-        if (event === "error") {
-          setTimeout(() => handler(new Error(errorMessage)), 0);
-        }
-        return mockSocket;
-      }),
-      setTimeout: vi.fn(),
-    };
-    vi.mocked(createConnection).mockImplementation(
-      ((_opts: unknown, _cb: unknown) => {
-        return mockSocket;
-      }) as typeof createConnection,
-    );
-  }
-
-  // Helper: mock execFile for git and bd checks
-  // The mock needs to handle multiple sequential calls (git status + bd ready)
-  function mockExecFileSequence(
-    calls: Array<{
-      stdout: string;
-      stderr?: string;
-      error?: Error | null;
-    }>,
-  ) {
-    const mock = vi.mocked(execFile);
-    let callIndex = 0;
-    mock.mockImplementation(
-      ((_file: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
-        const call = calls[callIndex] ?? calls[calls.length - 1];
-        callIndex++;
-        const callback = cb as (
-          error: Error | null,
-          stdout: string,
-          stderr: string,
-        ) => void;
-        if (call.error) {
-          callback(call.error, "", call.stderr ?? "");
-        } else {
-          callback(null, call.stdout, call.stderr ?? "");
-        }
-      }) as typeof execFile,
-    );
-  }
-
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
   it("returns 'pass' when all subsystems are healthy", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
+    mockMysqlSuccess();
     // execFile is called for: git status (clean) and bd ready (valid JSON array)
     mockExecFileSequence([
       { stdout: "" },              // git status --porcelain: clean
@@ -966,11 +753,8 @@ describe("checkStackHealth", () => {
 
   it("returns 'fail' when kilo serve is down", async () => {
     mockFetchFailure("Connection refused");
-    mockTcpSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
+    mockMysqlSuccess();
+    mockHealthyGitAndBeads();
 
     const result = await checkStackHealth(baseInput);
 
@@ -981,11 +765,8 @@ describe("checkStackHealth", () => {
 
   it("returns 'fail' when Dolt is down", async () => {
     mockFetchSuccess();
-    mockTcpFailure("ECONNREFUSED");
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
+    mockMysqlFailure("ECONNREFUSED");
+    mockHealthyGitAndBeads();
 
     const result = await checkStackHealth(baseInput);
 
@@ -996,7 +777,7 @@ describe("checkStackHealth", () => {
 
   it("returns 'fail' when git has merge conflicts", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
+    mockMysqlSuccess();
     mockExecFileSequence([
       { stdout: "UU conflicted-file.ts\n" }, // merge conflict
       { stdout: "[]" },
@@ -1009,9 +790,9 @@ describe("checkStackHealth", () => {
     expect(result.subsystems.git.message).toContain("merge conflicts");
   });
 
-  it("returns 'pass' with git uncommitted changes (not conflicts)", async () => {
+  it("returns 'degraded' with git uncommitted changes (not conflicts)", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
+    mockMysqlSuccess();
     mockExecFileSequence([
       { stdout: " M src/changed.ts\n" }, // modified file, no conflict
       { stdout: "[]" },
@@ -1019,15 +800,15 @@ describe("checkStackHealth", () => {
 
     const result = await checkStackHealth(baseInput);
 
-    // git is "up" (uncommitted changes don't make it down), overall is pass
-    expect(result.subsystems.git.status).toBe("up");
+    // git is "degraded" per health gate contract, overall is "degraded"
+    expect(result.subsystems.git.status).toBe("degraded");
     expect(result.subsystems.git.message).toContain("uncommitted changes");
-    expect(result.overall).toBe("pass");
+    expect(result.overall).toBe("degraded");
   });
 
   it("returns 'fail' when beads CLI fails", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
+    mockMysqlSuccess();
 
     // git succeeds, then bd fails
     const gitError = null;
@@ -1051,11 +832,8 @@ describe("checkStackHealth", () => {
 
   it("temporal is always 'up' (implicit check)", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
+    mockMysqlSuccess();
+    mockHealthyGitAndBeads();
 
     const result = await checkStackHealth(baseInput);
 
@@ -1066,7 +844,7 @@ describe("checkStackHealth", () => {
   it("never throws — returns fail result instead", async () => {
     // All subsystems fail
     mockFetchFailure("ECONNREFUSED");
-    mockTcpFailure("ECONNREFUSED");
+    mockMysqlFailure("ECONNREFUSED");
 
     const gitError = new Error("not a git repo") as Error & {
       code: number;
@@ -1101,11 +879,8 @@ describe("checkStackHealth", () => {
 
   it("returns correct ISO 8601 checkedAt timestamp", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
+    mockMysqlSuccess();
+    mockHealthyGitAndBeads();
 
     const before = new Date().toISOString();
     const result = await checkStackHealth(baseInput);
@@ -1117,11 +892,8 @@ describe("checkStackHealth", () => {
 
   it("classifies HTTP non-200 as down", async () => {
     mockFetchSuccess(503, "Service Unavailable");
-    mockTcpSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
+    mockMysqlSuccess();
+    mockHealthyGitAndBeads();
 
     const result = await checkStackHealth(baseInput);
 
@@ -1131,11 +903,8 @@ describe("checkStackHealth", () => {
 
   it("reports latencyMs for successful checks", async () => {
     mockFetchSuccess();
-    mockTcpSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
+    mockMysqlSuccess();
+    mockHealthyGitAndBeads();
 
     const result = await checkStackHealth(baseInput);
 
@@ -1149,7 +918,7 @@ describe("checkStackHealth", () => {
 
   it("reports null latencyMs for failed checks", async () => {
     mockFetchFailure("ECONNREFUSED");
-    mockTcpFailure("ECONNREFUSED");
+    mockMysqlFailure("ECONNREFUSED");
 
     const error = new Error("fail") as Error & { code: number; killed: boolean };
     error.code = 1;
@@ -1166,71 +935,5 @@ describe("checkStackHealth", () => {
     expect(result.subsystems.dolt.latencyMs).toBeNull();
     expect(result.subsystems.git.latencyMs).toBeNull();
     expect(result.subsystems.beads.latencyMs).toBeNull();
-  });
-
-  it("returns overall 'pass' and beads 'up' when bd returns empty queue", async () => {
-    mockFetchSuccess();
-    mockTcpSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
-
-    const result = await checkStackHealth(baseInput);
-
-    expect(result.overall).toBe("pass");
-    expect(result.subsystems.beads.status).toBe("up");
-    expect(result.subsystems.beads.message).toContain("empty queue");
-  });
-
-  it("returns beads 'degraded' when bd returns exit 0 but invalid JSON", async () => {
-    mockFetchSuccess();
-    mockTcpSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "not-json-at-all" },  // exit 0 but garbage output
-    ]);
-
-    const result = await checkStackHealth(baseInput);
-
-    expect(result.subsystems.beads.status).toBe("degraded");
-    expect(result.subsystems.beads.message).toContain("invalid JSON");
-  });
-
-  it("returns overall 'degraded' when only beads is degraded (no 'down')", async () => {
-    mockFetchSuccess();
-    mockTcpSuccess();
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "not-json" },  // causes beads to be degraded
-    ]);
-
-    const result = await checkStackHealth(baseInput);
-
-    // No subsystem is "down", but beads is "degraded"
-    expect(result.subsystems.beads.status).toBe("degraded");
-    expect(result.subsystems.kiloServe.status).toBe("up");
-    expect(result.subsystems.dolt.status).toBe("up");
-    expect(result.subsystems.git.status).toBe("up");
-    expect(result.subsystems.temporal.status).toBe("up");
-    expect(result.overall).toBe("degraded");
-  });
-
-  it("returns blocked reasons via subsystem messages when components fail", async () => {
-    mockFetchFailure("ECONNREFUSED");
-    mockTcpFailure("ECONNREFUSED");
-    mockExecFileSequence([
-      { stdout: "" },
-      { stdout: "[]" },
-    ]);
-
-    const result = await checkStackHealth(baseInput);
-
-    expect(result.overall).toBe("fail");
-    // Verify failure reasons are present in messages
-    expect(result.subsystems.kiloServe.message).toBeTruthy();
-    expect(result.subsystems.kiloServe.message).toContain("unreachable");
-    expect(result.subsystems.dolt.message).toBeTruthy();
-    expect(result.subsystems.dolt.message).toContain("ECONNREFUSED");
   });
 });

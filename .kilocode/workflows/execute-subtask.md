@@ -27,6 +27,7 @@ a structured result.
 - `success_criteria` — measurable outcomes for this subtask
 - `session_export_path` — path to prep-phase thinking session (for context)
 - `constraints` — what NOT to touch
+- `interface_appendix` — verified cross-boundary identifiers from explore phase (may be absent)
 
 ---
 
@@ -45,6 +46,18 @@ For external library APIs:
 
 > 📌 `resolve library` → [`commands.resolve_library`](../commands.toml)
 > 📌 `query docs` → [`commands.query_docs`](../commands.toml)
+
+### Interface Discipline Check
+
+**See:** [`.kilocode/rules/interface-discipline.md`](../rules/interface-discipline.md)
+
+If your handoff includes an `interface_appendix`, use it as your source of truth for
+all cross-boundary identifiers (SDK methods, column names, event names, etc.).
+**Use the cited identifiers exactly as written.**
+
+If you need an interface NOT covered by the appendix, you MUST look it up yourself
+using the same sourcing rules (Context7, `read_file` on type definitions, docs) before
+writing code. Do not guess from convention.
 
 ---
 

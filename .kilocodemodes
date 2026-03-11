@@ -659,18 +659,21 @@ customModes:
 
       Explore handoff must include:
       - discovery summary, dependency map objective, files/modules to inspect
+      - instruction to produce Interface Appendix (see .kilocode/rules/interface-discipline.md)
 
       Prepare handoff must include:
-      - exploration summary (from explore child output)
+      - exploration summary (from explore child output), including Interface Appendix if present
       - mode selection rationale (architect for straightforward, thinker-* for complex)
       - export path for thinking session artifact (if using thinker)
       - REQUIRED: instruction to return structured subtask plan (subtask_count, subtasks[], execution_mode)
+      - REQUIRED: forward Interface Appendix verbatim into subtask plan output
 
       Execute handoff (one per subtask) must include:
       - subtask ID and position (e.g. "subtask-2 of 4")
       - subtask objective (from prepare plan)
       - allowed file set (from prepare plan)
       - results from prior subtask children (for context continuity)
+      - interface_appendix (forwarded verbatim from prepare plan — verified identifiers for cross-boundary code)
       - required quality gates (ruff format/check, mypy, pytest)
       - completion evidence requirements
 

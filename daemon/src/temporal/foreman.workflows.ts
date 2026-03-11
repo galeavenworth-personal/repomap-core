@@ -41,7 +41,6 @@ import type {
   DispatchResult,
   RetryLedgerEntry,
   DispatchPlan,
-  ApprovalDecision,
 } from "./foreman.types.js";
 
 import type * as foremanActivities from "./foreman.activities.js";
@@ -81,8 +80,6 @@ export const shutdownSignal = defineSignal<[{ reason: string }]>("foreman.shutdo
 export const forceDispatchSignal = defineSignal<[{ beadId: string }]>("foreman.forceDispatch");
 export const skipBeadSignal = defineSignal<[{ beadId: string; reason: string }]>("foreman.skipBead");
 export const updateConfigSignal = defineSignal<[Partial<ForemanInput>]>("foreman.updateConfig");
-export const approveOutcomeSignal = defineSignal<[{ beadId: string; decision: ApprovalDecision }]>("foreman.approveOutcome");
-export const approveDispatchSignal = defineSignal<[{ beadId: string }]>("foreman.approveDispatch");
 
 // ── Queries ──
 
@@ -168,25 +165,6 @@ function classifyErrorRetryability(error: string): boolean {
 }
 
 /**
- * Classify whether an error thrown by an activity is a BeadsContractError
- * (non-retryable schema/CLI failure). In workflow code we cannot import
- * the activity error class directly, so we classify by error name.
- *
- * Temporal wraps activity errors in ApplicationFailure; the original
- * error name is preserved in the cause chain or message.
- */
-function isBeadsContractError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  // Direct instance (in test mocks)
-  if (err.name === "BeadsContractError") return true;
-  // Temporal ApplicationFailure wrapping
-  if (err.message?.includes("BeadsContractError")) return true;
-  const cause = (err as { cause?: unknown }).cause;
-  if (cause instanceof Error && cause.name === "BeadsContractError") return true;
-  return false;
-}
-
-/**
  * Update the retry ledger for a bead after a failed dispatch.
  * Returns the updated entry.
  */
@@ -202,7 +180,7 @@ function updateRetryLedger(
   const attempts = (existing?.attempts ?? 0) + 1;
   const maxAttempts = maxRetries + 1; // maxRetries is retries-after-first, so total = maxRetries + 1
   const exhausted = attempts >= maxAttempts;
-  const nextRetryAfter = new Date(Date.parse(nowIso) + backoffMs * attempts).toISOString();
+  const nextRetryAfter = new Date(Date.parse(nowIso) + backoffMs).toISOString();
   const error = "error" in result ? (result as { error: string }).error : result.kind;
 
   const entry: RetryLedgerEntry = {
@@ -262,16 +240,6 @@ interface ForemanState {
   // Health
   lastHealthCheck: HealthCheckResult | null;
   lastHealthCheckAt: string | null;
-  consecutiveHealthFailures: number;
-
-  // Intervention / exception state
-  interventionReason: string | null;
-  awaitingInterventionSince: string | null;
-  interventionResumed: boolean;
-
-  // Approval state
-  approvedDispatchBeadIds: string[];
-  outcomeApproval: { beadId: string; decision: ApprovalDecision } | null;
 
   // History
   recentOutcomes: DispatchOutcome[];
@@ -304,14 +272,6 @@ function initializeState(input: ForemanInput, startTimestamp: number): ForemanSt
 
     lastHealthCheck: carried?.lastHealthCheck ?? null,
     lastHealthCheckAt: carried?.lastHealthCheckAt ?? null,
-    consecutiveHealthFailures: carried?.consecutiveHealthFailures ?? 0,
-
-    interventionReason: carried?.interventionReason ?? null,
-    awaitingInterventionSince: carried?.awaitingInterventionSince ?? null,
-    interventionResumed: false,
-
-    approvedDispatchBeadIds: [],
-    outcomeApproval: null,
 
     recentOutcomes: carried?.recentOutcomes ?? [],
     retryLedger: carried?.retryLedger ?? [],
@@ -335,9 +295,6 @@ function serializeState(state: ForemanState): ForemanContinueAsNewState {
     retryLedger: state.retryLedger,
     pauseRequested: state.pauseRequested,
     shutdownRequested: state.shutdownRequested,
-    consecutiveHealthFailures: state.consecutiveHealthFailures,
-    interventionReason: state.interventionReason,
-    awaitingInterventionSince: state.awaitingInterventionSince,
     foremanStartedAt: state.foremanStartedAt,
     lastContinueAsNewAt: new Date().toISOString(),
   };
@@ -391,49 +348,7 @@ function buildStatusSnapshot(state: ForemanState): ForemanStatus {
     retryLedger: state.retryLedger,
     paused: state.pauseRequested,
     shuttingDown: state.shutdownRequested,
-    interventionReason: state.interventionReason,
-    awaitingInterventionSince: state.awaitingInterventionSince,
   };
-}
-
-/**
- * Build a human-readable annotation string for a dispatch outcome.
- * Used by outcome reconciliation to annotate beads with failure/abort/budget context.
- */
-function buildOutcomeAnnotation(result: DispatchResult, outcome: DispatchOutcome): string {
-  const parts: string[] = [
-    `[foreman] Dispatch outcome: ${result.kind}`,
-    `Attempt: ${outcome.attempt}`,
-    `Duration: ${outcome.durationMs}ms`,
-    `Cost: $${outcome.totalCost.toFixed(2)}`,
-    `Workflow: ${outcome.workflowId}`,
-  ];
-
-  switch (result.kind) {
-    case "failed":
-      parts.push(`Error: ${result.error}`);
-      parts.push(`Retryable: ${result.retryable}`);
-      break;
-    case "timeout":
-      parts.push(`Elapsed: ${result.elapsedMs}ms / Timeout: ${result.timeoutMs}ms`);
-      break;
-    case "validation_failed":
-      if (result.missing.length > 0) parts.push(`Missing: ${result.missing.join(", ")}`);
-      if (result.violations.length > 0) parts.push(`Violations: ${result.violations.join(", ")}`);
-      break;
-    case "budget_exceeded":
-      parts.push(`Actual cost: $${result.actualCost.toFixed(2)} / Budget: $${result.budgetUsd.toFixed(2)}`);
-      break;
-    case "aborted":
-      parts.push(`Reason: ${result.reason}`);
-      break;
-  }
-
-  if (outcome.audit) {
-    parts.push(`Audit verdict: ${outcome.audit.verdict} (${outcome.audit.findingCount} findings)`);
-  }
-
-  return parts.join(" | ");
 }
 
 /**
@@ -467,9 +382,12 @@ function buildChildInput(plan: DispatchPlan, input: ForemanInput): AgentTaskInpu
  * For now, the workflow constructs it directly from config defaults.
  */
 function buildDispatchPlan(candidate: BeadCandidate, input: ForemanInput): DispatchPlan {
+  const descBlock = candidate.description
+    ? `\n\nDescription:\n${candidate.description}`
+    : "";
   return {
     beadId: candidate.beadId,
-    prompt: `Execute bead ${candidate.beadId}: ${candidate.title}`,
+    prompt: `Execute bead ${candidate.beadId}: ${candidate.title}${descBlock}`,
     agent: "code",
     title: `foreman: ${candidate.beadId} — ${candidate.title}`,
     timeoutMs: input.defaultTimeoutMs,
@@ -477,6 +395,244 @@ function buildDispatchPlan(candidate: BeadCandidate, input: ForemanInput): Dispa
     cardId: null,
     enforcedOnly: false,
   };
+}
+
+// ── Extracted Helpers (reduce cognitive complexity of main loop) ──
+
+/**
+ * Select a bead candidate: forced dispatch takes priority, otherwise
+ * poll the bead selector activity. Populates description via getBeadDetail.
+ */
+async function selectCandidate(
+  state: ForemanState,
+  config: ForemanInput,
+  forcedBeadId: string | null,
+): Promise<BeadCandidate | null> {
+  state.phase = "selecting";
+
+  if (forcedBeadId) {
+    const detail = await quick.getBeadDetail(config.repoPath, forcedBeadId);
+    return {
+      beadId: detail.beadId,
+      title: detail.title,
+      priority: detail.priority,
+      labels: detail.labels,
+      dependsOn: detail.dependsOn,
+      estimatedComplexity: detail.estimatedComplexity,
+      description: detail.description,
+    };
+  }
+
+  const candidate = await quick.selectNextBead({
+    repoPath: config.repoPath,
+    retryLedger: state.retryLedger,
+    skipList: state.skipList,
+  });
+
+  if (candidate) {
+    // Enrich with description for the dispatch prompt
+    const detail = await quick.getBeadDetail(config.repoPath, candidate.beadId);
+    candidate.description = detail.description;
+  }
+
+  return candidate;
+}
+
+/**
+ * Handle a dispatch outcome: update state, close/retry/escalate/unclaim
+ * as appropriate. Extracted from the main loop to reduce cognitive complexity.
+ */
+async function handleDispatchOutcome(
+  state: ForemanState,
+  config: ForemanInput,
+  candidate: BeadCandidate,
+  dispatchResult: DispatchResult,
+  outcome: DispatchOutcome,
+  dispatchCompletedAt: string,
+): Promise<void> {
+  state.recentOutcomes = pushOutcome(state.recentOutcomes, outcome);
+  state.currentBeadId = null;
+  state.currentWorkflowId = null;
+  state.totalDispatches++;
+
+  switch (dispatchResult.kind) {
+    case "completed": {
+      state.phase = "completing";
+      await durable.closeBead({
+        repoPath: config.repoPath,
+        beadId: candidate.beadId,
+        outcome,
+      });
+      state.totalCompletions++;
+      removeFromRetryLedger(state.retryLedger, candidate.beadId);
+      break;
+    }
+
+    case "failed":
+    case "timeout":
+    case "validation_failed": {
+      state.phase = "failing";
+      const retryEntry = updateRetryLedger(
+        state.retryLedger,
+        candidate.beadId,
+        dispatchResult,
+        config.maxRetriesPerBead,
+        config.retryBackoffMs,
+        dispatchCompletedAt,
+      );
+
+      if (!retryEntry.exhausted && isRetryable(dispatchResult)) {
+        state.phase = "retrying";
+        // Backoff is enforced by nextRetryAfter in the ledger;
+        // the bead will be skipped by selectNextBead until backoff expires
+        await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
+      } else {
+        state.phase = "escalating";
+        // Unclaim the bead so human can re-trigger
+        await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
+        state.totalFailures++;
+        state.totalEscalations++;
+      }
+      break;
+    }
+
+    case "budget_exceeded": {
+      state.phase = "escalating";
+      await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
+      state.totalFailures++;
+      state.totalEscalations++;
+      break;
+    }
+
+    case "aborted": {
+      await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
+      break;
+    }
+  }
+}
+
+function incrementIterationCounters(state: ForemanState): void {
+  state.iterationCount++;
+  state.totalIterations++;
+}
+
+function getShutdownResult(state: ForemanState): ForemanResult | null {
+  if (!state.shutdownRequested) {
+    return null;
+  }
+  return makeResult("shutdown", state, state.shutdownReason);
+}
+
+async function handlePausePhase(state: ForemanState): Promise<ForemanResult | null> {
+  if (!state.pauseRequested) {
+    return null;
+  }
+
+  state.phase = "paused";
+  await condition(() => !state.pauseRequested || state.shutdownRequested);
+  return getShutdownResult(state);
+}
+
+async function runHealthCheckPhase(
+  state: ForemanState,
+  config: ForemanInput,
+): Promise<boolean> {
+  if (shouldRunHealthCheck(state, config)) {
+    state.phase = "health_check";
+    state.lastHealthCheck = await quick.checkStackHealth({
+      repoPath: config.repoPath,
+      doltHost: config.doltHost,
+      doltPort: config.doltPort,
+      doltDatabase: config.doltDatabase,
+      kiloHost: config.kiloHost,
+      kiloPort: config.kiloPort,
+    });
+    state.lastHealthCheckAt = state.lastHealthCheck.checkedAt;
+  }
+
+  if (state.lastHealthCheck?.overall !== "fail") {
+    return false;
+  }
+
+  state.phase = "idle";
+  await sleep(config.pollIntervalMs);
+  incrementIterationCounters(state);
+  return true;
+}
+
+async function selectCandidatePhase(
+  state: ForemanState,
+  config: ForemanInput,
+): Promise<BeadCandidate | null> {
+  const forcedBeadId = state.forceDispatchQueue.shift() ?? null;
+  const candidate = await selectCandidate(state, config, forcedBeadId);
+
+  if (candidate) {
+    return candidate;
+  }
+
+  state.phase = "idle";
+  await sleep(config.pollIntervalMs);
+  incrementIterationCounters(state);
+  return null;
+}
+
+async function dispatchCandidatePhase(
+  state: ForemanState,
+  config: ForemanInput,
+  candidate: BeadCandidate,
+): Promise<void> {
+  state.phase = "dispatching";
+  state.currentBeadId = candidate.beadId;
+  const plan = buildDispatchPlan(candidate, config);
+
+  await quick.updateBeadStatus(config.repoPath, candidate.beadId, "in_progress");
+
+  const childInput = buildChildInput(plan, config);
+  const childWorkflowId = `foreman-dispatch-${candidate.beadId}-${Date.now()}`;
+  state.currentWorkflowId = childWorkflowId;
+
+  state.phase = "monitoring";
+  const dispatchStartedAt = new Date().toISOString();
+
+  const childHandle = await startChild(agentTaskWorkflow, {
+    workflowId: childWorkflowId,
+    args: [childInput],
+    taskQueue: config.taskQueue,
+  });
+
+  const agentResult = await childHandle.result();
+
+  const dispatchCompletedAt = new Date().toISOString();
+  const dispatchResult = toDispatchResult(agentResult);
+  const durationMs = Date.parse(dispatchCompletedAt) - Date.parse(dispatchStartedAt);
+
+  const currentAttempt =
+    (state.retryLedger.find((e) => e.beadId === candidate.beadId)?.attempts ?? 0) + 1;
+
+  const outcome: DispatchOutcome = {
+    beadId: candidate.beadId,
+    workflowId: childWorkflowId,
+    sessionId: agentResult.sessionId,
+    startedAt: dispatchStartedAt,
+    completedAt: dispatchCompletedAt,
+    durationMs,
+    totalCost: agentResult.totalCost,
+    tokensInput: agentResult.tokensInput,
+    tokensOutput: agentResult.tokensOutput,
+    result: dispatchResult,
+    audit: agentResult.audit,
+    attempt: currentAttempt,
+  };
+
+  await handleDispatchOutcome(
+    state,
+    config,
+    candidate,
+    dispatchResult,
+    outcome,
+    dispatchCompletedAt,
+  );
 }
 
 // ── Workflow ──
@@ -493,13 +649,6 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
 
   setHandler(resumeSignal, () => {
     state.pauseRequested = false;
-    // Resume also clears intervention state (operator acknowledging)
-    if (state.phase === "awaiting_intervention") {
-      state.interventionResumed = true;
-      state.interventionReason = null;
-      state.awaitingInterventionSince = null;
-      state.consecutiveHealthFailures = 0;
-    }
   });
 
   setHandler(shutdownSignal, ({ reason }) => {
@@ -523,16 +672,6 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
     config = { ...config, ...safe };
   });
 
-  setHandler(approveOutcomeSignal, ({ beadId, decision }) => {
-    state.outcomeApproval = { beadId, decision };
-  });
-
-  setHandler(approveDispatchSignal, ({ beadId }) => {
-    if (!state.approvedDispatchBeadIds.includes(beadId)) {
-      state.approvedDispatchBeadIds.push(beadId);
-    }
-  });
-
   // ── Register query handlers ──
 
   setHandler(foremanStatusQuery, () => buildStatusSnapshot(state));
@@ -549,7 +688,6 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
 
   try {
     while (true) {
-      // -- Check continue-as-new thresholds --
       if (shouldContinueAsNew(state, config)) {
         await continueAsNew<typeof foremanWorkflow>({
           ...config,
@@ -557,431 +695,28 @@ export async function foremanWorkflow(input: ForemanInput): Promise<ForemanResul
         });
       }
 
-      // -- Check operator signals --
-      if (state.shutdownRequested) {
-        return makeResult("shutdown", state, state.shutdownReason);
+      const shutdownResult = getShutdownResult(state);
+      if (shutdownResult) {
+        return shutdownResult;
       }
 
-      if (state.pauseRequested) {
-        state.phase = "paused";
-        await condition(() => !state.pauseRequested || state.shutdownRequested);
-        if (state.shutdownRequested) {
-          return makeResult("shutdown", state, state.shutdownReason);
-        }
-        continue; // Re-enter loop after resume
+      const pauseResult = await handlePausePhase(state);
+      if (pauseResult) {
+        return pauseResult;
       }
 
-      // -- Check for forced dispatch --
-      const forcedBeadId = state.forceDispatchQueue.shift() ?? null;
-
-      // -- Phase: Health Check (throttled) --
-      if (shouldRunHealthCheck(state, config)) {
-        state.phase = "health_check";
-        state.lastHealthCheck = await quick.checkStackHealth({
-          repoPath: config.repoPath,
-          doltHost: config.doltHost,
-          doltPort: config.doltPort,
-          doltDatabase: config.doltDatabase,
-          kiloHost: config.kiloHost,
-          kiloPort: config.kiloPort,
-        });
-        state.lastHealthCheckAt = state.lastHealthCheck.checkedAt;
-      }
-
-      // If health gate fails, track consecutive failures and potentially escalate
-      if (state.lastHealthCheck?.overall === "fail") {
-        state.consecutiveHealthFailures++;
-
-        if (state.consecutiveHealthFailures >= config.healthFailureThreshold) {
-          // Persistent unhealthy stack — escalate to operator
-          const failedSubsystems = Object.entries(state.lastHealthCheck.subsystems)
-            .filter(([, sub]) => sub.status === "down")
-            .map(([name]) => name);
-          const reason = `Persistent health failure (${state.consecutiveHealthFailures} consecutive): ${failedSubsystems.join(", ")} down`;
-
-          state.phase = "awaiting_intervention";
-          state.interventionReason = reason;
-          state.awaitingInterventionSince = new Date().toISOString();
-
-          // Create escalation bead for the health failure
-          await durable.createEscalation({
-            repoPath: config.repoPath,
-            beadId: `health-${Date.now()}`,
-            reason,
-            outcomes: [],
-            retryEntry: {
-              beadId: "health-check",
-              attempts: state.consecutiveHealthFailures,
-              maxAttempts: config.healthFailureThreshold,
-              lastAttemptAt: state.lastHealthCheck.checkedAt,
-              lastError: reason,
-              lastResult: { kind: "failed", error: reason, retryable: false },
-              nextRetryAfter: new Date().toISOString(),
-              exhausted: true,
-            },
-          });
-          state.totalEscalations++;
-
-          // Wait for operator resume signal
-          await condition(() => state.interventionResumed || state.shutdownRequested);
-          if (state.shutdownRequested) {
-            return makeResult("shutdown", state, state.shutdownReason);
-          }
-
-          // Operator resumed — clear intervention state, re-check health
-          state.interventionResumed = false;
-          state.phase = "polling";
-          continue;
-        }
-
-        // Below threshold — idle and retry on next iteration
-        state.phase = "idle";
-        await sleep(config.pollIntervalMs);
-        state.iterationCount++;
-        state.totalIterations++;
+      const healthBlocked = await runHealthCheckPhase(state, config);
+      if (healthBlocked) {
         continue;
       }
 
-      // Health passed (or no check yet) — reset consecutive failure counter
-      state.consecutiveHealthFailures = 0;
-
-      // -- Phase: Select --
-      state.phase = "selecting";
-      let candidate: BeadCandidate | null = null;
-
-      try {
-        if (forcedBeadId) {
-          // Force dispatch: fetch the specific bead detail
-          const detail = await quick.getBeadDetail(config.repoPath, forcedBeadId);
-          candidate = {
-            beadId: detail.beadId,
-            title: detail.title,
-            priority: detail.priority,
-            labels: detail.labels,
-            dependsOn: detail.dependsOn,
-            estimatedComplexity: detail.estimatedComplexity,
-          };
-        } else {
-          candidate = await quick.selectNextBead({
-            repoPath: config.repoPath,
-            retryLedger: state.retryLedger,
-            skipList: state.skipList,
-          });
-        }
-      } catch (activityErr: unknown) {
-        if (isBeadsContractError(activityErr)) {
-          // Irrecoverable CLI/schema failure — await operator intervention
-          const errMsg = activityErr instanceof Error ? activityErr.message : String(activityErr);
-          state.phase = "awaiting_intervention";
-          state.interventionReason = `BeadsContractError during selection: ${errMsg}`;
-          state.awaitingInterventionSince = new Date().toISOString();
-          state.totalEscalations++;
-
-          await condition(() => state.interventionResumed || state.shutdownRequested);
-          if (state.shutdownRequested) {
-            return makeResult("shutdown", state, state.shutdownReason);
-          }
-
-          // Operator resumed — retry the failed operation once
-          state.interventionResumed = false;
-          state.interventionReason = null;
-          state.awaitingInterventionSince = null;
-          state.phase = "polling";
-          continue;
-        }
-        throw activityErr; // Re-throw non-contract errors for outer catch
-      }
-
+      const candidate = await selectCandidatePhase(state, config);
       if (!candidate) {
-        state.phase = "idle";
-        await sleep(config.pollIntervalMs);
-        state.iterationCount++;
-        state.totalIterations++;
         continue;
       }
 
-      // -- Phase: Pre-dispatch approval gate --
-      // If bead has sensitive/human-required labels, require operator approval
-      const requiresApproval = candidate.labels.some(
-        (l) => l === "requires-human" || l === "sensitive" || l === "requires-approval",
-      );
-
-      if (requiresApproval && !state.approvedDispatchBeadIds.includes(candidate.beadId)) {
-        state.phase = "awaiting_approval";
-        state.interventionReason = `Policy-required approval before dispatch: bead ${candidate.beadId} has labels [${candidate.labels.join(", ")}]`;
-        state.awaitingInterventionSince = new Date().toISOString();
-
-        // Wait for operator approveDispatch signal for this bead
-        await condition(
-          () =>
-            state.approvedDispatchBeadIds.includes(candidate!.beadId) ||
-            state.shutdownRequested,
-        );
-
-        if (state.shutdownRequested) {
-          return makeResult("shutdown", state, state.shutdownReason);
-        }
-
-        // Approval received — clear intervention state and proceed
-        state.interventionReason = null;
-        state.awaitingInterventionSince = null;
-      }
-
-      // -- Phase: Dispatch --
-      state.phase = "dispatching";
-      state.currentBeadId = candidate.beadId;
-      const plan = buildDispatchPlan(candidate, config);
-
-      // Claim the bead
-      try {
-        await quick.updateBeadStatus(config.repoPath, candidate.beadId, "in_progress");
-      } catch (claimErr: unknown) {
-        if (isBeadsContractError(claimErr)) {
-          const errMsg = claimErr instanceof Error ? claimErr.message : String(claimErr);
-          state.phase = "awaiting_intervention";
-          state.interventionReason = `BeadsContractError during bead claim: ${errMsg}`;
-          state.awaitingInterventionSince = new Date().toISOString();
-          state.totalEscalations++;
-
-          await condition(() => state.interventionResumed || state.shutdownRequested);
-          if (state.shutdownRequested) {
-            return makeResult("shutdown", state, state.shutdownReason);
-          }
-
-          state.interventionResumed = false;
-          state.interventionReason = null;
-          state.awaitingInterventionSince = null;
-          state.phase = "polling";
-          continue;
-        }
-        throw claimErr;
-      }
-
-      // Start child workflow
-      const childInput = buildChildInput(plan, config);
-      const childWorkflowId = `foreman-dispatch-${candidate.beadId}-${Date.now()}`;
-      state.currentWorkflowId = childWorkflowId;
-
-      // -- Phase: Monitor --
-      state.phase = "monitoring";
-      const dispatchStartedAt = new Date().toISOString();
-
-      const childHandle = await startChild(agentTaskWorkflow, {
-        workflowId: childWorkflowId,
-        args: [childInput],
-        taskQueue: config.taskQueue,
-      });
-
-      // Wait for child completion
-      const agentResult = await childHandle.result();
-
-      const dispatchCompletedAt = new Date().toISOString();
-      const dispatchResult = toDispatchResult(agentResult);
-      const durationMs = Date.parse(dispatchCompletedAt) - Date.parse(dispatchStartedAt);
-
-      const outcome: DispatchOutcome = {
-        beadId: candidate.beadId,
-        workflowId: childWorkflowId,
-        sessionId: agentResult.sessionId,
-        startedAt: dispatchStartedAt,
-        completedAt: dispatchCompletedAt,
-        durationMs,
-        totalCost: agentResult.totalCost,
-        tokensInput: agentResult.tokensInput,
-        tokensOutput: agentResult.tokensOutput,
-        result: dispatchResult,
-        audit: agentResult.audit,
-        attempt: (state.retryLedger.find((e) => e.beadId === candidate!.beadId)?.attempts ?? 0) + 1,
-      };
-
-      // -- Record outcome --
-      state.recentOutcomes = pushOutcome(state.recentOutcomes, outcome);
-      state.currentBeadId = null;
-      state.currentWorkflowId = null;
-      state.totalDispatches++;
-
-      // -- Phase: Outcome Reconciliation --
-      // Maps durable child workflow outcomes into correct bead mutations.
-      // Rules:
-      //   completed       → bd close (happy path), or await approval if requires-approval label
-      //   failed/timeout  → annotate + retry or escalate
-      //   aborted         → annotate + leave open
-      //   validation_failed/budget_exceeded → annotate + escalate or leave open
-      switch (dispatchResult.kind) {
-        case "completed": {
-          // Check if bead requires operator approval before close
-          const needsOutcomeApproval = candidate.labels.includes("requires-approval");
-
-          if (needsOutcomeApproval) {
-            state.phase = "awaiting_approval";
-            state.interventionReason = `Outcome requires approval before close: bead ${candidate.beadId}`;
-            state.awaitingInterventionSince = new Date().toISOString();
-
-            // Wait for operator approveOutcome signal
-            await condition(
-              () =>
-                (state.outcomeApproval !== null &&
-                  state.outcomeApproval.beadId === candidate!.beadId) ||
-                state.shutdownRequested,
-            );
-
-            if (state.shutdownRequested) {
-              return makeResult("shutdown", state, state.shutdownReason);
-            }
-
-            const approval = state.outcomeApproval!;
-            state.outcomeApproval = null;
-            state.interventionReason = null;
-            state.awaitingInterventionSince = null;
-
-            switch (approval.decision) {
-              case "close":
-                state.phase = "completing";
-                await durable.closeBead({
-                  repoPath: config.repoPath,
-                  beadId: candidate.beadId,
-                  outcome,
-                });
-                state.totalCompletions++;
-                removeFromRetryLedger(state.retryLedger, candidate.beadId);
-                break;
-              case "retry":
-                // Put bead back to ready for re-dispatch on next iteration
-                await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
-                break;
-              case "skip":
-                if (!state.skipList.includes(candidate.beadId)) {
-                  state.skipList.push(candidate.beadId);
-                }
-                await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
-                break;
-            }
-          } else {
-            state.phase = "completing";
-            await durable.closeBead({
-              repoPath: config.repoPath,
-              beadId: candidate.beadId,
-              outcome,
-            });
-            state.totalCompletions++;
-            removeFromRetryLedger(state.retryLedger, candidate.beadId);
-          }
-          break;
-        }
-
-        case "failed":
-        case "timeout":
-        case "validation_failed": {
-          state.phase = "failing";
-
-          // Annotate the bead with failure context for audit trail
-          const failAnnotation = buildOutcomeAnnotation(dispatchResult, outcome);
-          await durable.annotateBead({
-            repoPath: config.repoPath,
-            beadId: candidate.beadId,
-            comment: failAnnotation,
-          });
-
-          const retryEntry = updateRetryLedger(
-            state.retryLedger,
-            candidate.beadId,
-            dispatchResult,
-            config.maxRetriesPerBead,
-            config.retryBackoffMs,
-            dispatchCompletedAt,
-          );
-
-          if (!retryEntry.exhausted && isRetryable(dispatchResult)) {
-            state.phase = "retrying";
-            // Backoff is enforced by nextRetryAfter in the ledger;
-            // the bead will be skipped by selectNextBead until backoff expires
-          } else {
-            state.phase = "escalating";
-
-            // Collect all outcomes for this bead across attempts
-            const beadOutcomes = state.recentOutcomes.filter(
-              (o) => o.beadId === candidate!.beadId,
-            );
-
-            // Determine escalation reason
-            const escalationReason = retryEntry.exhausted
-              ? "Retry exhaustion"
-              : `Non-retryable ${dispatchResult.kind}`;
-
-            // Create escalation bead for human intervention
-            await durable.createEscalation({
-              repoPath: config.repoPath,
-              beadId: candidate.beadId,
-              reason: escalationReason,
-              outcomes: beadOutcomes,
-              retryEntry,
-            });
-
-            // Unclaim the bead so human can re-trigger
-            await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
-            state.totalFailures++;
-            state.totalEscalations++;
-          }
-          break;
-        }
-
-        case "budget_exceeded": {
-          state.phase = "escalating";
-
-          // Annotate with budget exceeded details
-          const budgetAnnotation = buildOutcomeAnnotation(dispatchResult, outcome);
-          await durable.annotateBead({
-            repoPath: config.repoPath,
-            beadId: candidate.beadId,
-            comment: budgetAnnotation,
-          });
-
-          // Collect all outcomes for this bead
-          const beadOutcomes = state.recentOutcomes.filter(
-            (o) => o.beadId === candidate!.beadId,
-          );
-
-          // Budget exceeded is non-retryable — always escalate
-          // Build a synthetic retry entry for the escalation
-          const budgetRetryEntry = updateRetryLedger(
-            state.retryLedger,
-            candidate.beadId,
-            dispatchResult,
-            config.maxRetriesPerBead,
-            config.retryBackoffMs,
-            dispatchCompletedAt,
-          );
-
-          await durable.createEscalation({
-            repoPath: config.repoPath,
-            beadId: candidate.beadId,
-            reason: "Budget exceeded",
-            outcomes: beadOutcomes,
-            retryEntry: budgetRetryEntry,
-          });
-
-          await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
-          state.totalFailures++;
-          state.totalEscalations++;
-          break;
-        }
-
-        case "aborted": {
-          // Annotate with abort reason, leave bead open for manual intervention
-          const abortAnnotation = buildOutcomeAnnotation(dispatchResult, outcome);
-          await durable.annotateBead({
-            repoPath: config.repoPath,
-            beadId: candidate.beadId,
-            comment: abortAnnotation,
-          });
-
-          await quick.updateBeadStatus(config.repoPath, candidate.beadId, "ready");
-          break;
-        }
-      }
-
-      state.iterationCount++;
-      state.totalIterations++;
+      await dispatchCandidatePhase(state, config, candidate);
+      incrementIterationCounters(state);
     }
   } catch (err: unknown) {
     if (isCancellation(err)) {
