@@ -29,7 +29,10 @@ find_tsx() {
         return 0
     fi
     # Fall back to global
-    command -v tsx 2>/dev/null && return 0
+    if command -v tsx >/dev/null 2>&1; then
+        command -v tsx
+        return 0
+    fi
     # Fall back to npx
     if command -v npx >/dev/null 2>&1; then
         echo "npx tsx"
@@ -44,11 +47,13 @@ ensure_deps() {
         echo "Installing daemon dependencies (first run)..."
         (cd "${DAEMON_DIR}" && npm install --silent) || die "npm install failed"
     fi
+    return 0
 }
 
 # ── Map flags to CLI commands ─────────────────────────────────────────────
 map_command() {
-    case "${1:-}" in
+    local flag="${1:-}"
+    case "${flag}" in
         "")       echo "ensure" ;;
         --check)  echo "check" ;;
         --stop)   echo "stop" ;;
@@ -61,7 +66,7 @@ map_command() {
             echo "Logic: daemon/src/infra/dolt-lifecycle.ts"
             exit 0
             ;;
-        *)  die "Unknown flag: $1. Use --help for usage." ;;
+        *)  die "Unknown flag: ${flag}. Use --help for usage." ;;
     esac
 }
 

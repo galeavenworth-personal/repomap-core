@@ -15,8 +15,8 @@
  * See: repomap-core-4hw
  */
 
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, openSync, readFileSync, unlinkSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, openSync, readFileSync, readlinkSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import mysql from "mysql2/promise";
 
@@ -45,13 +45,16 @@ export interface DoltLifecycleConfig {
 
 const HOME = process.env.HOME ?? "/home/user";
 
+function resolveDoltBin(): string {
+  const envBin = process.env.DOLT_BIN || "";
+  if (envBin !== "") return envBin;
+  const localBin = join(HOME, ".local/bin/dolt");
+  if (existsSync(localBin)) return localBin;
+  return "dolt";
+}
+
 export function defaultConfig(): DoltLifecycleConfig {
-  const doltBin =
-    (process.env.DOLT_BIN || "") !== ""
-      ? process.env.DOLT_BIN!
-      : existsSync(join(HOME, ".local/bin/dolt"))
-        ? join(HOME, ".local/bin/dolt")
-        : "dolt";
+  const doltBin = resolveDoltBin();
 
   return {
     dataDir: process.env.DOLT_DATA_DIR ?? join(HOME, ".dolt-data/beads"),
@@ -66,7 +69,7 @@ export function defaultConfig(): DoltLifecycleConfig {
       join(HOME, "Projects/repomap-core/.beads"),
       join(HOME, "Projects-Employee-1/repomap-core/.beads"),
     ],
-    logFile: "/tmp/dolt-server.log",
+    logFile: process.env.DOLT_LOG_FILE ?? join(HOME, ".dolt-data/dolt-server.log"),
   };
 }
 
@@ -179,41 +182,35 @@ export async function checkServerHealth(
 // ── Process management ───────────────────────────────────────────────────
 
 /**
- * Find the PID of any running dolt sql-server process.
- * Uses /proc on Linux for reliable detection.
+ * Find ALL running dolt sql-server PIDs by scanning /proc.
+ * This avoids depending on the external `pgrep` binary.
  */
-export function findDoltServerPid(): number | null {
+export function findAllDoltServerPids(): number[] {
   try {
-    const output = execFileSync("pgrep", ["-f", "dolt sql-server"], {
-      encoding: "utf8",
-      timeout: 3000,
-    }).trim();
-    const pids = output
-      .split("\n")
-      .map((s) => Number.parseInt(s.trim(), 10))
-      .filter((n) => !Number.isNaN(n));
-    return pids.length > 0 ? pids[0] : null;
+    const procEntries = readdirSync("/proc").filter((e) => /^\d+$/.test(e));
+    const results: number[] = [];
+    for (const entry of procEntries) {
+      try {
+        const cmdline = readFileSync(`/proc/${entry}/cmdline`, "utf8");
+        if (cmdline.includes("dolt") && cmdline.includes("sql-server")) {
+          results.push(Number.parseInt(entry, 10));
+        }
+      } catch {
+        // Process may have exited between readdir and readFile
+      }
+    }
+    return results;
   } catch {
-    return null;
+    return [];
   }
 }
 
 /**
- * Find ALL running dolt sql-server PIDs.
+ * Find the PID of any running dolt sql-server process.
  */
-export function findAllDoltServerPids(): number[] {
-  try {
-    const output = execFileSync("pgrep", ["-f", "dolt sql-server"], {
-      encoding: "utf8",
-      timeout: 3000,
-    }).trim();
-    return output
-      .split("\n")
-      .map((s) => Number.parseInt(s.trim(), 10))
-      .filter((n) => !Number.isNaN(n));
-  } catch {
-    return [];
-  }
+export function findDoltServerPid(): number | null {
+  const pids = findAllDoltServerPids();
+  return pids.length > 0 ? pids[0] : null;
 }
 
 /**
@@ -222,17 +219,9 @@ export function findAllDoltServerPids(): number[] {
  */
 export function getProcessCwd(pid: number): string | null {
   try {
-    return readFileSync(`/proc/${pid}/cwd`, "utf8").replace(/\0/g, "");
+    return readlinkSync(`/proc/${pid}/cwd`);
   } catch {
-    // /proc/PID/cwd is a symlink, readlink is more reliable
-    try {
-      return execFileSync("readlink", [`/proc/${pid}/cwd`], {
-        encoding: "utf8",
-        timeout: 2000,
-      }).trim();
-    } catch {
-      return null;
-    }
+    return null;
   }
 }
 
@@ -266,7 +255,7 @@ export function killAllDoltServers(): number[] {
     });
     if (alive.length === 0) break;
     // Brief sync pause
-    try { execFileSync("sleep", ["0.2"], { timeout: 1000 }); } catch { /* ignore */ }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
   }
 
   // Force-kill survivors

@@ -6,14 +6,13 @@
  * and can be enabled manually.
  */
 
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import {
   type DoltLifecycleConfig,
   defaultConfig,
   clearBdStateFiles,
   queryServerDatabases,
   checkServerHealth,
-  findAllDoltServerPids,
   getProcessCwd,
 } from "../src/infra/dolt-lifecycle.js";
 import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";

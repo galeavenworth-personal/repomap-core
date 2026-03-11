@@ -83,4 +83,5 @@ async function main(): Promise<number> {
   return 0;
 }
 
-main().then((code) => process.exit(code));
+const code = await main();
+process.exit(code);
