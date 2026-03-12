@@ -79,3 +79,125 @@ def test_compile_card_exit_prompts_smoke_with_dummy_lm() -> None:
 def test_build_refined_card_exit_returns_refine_module() -> None:
     refined = card_exit.build_refined_card_exit(card_exit.PunchCardExitModule())
     assert refined is not None
+
+
+def _orchestration_training_examples() -> list[dspy.Example]:
+    return [
+        dspy.Example(
+            workflow_name="plant-orchestrate",
+            expected_child_modes="explore,execute-subtask",
+            expected_phase_count="3",
+            forbidden_parent_tools="edit_file,write_to_file",
+            historical_deviations="parent called edit_file directly",
+            delegation_instructions="Spawn explore child first, then execute-subtask child for implementation.",
+            phase_ordering_instructions="Execute 3 sequential phases: explore, prepare, execute.",
+            tool_prohibition_instructions="The orchestrator must not call edit_file or write_to_file directly.",
+        ).with_inputs(
+            "workflow_name",
+            "expected_child_modes",
+            "expected_phase_count",
+            "forbidden_parent_tools",
+            "historical_deviations",
+        ),
+        dspy.Example(
+            workflow_name="review-orchestrate",
+            expected_child_modes="code-review,test-runner",
+            expected_phase_count="2",
+            forbidden_parent_tools="run_command",
+            historical_deviations="skipped test-runner phase",
+            delegation_instructions="Delegate to code-review and test-runner children.",
+            phase_ordering_instructions="Execute 2 sequential phases: review then test.",
+            tool_prohibition_instructions="The orchestrator must not call run_command directly.",
+        ).with_inputs(
+            "workflow_name",
+            "expected_child_modes",
+            "expected_phase_count",
+            "forbidden_parent_tools",
+            "historical_deviations",
+        ),
+    ]
+
+
+def test_compile_orchestration_compliance_smoke_with_dummy_lm() -> None:
+    lm = DummyLM(
+        [
+            {
+                "delegation_instructions": "Spawn explore child first, then execute-subtask child for implementation.",
+                "phase_ordering_instructions": "Execute 3 sequential phases: explore, prepare, execute.",
+                "tool_prohibition_instructions": "The orchestrator must not call edit_file or write_to_file directly.",
+            },
+            {
+                "delegation_instructions": "Delegate to code-review and test-runner children.",
+                "phase_ordering_instructions": "Execute 2 sequential phases: review then test.",
+                "tool_prohibition_instructions": "The orchestrator must not call run_command directly.",
+            },
+        ]
+        * 32
+    )
+
+    with patch("optimization.card_exit.dolt_bus.write_compiled_prompt") as writer:
+        results = card_exit.compile_orchestration_compliance_prompts(
+            lm=lm,
+            training_examples=_orchestration_training_examples(),
+            config=card_exit.CardExitCompileConfig(
+                max_bootstrapped_demos=1,
+                max_labeled_demos=2,
+                max_rounds=1,
+            ),
+        )
+
+    assert len(results) == 2
+    assert writer.call_count == 2
+    assert [result.workflow_name for result in results] == [
+        "plant-orchestrate",
+        "review-orchestrate",
+    ]
+
+
+def test_orchestration_compliance_metric_scoring() -> None:
+    example = dspy.Example(
+        workflow_name="plant-orchestrate",
+        expected_child_modes="explore,execute-subtask",
+        expected_phase_count="3",
+        forbidden_parent_tools="edit_file,write_to_file",
+        historical_deviations="parent called edit_file directly",
+    )
+
+    # Empty outputs → 0.0
+    empty_pred = dspy.Example(
+        delegation_instructions="",
+        phase_ordering_instructions="",
+        tool_prohibition_instructions="",
+    )
+    assert card_exit.orchestration_compliance_metric(example, empty_pred) == 0.0
+
+    # Base only (no keywords matched) → 0.3
+    base_pred = dspy.Example(
+        delegation_instructions="do something generic",
+        phase_ordering_instructions="do something generic",
+        tool_prohibition_instructions="do something generic",
+    )
+    assert card_exit.orchestration_compliance_metric(example, base_pred) == 0.3
+
+    # All bonuses → 1.0
+    full_pred = dspy.Example(
+        delegation_instructions="Spawn explore child and execute-subtask child.",
+        phase_ordering_instructions="Execute 3 sequential phases in order.",
+        tool_prohibition_instructions="Never call edit_file or write_to_file.",
+    )
+    assert card_exit.orchestration_compliance_metric(example, full_pred) == 1.0
+
+    # Partial: only child mode match → 0.5
+    partial_pred = dspy.Example(
+        delegation_instructions="Spawn explore child.",
+        phase_ordering_instructions="do generic ordering",
+        tool_prohibition_instructions="do generic prohibition",
+    )
+    assert card_exit.orchestration_compliance_metric(example, partial_pred) == 0.5
+
+
+def test_build_refined_orchestration_compliance_returns_refine_module() -> None:
+    refined = card_exit.build_refined_orchestration_compliance(
+        card_exit.OrchestrationComplianceModule()
+    )
+    assert refined is not None
