@@ -114,7 +114,13 @@ export function queryMergedPrs(
 
 /**
  * Close a Beads issue by task-id via the bd CLI.
- * Throws on bd error.
+ *
+ * Thin wrapper over the injectable BdRunner for testability.
+ * The canonical closeBead implementation lives in bead-ops.ts;
+ * this wrapper exists because pr-reconcile uses dependency injection
+ * for its bd interactions.
+ *
+ * @see {@link ../infra/bead-ops.ts} for the canonical sync implementation.
  */
 export function closeBead(
   taskId: string,

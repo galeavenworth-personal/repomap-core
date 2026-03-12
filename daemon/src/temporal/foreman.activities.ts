@@ -688,6 +688,8 @@ export async function updateBeadStatus(
  * Close a bead after durable success.
  *
  * Runs `bd close <beadId>` in the repository directory.
+ * This is the async Temporal activity wrapper. The canonical sync
+ * implementation lives in {@link ../infra/bead-ops.ts | bead-ops.closeBead}.
  *
  * ADR Section 5.6.
  */

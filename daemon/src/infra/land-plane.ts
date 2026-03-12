@@ -24,6 +24,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { closeBead as closeBeadCanonical } from "./bead-ops.js";
+
 // ── Configuration ────────────────────────────────────────────────────────
 
 export interface GateDefinition {
@@ -272,29 +274,9 @@ export function verifyAuditProof(
 
 // ── Bead management ──────────────────────────────────────────────────────
 
-/**
- * Close a bead via `bd close`. Idempotent — does not fail if already closed.
- */
-export function closeBead(
-  beadId: string,
-  config: LandPlaneConfig,
-  log: (msg: string) => void = console.log,
-): boolean {
-  log(`Closing bead: ${beadId}`);
-
-  const result = spawnSync(config.bdBin, ["close", beadId], {
-    cwd: config.rootDir,
-    stdio: ["ignore", "inherit", "inherit"],
-    timeout: 30_000,
-  });
-
-  // Idempotent: always return true (matches `|| true` in shell)
-  if (result.status !== 0) {
-    log(`bd close exited with ${result.status ?? "signal"} (ignored, idempotent)`);
-  }
-
-  return true;
-}
+// closeBead is imported from the canonical bead-ops module.
+// Re-export for backward compatibility with existing consumers.
+export { closeBead } from "./bead-ops.js";
 
 /**
  * Sync Beads state via `bd sync`.
@@ -394,7 +376,11 @@ export function landPlane(
   }
 
   // 4. Close bead (idempotent)
-  closeBead(options.beadId, config, log);
+  closeBeadCanonical(options.beadId, config.bdBin, {
+    cwd: config.rootDir,
+    idempotent: true,
+    log,
+  });
 
   // 5. Sync (unless disabled)
   let syncStatus = "YES";

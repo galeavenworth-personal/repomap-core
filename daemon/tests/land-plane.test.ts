@@ -19,10 +19,10 @@ import {
   defaultConfig,
   verifyAuditProof,
   runGates,
-  closeBead,
   syncBeads,
   landPlane,
 } from "../src/infra/land-plane.js";
+import { closeBead } from "../src/infra/bead-ops.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -242,14 +242,18 @@ describe("LandPlane", () => {
     });
   });
 
-  describe("closeBead", () => {
+  describe("closeBead (canonical from bead-ops)", () => {
     it("is idempotent — always returns true", () => {
       // closeBead calls bd close with || true semantics
       // We verify the interface contract: it always returns true
       const config = makeTestConfig(testDir);
       // Note: This will fail to find bd binary in test, but closeBead
       // is designed to be idempotent and always return true
-      const result = closeBead(BEAD_ID, config, noop);
+      const result = closeBead(BEAD_ID, config.bdBin, {
+        cwd: config.rootDir,
+        idempotent: true,
+        log: noop,
+      });
       expect(result).toBe(true);
     });
   });
