@@ -24,6 +24,15 @@ import {
   isPm2AppOnline,
 } from "./factory-dispatch.js";
 import { findRepoRoot, sleep, timestamp } from "./utils.js";
+import {
+  pm2Connect,
+  pm2Disconnect,
+  pm2List,
+  pm2Start,
+  pm2Stop,
+  pm2Delete,
+  pm2IsAppOnline,
+} from "./pm2-client.js";
 
 import {
   checkServerHealth as checkDoltHealth,
@@ -215,11 +224,11 @@ export async function checkDoltComponent(
 }
 
 /**
- * Check oc-daemon health via pm2 jlist.
+ * Check oc-daemon health via PM2 programmatic API.
  * Replaces: pm2 jlist | grep.
  */
-export function checkOcDaemon(pm2Bin: string): ComponentHealth {
-  const ok = isPm2AppOnline(pm2Bin, "oc-daemon");
+export async function checkOcDaemon(): Promise<ComponentHealth> {
+  const ok = await pm2IsAppOnline("oc-daemon");
   return {
     name: "oc-daemon",
     ok,
@@ -244,11 +253,11 @@ export async function checkTemporalServer(
 }
 
 /**
- * Check Temporal worker health via pm2 jlist.
+ * Check Temporal worker health via PM2 programmatic API.
  * Replaces: pm2 jlist | grep.
  */
-export function checkTemporalWorker(pm2Bin: string): ComponentHealth {
-  const ok = isPm2AppOnline(pm2Bin, "temporal-worker");
+export async function checkTemporalWorker(): Promise<ComponentHealth> {
+  const ok = await pm2IsAppOnline("temporal-worker");
   return {
     name: "Temporal worker",
     ok,
@@ -266,20 +275,15 @@ export async function checkStack(
 ): Promise<StackHealth> {
   const components: ComponentHealth[] = [];
 
-  // Run port-based checks in parallel
-  const [kilo, dolt, temporal] = await Promise.all([
+  // Run all checks in parallel (pm2 checks are now async via programmatic API)
+  const [kilo, dolt, ocDaemon, temporal, temporalWorker] = await Promise.all([
     checkKiloHealth(config.kiloHost, config.kiloPort, fetchFn),
     checkDoltComponent(config),
+    checkOcDaemon(),
     checkTemporalServer(config.kiloHost, config.temporalPort),
+    checkTemporalWorker(),
   ]);
-  components.push(
-    kilo,
-    dolt,
-    // pm2 checks are synchronous (execFileSync)
-    checkOcDaemon(config.pm2Bin),
-    temporal,
-    checkTemporalWorker(config.pm2Bin),
-  );
+  components.push(kilo, dolt, ocDaemon, temporal, temporalWorker);
 
   const healthy = components.filter((c) => c.ok).length;
   return {
@@ -453,6 +457,7 @@ export async function ensureTemporalServer(
 
 /**
  * Start pm2-managed processes (oc-daemon + temporal-worker).
+ * Uses PM2 programmatic API instead of CLI shell-out.
  * Replaces: pm2 start ecosystem.config.cjs + poll loop.
  */
 export async function ensurePm2Ecosystem(
@@ -461,34 +466,48 @@ export async function ensurePm2Ecosystem(
 ): Promise<void> {
   log(`${timestamp()} Starting pm2-managed processes...`);
 
-  execFileSync(config.pm2Bin, ["start", config.ecosystemConfig], {
-    encoding: "utf8",
-    timeout: 30000,
-    env: {
-      ...process.env,
-      KILO_HOST: config.kiloHost,
-      KILO_PORT: String(config.kiloPort),
-      DOLT_PORT: String(config.doltPort),
-    },
-  });
+  // Set env vars that the ecosystem config reads via process.env
+  process.env.KILO_HOST = config.kiloHost;
+  process.env.KILO_PORT = String(config.kiloPort);
+  process.env.DOLT_PORT = String(config.doltPort);
 
-  // Wait up to 15s for both to come online
-  for (let i = 0; i < 15; i++) {
-    const ocdOk = isPm2AppOnline(config.pm2Bin, "oc-daemon");
-    const twOk = isPm2AppOnline(config.pm2Bin, "temporal-worker");
-    if (ocdOk && twOk) break;
-    await sleep(1000);
-  }
+  await pm2Connect();
+  try {
+    await pm2Start(config.ecosystemConfig);
 
-  if (!isPm2AppOnline(config.pm2Bin, "oc-daemon")) {
-    throw new Error(`oc-daemon failed to start. Check: ${config.pm2Bin} logs oc-daemon`);
-  }
-  log(`${timestamp()} ✅ oc-daemon online (pm2, auto-restart enabled).`);
+    // Wait up to 15s for both to come online
+    for (let i = 0; i < 15; i++) {
+      const procs = await pm2List();
+      const ocdOk = procs.some(
+        (p) => p.name === "oc-daemon" && p.pm2_env?.status === "online",
+      );
+      const twOk = procs.some(
+        (p) => p.name === "temporal-worker" && p.pm2_env?.status === "online",
+      );
+      if (ocdOk && twOk) break;
+      await sleep(1000);
+    }
 
-  if (!isPm2AppOnline(config.pm2Bin, "temporal-worker")) {
-    throw new Error(`Temporal worker failed to start. Check: ${config.pm2Bin} logs temporal-worker`);
+    // Final check
+    const procs = await pm2List();
+    const ocdOnline = procs.some(
+      (p) => p.name === "oc-daemon" && p.pm2_env?.status === "online",
+    );
+    if (!ocdOnline) {
+      throw new Error(`oc-daemon failed to start. Check: ${config.pm2Bin} logs oc-daemon`);
+    }
+    log(`${timestamp()} ✅ oc-daemon online (pm2, auto-restart enabled).`);
+
+    const twOnline = procs.some(
+      (p) => p.name === "temporal-worker" && p.pm2_env?.status === "online",
+    );
+    if (!twOnline) {
+      throw new Error(`Temporal worker failed to start. Check: ${config.pm2Bin} logs temporal-worker`);
+    }
+    log(`${timestamp()} ✅ Temporal worker online (pm2, auto-restart enabled).`);
+  } finally {
+    pm2Disconnect();
   }
-  log(`${timestamp()} ✅ Temporal worker online (pm2, auto-restart enabled).`);
 }
 
 // ── Orchestrators ────────────────────────────────────────────────────────
@@ -601,20 +620,20 @@ export async function stopStack(
 ): Promise<void> {
   log(`${timestamp()} Stopping managed components...`);
 
-  // Stop pm2-managed Node.js processes
+  // Stop pm2-managed Node.js processes via programmatic API
   try {
-    const jlist = execFileSync(config.pm2Bin, ["jlist"], {
-      encoding: "utf8",
-      timeout: 5000,
-      stdio: ["pipe", "pipe", "ignore"],
-    });
-    const processes = JSON.parse(jlist) as unknown[];
-    if (processes.length > 0) {
-      execFileSync(config.pm2Bin, ["stop", "all"], { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "ignore"] });
-      execFileSync(config.pm2Bin, ["delete", "all"], { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "ignore"] });
-      log(`${timestamp()} pm2 processes stopped (oc-daemon, temporal-worker).`);
-    } else {
-      log(`${timestamp()} No pm2 processes to stop.`);
+    await pm2Connect();
+    try {
+      const processes = await pm2List();
+      if (processes.length > 0) {
+        await pm2Stop("all");
+        await pm2Delete("all");
+        log(`${timestamp()} pm2 processes stopped (oc-daemon, temporal-worker).`);
+      } else {
+        log(`${timestamp()} No pm2 processes to stop.`);
+      }
+    } finally {
+      pm2Disconnect();
     }
   } catch {
     log(`${timestamp()} No pm2 processes to stop.`);

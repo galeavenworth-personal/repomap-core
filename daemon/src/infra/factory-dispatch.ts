@@ -19,12 +19,12 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { createConnection } from "node:net";
 
 import { resolveCardExitPrompt, injectCardExitPrompt } from "../optimization/prompt-injection.js";
 import { PunchCardValidator } from "../governor/punch-card-validator.js";
 import { findRepoRoot, sleep, timestamp } from "./utils.js";
+import { pm2IsAppOnline } from "./pm2-client.js";
 
 // ── Configuration ────────────────────────────────────────────────────────
 
@@ -203,23 +203,11 @@ export function checkPort(host: string, port: number, timeoutMs = 2000): Promise
 }
 
 /**
- * Check if a pm2 app is online by parsing pm2 jlist output.
+ * Check if a pm2 app is online via PM2 programmatic API.
+ * Delegates to pm2-client.ts for connect/list/disconnect lifecycle.
  */
-export function isPm2AppOnline(pm2Bin: string, appName: string): boolean {
-  try {
-    const output = execFileSync(pm2Bin, ["jlist"], {
-      encoding: "utf8",
-      timeout: 5000,
-      stdio: ["pipe", "pipe", "ignore"],
-    });
-    const procs: Array<{ name: string; pm2_env?: { status?: string } }> =
-      JSON.parse(output);
-    return procs.some(
-      (p) => p.name === appName && p.pm2_env?.status === "online",
-    );
-  } catch {
-    return false;
-  }
+export async function isPm2AppOnline(_pm2Bin: string, appName: string): Promise<boolean> {
+  return pm2IsAppOnline(appName);
 }
 
 // ── Phase 1: Pre-flight ──────────────────────────────────────────────────
@@ -262,8 +250,13 @@ export async function preflight(
     detail: doltOk ? `port ${config.doltPort}` : `NOT listening on port ${config.doltPort}`,
   });
 
-  // 3. oc-daemon (flight recorder)
-  const ocdOk = isPm2AppOnline(config.pm2Bin, "oc-daemon");
+  // 3-5: Run remaining checks in parallel (pm2 checks are async via programmatic API)
+  const [ocdOk, temporalOk, twOk] = await Promise.all([
+    isPm2AppOnline(config.pm2Bin, "oc-daemon"),
+    checkPort(config.host, config.temporalPort),
+    isPm2AppOnline(config.pm2Bin, "temporal-worker"),
+  ]);
+
   if (ocdOk) {
     log(`${timestamp()}   ✅ oc-daemon (SSE → Dolt)`);
   }
@@ -275,8 +268,6 @@ export async function preflight(
       : "NOT running (no flight recorder — sessions will be unrecorded!)",
   });
 
-  // 4. Temporal server
-  const temporalOk = await checkPort(config.host, config.temporalPort);
   if (temporalOk) {
     log(`${timestamp()}   ✅ Temporal server (port ${config.temporalPort})`);
   }
@@ -286,8 +277,6 @@ export async function preflight(
     detail: temporalOk ? `port ${config.temporalPort}` : `NOT listening on port ${config.temporalPort}`,
   });
 
-  // 5. Temporal worker
-  const twOk = isPm2AppOnline(config.pm2Bin, "temporal-worker");
   if (twOk) {
     log(`${timestamp()}   ✅ Temporal worker`);
   }
