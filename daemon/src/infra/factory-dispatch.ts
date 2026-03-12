@@ -24,6 +24,7 @@ import { createConnection } from "node:net";
 
 import { resolveCardExitPrompt, injectCardExitPrompt } from "../optimization/prompt-injection.js";
 import { PunchCardValidator } from "../governor/punch-card-validator.js";
+import { findRepoRoot, sleep, timestamp } from "./utils.js";
 
 // ── Configuration ────────────────────────────────────────────────────────
 
@@ -79,14 +80,6 @@ export function defaultConfig(): FactoryDispatchConfig {
     pm2Bin: `${repoRoot}/daemon/node_modules/.bin/pm2`,
     cardId: "",
   };
-}
-
-function findRepoRoot(): string {
-  try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
-  } catch {
-    return process.cwd();
-  }
 }
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -174,15 +167,6 @@ export const ExitCode = {
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-
-function timestamp(): string {
-  const now = new Date();
-  return now.toTimeString().slice(0, 8);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 export type Logger = (msg: string) => void;
 

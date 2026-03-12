@@ -14,6 +14,8 @@
 
 import { createHash } from "node:crypto";
 
+import { sortKeysDeep } from "../infra/utils.js";
+
 export interface RawEvent {
   type: string;
   properties: Record<string, unknown>;
@@ -39,19 +41,6 @@ export interface Punch {
  * Compute a deterministic SHA-256 hash for idempotent punch insertion.
  * Hash is computed from event type + JSON-stringified properties (recursively sorted keys).
  */
-function sortKeysDeep(obj: unknown): unknown {
-  if (Array.isArray(obj)) return obj.map(sortKeysDeep);
-  if (obj !== null && typeof obj === "object") {
-    return Object.keys(obj as Record<string, unknown>)
-      .sort((a, b) => a.localeCompare(b))
-      .reduce<Record<string, unknown>>((acc, key) => {
-        acc[key] = sortKeysDeep((obj as Record<string, unknown>)[key]);
-        return acc;
-      }, {});
-  }
-  return obj;
-}
-
 function computeSourceHash(event: RawEvent): string {
   const canonical = JSON.stringify(
     sortKeysDeep({

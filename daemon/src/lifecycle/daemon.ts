@@ -19,6 +19,7 @@ import { readFile } from "node:fs/promises";
 
 import { classifyEvent, type RawEvent } from "../classifier/index.js";
 import { PunchCardValidator } from "../governor/punch-card-validator.js";
+import { sortKeysDeep } from "../infra/utils.js";
 import { createDoltWriter, type DoltWriter } from "../writer/index.js";
 import { runCatchUp } from "./catchup.js";
 
@@ -94,19 +95,6 @@ function pickTimestamp(record: Record<string, unknown>): number {
 
   // Only warn once per event type to reduce log spam
   return Date.now();
-}
-
-function sortKeysDeep(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeysDeep);
-  if (value !== null && typeof value === "object") {
-    return Object.keys(value as Record<string, unknown>)
-      .sort((a, b) => a.localeCompare(b))
-      .reduce<Record<string, unknown>>((acc, key) => {
-        acc[key] = sortKeysDeep((value as Record<string, unknown>)[key]);
-        return acc;
-      }, {});
-  }
-  return value;
 }
 
 function computeRawEventSourceHash(event: RawEvent): string {

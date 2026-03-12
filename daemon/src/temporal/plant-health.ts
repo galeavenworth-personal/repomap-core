@@ -28,6 +28,7 @@ import { resolve } from "node:path";
 import { createConnection } from "node:net";
 import mysql, { type Connection } from "mysql2/promise";
 
+import { timed } from "../infra/utils.js";
 import type { DoltConfig } from "../writer/index.js";
 import type {
   HealthCheckResult,
@@ -281,13 +282,6 @@ const HEALTH_CHECK_TIMEOUT_MS = 5_000;
 
 /** Latency threshold above which a subsystem is classified as degraded (3 seconds). */
 const DEGRADED_LATENCY_THRESHOLD_MS = 3_000;
-
-/** Measure elapsed time for an async operation. */
-async function timed<T>(fn: () => Promise<T>): Promise<{ result: T; elapsedMs: number }> {
-  const start = performance.now();
-  const result = await fn();
-  return { result, elapsedMs: Math.round(performance.now() - start) };
-}
 
 /** Build a SubsystemHealth from a check result. */
 function buildSubsystemHealth(

@@ -20,6 +20,8 @@ import { existsSync, openSync, readFileSync, readlinkSync, readdirSync, unlinkSy
 import { join } from "node:path";
 import mysql from "mysql2/promise";
 
+import { sleep } from "./utils.js";
+
 // ── Configuration ────────────────────────────────────────────────────────
 
 export interface DoltLifecycleConfig {
@@ -417,8 +419,4 @@ export async function stopServer(
   }
 }
 
-// ── Utility ──────────────────────────────────────────────────────────────
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}

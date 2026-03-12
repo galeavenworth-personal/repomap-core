@@ -23,6 +23,7 @@ import {
   checkPort,
   isPm2AppOnline,
 } from "./factory-dispatch.js";
+import { findRepoRoot, sleep, timestamp } from "./utils.js";
 
 import {
   checkServerHealth as checkDoltHealth,
@@ -61,14 +62,6 @@ export interface StackConfig {
 }
 
 const HOME = process.env.HOME ?? "/home/user";
-
-function findRepoRoot(): string {
-  try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
-  } catch {
-    return process.cwd();
-  }
-}
 
 export function defaultConfig(): StackConfig {
   const repoRoot = process.env.REPO_ROOT ?? findRepoRoot();
@@ -130,14 +123,6 @@ export interface EnsureResult {
 export type Logger = (msg: string) => void;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function timestamp(): string {
-  return new Date().toTimeString().slice(0, 8);
-}
 
 /**
  * Resolve a binary from multiple candidate paths, then fall back to PATH.
