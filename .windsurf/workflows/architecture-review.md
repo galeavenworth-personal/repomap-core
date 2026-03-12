@@ -11,6 +11,28 @@ The target scope is determined by context:
 - **Planning phase**: the modules/files the upcoming task will touch
 - **Ad-hoc**: a directory or the entire codebase (`daemon/src/`, `src/`, or both)
 
+### Prerequisites: Repomap Artifacts
+
+The Python layer (`src/`) has pre-computed repomap artifacts in `.repomap/`.
+These provide structured, resolved data that is **far more precise than grep**
+for dependency, call graph, and symbol analysis. Use them as the primary source
+for the Python layer; fall back to grep for the TypeScript/daemon layer.
+
+| Artifact | Format | Key Fields | Useful For |
+|----------|--------|------------|------------|
+| `deps.edgelist` | `src -> dst` per line | module dependency edges | Lens 1 (dep overlap), Lens 4 (DIP) |
+| `deps_summary.json` | JSON | `fan_in`, `fan_out`, `cycles`, `layer_violations`, `top_modules` | Lens 1 (fan-in), Lens 2 (complexity), Lens 4 (SRP/DIP) |
+| `calls.jsonl` | JSONL | `callee_expr`, `enclosing_symbol_id`, `resolved_to.qualified_name`, `module` | Lens 1 (parallel call targets) |
+| `symbols.jsonl` | JSONL | `kind`, `qualified_name`, `path`, `layer`, `name` | Lens 1 (duplicate names), Lens 4 (SRP: symbols per module) |
+| `refs.jsonl` | JSONL | `ref_kind`, `resolved_to`, `evidence.strategy` | Lens 3 (unresolved refs = broken contracts) |
+| `modules.jsonl` | JSONL | `module`, `path`, `is_package` | Module enumeration |
+| `integrations_static.jsonl` | JSONL | `tag`, `path`, `evidence` | Lens 5 (external integration points) |
+
+To regenerate artifacts: `python -m cli generate .`
+
+No query API exists yet — consume artifacts directly with `jq` or `read_file`.
+The TypeScript layer (`daemon/src/`) is not covered by repomap; use grep there.
+
 ---
 
 ## Lens 1 — Parallel Path Elimination
@@ -21,7 +43,7 @@ unmaintainable.
 
 ### Machine checks
 
-1. **Duplicate function names across files**
+1. **Duplicate function/symbol names across files** (TypeScript)
    ```bash
    grep -rn '^function \|^export function \|^async function \|^export async function ' \
      <scope> --include='*.ts' \
@@ -29,19 +51,43 @@ unmaintainable.
    ```
    Any function name appearing 2+ times across different files is a candidate.
 
-2. **Shared utility patterns not extracted**
+2. **Duplicate symbol names across modules** (Python — via `symbols.jsonl`)
+   ```bash
+   jq -r 'select(.kind == "function") | .name' .repomap/symbols.jsonl \
+     | sort | uniq -c | sort -rn | awk '$1 > 1'
+   ```
+   Cross-reference with `path` to find same-name functions in different modules.
+
+3. **Repomap dependency overlap** (Python — via `deps.edgelist`)
+   Parse `.repomap/deps.edgelist`. Two modules with >70% overlap in their
+   dependency sets likely solve overlapping problems:
+   ```bash
+   # Build per-module dep sets from deps.edgelist, compute Jaccard similarity
+   # Modules with Jaccard > 0.7 are candidates for merging
+   ```
+
+4. **Parallel call targets** (Python — via `calls.jsonl`)
+   Find functions that call the same resolved targets:
+   ```bash
+   jq -r 'select(.resolved_to != null) | "\(.enclosing_symbol_id) -> \(.resolved_to.qualified_name)"' \
+     .repomap/calls.jsonl | sort
+   ```
+   Two different enclosing symbols calling the same set of targets = likely
+   parallel implementations.
+
+5. **Fan-in analysis** (Python — via `deps_summary.json`)
+   High fan-in modules are shared infrastructure. If two modules with similar
+   fan-in/fan-out profiles exist, they may be solving the same problem:
+   ```bash
+   jq '.fan_in | to_entries | sort_by(-.value) | .[:15]' .repomap/deps_summary.json
+   ```
+
+6. **Shared utility patterns not extracted** (TypeScript)
    Search for common inline patterns that should be a shared utility:
    - `findRepoRoot`, `sleep`, `timestamp`, `checkPort` — if duplicated, extract
      to a shared module (e.g. `daemon/src/infra/utils.ts`).
 
-3. **Repomap dependency overlap** (Python layer)
-   Parse `.repomap/deps.edgelist`. Two modules with >70% overlap in their
-   dependency sets likely solve overlapping problems:
-   ```bash
-   # For each module pair, compute Jaccard similarity of their dep sets
-   ```
-
-4. **Codebase-retrieval semantic check**
+7. **Codebase-retrieval semantic check**
    Use `codebase-retrieval` to search for semantically similar implementations:
    "Find all implementations of [concept] across the codebase"
 
@@ -80,11 +126,18 @@ strong signal.
    ```
    Cross-reference with SonarQube cognitive complexity issues.
 
-3. **Dependency count** — modules with many internal dependencies that
+3. **Fan-out as complexity signal** (Python — via `deps_summary.json`)
+   Modules with high fan-out are doing too many things and may benefit from
+   a library that encapsulates the concern:
+   ```bash
+   jq '.fan_out | to_entries | sort_by(-.value) | .[:10]' .repomap/deps_summary.json
+   ```
+
+4. **Dependency count** — modules with many internal dependencies that
    implement a well-known pattern (e.g., "durable workflow execution",
    "audit trail", "schema migration") should be evaluated against libraries.
 
-4. **Library research** — for each candidate, use Context7 and web search to
+5. **Library research** — for each candidate, use Context7 and web search to
    find established libraries:
    - Search: `<problem domain> npm library` or `<problem domain> python library`
    - Evaluate: maintenance activity, star count, API fit, adoption cost
@@ -111,27 +164,43 @@ a citable source. "Close enough" is fully wrong.
 
 ### Machine checks
 
-1. **Cross-boundary imports audit**
+1. **Unresolved references** (Python — via `refs.jsonl`)
+   Refs where `resolved_to` is null indicate broken cross-boundary contracts:
+   ```bash
+   jq -r 'select(.resolved_to == null and .evidence.strategy != "dynamic_unresolvable") | "\(.module) -> \(.expr)"' \
+     .repomap/refs.jsonl | sort | uniq -c | sort -rn | head -20
+   ```
+   Exclude `dynamic_unresolvable` (e.g., `dict.get`) which are expected.
+   Remaining unresolved refs are interface discipline violations.
+
+2. **Layer violations** (Python — via `deps_summary.json`)
+   ```bash
+   jq '.layer_violations' .repomap/deps_summary.json
+   ```
+   Any layer violation means a module is importing across an architectural
+   boundary it shouldn't.
+
+3. **Cross-boundary imports audit** (TypeScript)
    For the target scope, list all imports from other modules. For each:
    - Verify the imported identifier exists in the target module's exports
    - TypeScript compiler (`tsc --noEmit`) catches type-level violations
    - This lens focuses on **runtime identifiers**: config keys, database columns,
      API parameters, event names, CLI flags
 
-2. **Env var / config key audit**
+4. **Env var / config key audit**
    ```bash
    grep -rn 'process\.env\.' <scope> --include='*.ts' | sort
    ```
    Each `process.env.X` must have a corresponding entry in `.env.example` or
    be documented in the config interface.
 
-3. **Database column/table references**
+5. **Database column/table references**
    ```bash
    grep -rn "FROM \|INSERT INTO \|UPDATE \|SELECT " <scope> --include='*.ts'
    ```
    Each referenced table/column must exist in the schema (`.kilocode/tools/dolt_apply_punch_card_schema.sh` or migration files).
 
-4. **CLI flag audit**
+6. **CLI flag audit**
    For modules that parse `process.argv`, verify flags match documentation.
 
 ### Output per finding
@@ -151,13 +220,27 @@ high-value with agent tooling — flag violations worth fixing.
 ### Machine checks
 
 #### S — Single Responsibility
+
+TypeScript:
 ```bash
 # Count exports per module (high export count = likely SRP violation)
 grep -rn 'export function\|export async function\|export class\|export interface\|export type' \
   <file> | wc -l
 ```
-- **Threshold**: >15 exports from a single file = flag for review
+
+Python (via `symbols.jsonl` — count symbols per module):
+```bash
+jq -r '.path' .repomap/symbols.jsonl | sort | uniq -c | sort -rn | head -15
+```
+
+Python (via `deps_summary.json` — high fan-out = doing too much):
+```bash
+jq '.fan_out | to_entries | sort_by(-.value) | .[:10]' .repomap/deps_summary.json
+```
+
+- **Threshold**: >15 exports/symbols from a single file = flag for review
 - **Also check**: LOC per file (>500 = review, >800 = strong signal)
+- **Also check**: Fan-out >10 from deps_summary = strong signal
 - **Also check**: Does the file mix concerns? (e.g., CLI parsing + business logic + I/O)
 
 #### O — Open/Closed Principle
@@ -182,8 +265,18 @@ grep -A 50 'export interface' <file> | grep -c '?:'
 Interfaces where >50% of members are optional suggest they should be split.
 
 #### D — Dependency Inversion
-- Use `deps.edgelist` (Python) or import analysis (TypeScript) to find
-  high-level modules importing low-level modules directly
+
+Python (via `deps.edgelist` + `symbols.jsonl` layer tags):
+```bash
+# Find edges from high-level layers to low-level layers
+# Cross-reference with symbols.jsonl layer field and deps.edgelist
+jq -r 'select(.layer != null) | "\(.path)\t\(.layer)"' .repomap/symbols.jsonl | sort -u
+```
+Then check `deps.edgelist` for edges from high-layer modules to low-layer ones.
+Also check `deps_summary.json` `.layer_violations` (pre-computed).
+
+TypeScript: import analysis to find high-level modules importing low-level
+modules directly.
 - High-level: orchestrators, workflows, CLI entry points
 - Low-level: I/O, database, file system, process management
 - The import should go through an abstraction (interface/type), not a concrete
@@ -210,10 +303,16 @@ still flag PATH trust issues. The *real* fix is often: use the vendor's SDK.
 
 ### Machine checks
 
-1. **Inventory all subprocess calls**
+1. **Inventory all subprocess calls** (TypeScript)
    ```bash
    grep -rn 'execFileSync\|spawnSync\|spawn(' <scope> --include='*.ts' \
      | grep -v '\.test\.' | grep -v node_modules
+   ```
+
+   Python (via `integrations_static.jsonl`):
+   ```bash
+   jq -r 'select(.tag == "subprocess" or .tag == "os_exec") | "\(.path):\(.line) \(.evidence)"' \
+     .repomap/integrations_static.jsonl
    ```
 
 2. **Classify each binary**
