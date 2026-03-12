@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -62,6 +63,9 @@ class TaskProfile:
     missing_punches: str | None = None
     mode: str | None = None
     checkpoint_status: Literal["pass", "fail"] | None = None
+    child_modes: str | None = None
+    parent_forbidden_tool_violations: str | None = None
+    workflow_id: str | None = None
 
     @property
     def completion_ratio(self) -> float:
@@ -228,6 +232,160 @@ def _load_task_enrichment(
     return mode_by_task, card_id_by_task
 
 
+def _load_child_modes_enrichment(conn: Any, tables: set[str]) -> dict[str, str]:
+    """Load child agent modes grouped by parent task.
+
+    Returns a dict mapping parent_task_id -> comma-separated child modes
+    (e.g. "code,explore,code").
+    """
+    if "tasks" not in tables:
+        return {}
+
+    child_modes: dict[str, str] = {}
+
+    if "child_relationships" in tables:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT cr.parent_task_id, GROUP_CONCAT(t.mode ORDER BY t.task_id) AS modes
+                FROM child_relationships cr
+                JOIN tasks t ON t.task_id = cr.child_task_id
+                WHERE t.mode IS NOT NULL AND t.mode != ''
+                GROUP BY cr.parent_task_id
+                """
+            )
+            rows = cast(list[dict[str, Any]], cursor.fetchall())
+        for row in rows:
+            parent_id = str(row["parent_task_id"])
+            modes = row.get("modes")
+            if modes is not None and str(modes) != "":
+                child_modes[parent_id] = str(modes)
+
+    if "child_rels" in tables:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT cr.parent_id, GROUP_CONCAT(t.mode ORDER BY t.task_id) AS modes
+                FROM child_rels cr
+                JOIN tasks t ON t.task_id = cr.child_id
+                WHERE t.mode IS NOT NULL AND t.mode != ''
+                GROUP BY cr.parent_id
+                """
+            )
+            rows = cast(list[dict[str, Any]], cursor.fetchall())
+        for row in rows:
+            parent_id = str(row["parent_id"])
+            modes = row.get("modes")
+            if modes is not None and str(modes) != "":
+                # Only set if not already populated from child_relationships
+                if parent_id not in child_modes:
+                    child_modes[parent_id] = str(modes)
+
+    return child_modes
+
+
+def _sql_like_to_glob(pattern: str) -> str:
+    """Convert a SQL LIKE pattern (% and _) to a fnmatch glob pattern (* and ?)."""
+    return pattern.replace("%", "*").replace("_", "?")
+
+
+def _load_forbidden_tool_violations(conn: Any, tables: set[str]) -> dict[str, str]:
+    """Detect forbidden tool violations per task.
+
+    Cross-references each task's tool_call punches against its punch card's
+    forbidden patterns.  Returns a dict mapping task_id -> comma-separated
+    list of forbidden tools that were actually called.
+    """
+    if not ({"punches", "punch_cards", "tasks"} <= tables):
+        return {}
+
+    # 1. Load forbidden patterns per card_id
+    forbidden_patterns: dict[str, list[str]] = {}
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT card_id, punch_key_pattern
+            FROM punch_cards
+            WHERE forbidden = TRUE AND punch_type = 'tool_call'
+            """
+        )
+        rows = cast(list[dict[str, Any]], cursor.fetchall())
+    for row in rows:
+        card_id = str(row["card_id"])
+        pattern = str(row["punch_key_pattern"])
+        forbidden_patterns.setdefault(card_id, []).append(pattern)
+
+    if not forbidden_patterns:
+        return {}
+
+    # 2. Load card_id per task
+    task_card: dict[str, str] = {}
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT task_id, punch_card_id FROM tasks WHERE punch_card_id IS NOT NULL"
+        )
+        rows = cast(list[dict[str, Any]], cursor.fetchall())
+    for row in rows:
+        task_card[str(row["task_id"])] = str(row["punch_card_id"])
+
+    # 3. Load tool_call punch_keys per task
+    task_tools: dict[str, set[str]] = {}
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT task_id, punch_key
+            FROM punches
+            WHERE punch_type = 'tool_call'
+            """
+        )
+        rows = cast(list[dict[str, Any]], cursor.fetchall())
+    for row in rows:
+        tid = str(row["task_id"])
+        task_tools.setdefault(tid, set()).add(str(row["punch_key"]))
+
+    # 4. Cross-reference: for each task, check its tool calls against forbidden patterns
+    violations: dict[str, str] = {}
+    for task_id, card_id in task_card.items():
+        patterns = forbidden_patterns.get(card_id)
+        if not patterns:
+            continue
+        tools = task_tools.get(task_id)
+        if not tools:
+            continue
+        violated: list[str] = []
+        for tool in sorted(tools):
+            for pat in patterns:
+                glob_pat = _sql_like_to_glob(pat)
+                if fnmatch.fnmatch(tool, glob_pat):
+                    violated.append(tool)
+                    break
+        if violated:
+            violations[task_id] = ",".join(violated)
+
+    return violations
+
+
+def _load_workflow_ids(conn: Any, tables: set[str]) -> dict[str, str]:
+    """Load workflow identifiers per task.
+
+    The workflow_id is derived from the punch card's card_id (which maps to
+    the workflow name for orchestrators) via the tasks table's punch_card_id.
+    """
+    if "tasks" not in tables:
+        return {}
+
+    workflow_ids: dict[str, str] = {}
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT task_id, punch_card_id FROM tasks WHERE punch_card_id IS NOT NULL"
+        )
+        rows = cast(list[dict[str, Any]], cursor.fetchall())
+    for row in rows:
+        workflow_ids[str(row["task_id"])] = str(row["punch_card_id"])
+
+    return workflow_ids
+
+
 def _row_to_task_profile(
     row: dict[str, Any],
     card_id_by_task: dict[str, str],
@@ -235,6 +393,9 @@ def _row_to_task_profile(
     missing_punches_by_task: dict[str, str],
     mode_by_task: dict[str, str],
     checkpoint_by_task: dict[str, CardStatus],
+    child_modes_by_task: dict[str, str] | None = None,
+    forbidden_violations_by_task: dict[str, str] | None = None,
+    workflow_id_by_task: dict[str, str] | None = None,
 ) -> TaskProfile:
     """Convert a single punch-aggregate row into a TaskProfile."""
     task_id = str(row["task_id"])
@@ -259,6 +420,11 @@ def _row_to_task_profile(
         missing_punches=missing_punches_by_task.get(task_id),
         mode=mode_by_task.get(task_id),
         checkpoint_status=checkpoint_by_task.get(task_id),
+        child_modes=(child_modes_by_task or {}).get(task_id),
+        parent_forbidden_tool_violations=(forbidden_violations_by_task or {}).get(
+            task_id
+        ),
+        workflow_id=(workflow_id_by_task or {}).get(task_id),
     )
 
 
@@ -292,6 +458,10 @@ def extract_task_profiles(limit: int | None = None) -> list[TaskProfile]:
                 conn, enrichment.card_id_by_task
             )
 
+        child_modes_by_task = _load_child_modes_enrichment(conn, tables)
+        forbidden_violations_by_task = _load_forbidden_tool_violations(conn, tables)
+        workflow_id_by_task = _load_workflow_ids(conn, tables)
+
     return [
         _row_to_task_profile(
             row,
@@ -300,6 +470,9 @@ def extract_task_profiles(limit: int | None = None) -> list[TaskProfile]:
             enrichment.missing_punches_by_task,
             mode_by_task,
             enrichment.checkpoint_by_task,
+            child_modes_by_task,
+            forbidden_violations_by_task,
+            workflow_id_by_task,
         )
         for row in rows
     ]
@@ -494,6 +667,9 @@ def build_dspy_example(
         tool_calls=profile.tool_calls,
         total_cost=profile.total_cost,
         duration_minutes=profile.duration_minutes,
+        child_modes=profile.child_modes,
+        parent_forbidden_tool_violations=profile.parent_forbidden_tool_violations,
+        workflow_id=profile.workflow_id,
         outcome_label=labeled.outcome.value,
         diagnosis_category=labeled.diagnosis_category,
         is_kill_recovery=kill_recovery_lookup.get(profile.task_id, False),
@@ -511,6 +687,9 @@ def build_dspy_example(
         "tool_calls",
         "total_cost",
         "duration_minutes",
+        "child_modes",
+        "parent_forbidden_tool_violations",
+        "workflow_id",
     )
 
 
