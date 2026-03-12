@@ -15,10 +15,10 @@
 
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
 
 import { classifyEvent, type RawEvent } from "../classifier/index.js";
 import { PunchCardValidator } from "../governor/punch-card-validator.js";
+import { loadModeCardMap } from "../infra/mode-card.js";
 import { sortKeysDeep } from "../infra/utils.js";
 import { createDoltWriter, type DoltWriter } from "../writer/index.js";
 import { runCatchUp } from "./catchup.js";
@@ -39,10 +39,6 @@ export interface Daemon {
 }
 
 type OcClient = ReturnType<typeof createOpencodeClient>;
-type ModeCardMap = Record<string, string>;
-
-const MODE_CARD_MAP_URL = new URL("../../../.kilocode/mode-card-map.json", import.meta.url);
-let modeCardMapCache: ModeCardMap | null = null;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -175,39 +171,24 @@ function resolveMessageRole(part: Record<string, unknown>, properties: Record<st
   return "assistant";
 }
 
-async function loadModeCardMap(): Promise<ModeCardMap> {
-  if (modeCardMapCache) return modeCardMapCache;
-
-  try {
-    const raw = await readFile(MODE_CARD_MAP_URL, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === "object") {
-      modeCardMapCache = parsed as ModeCardMap;
-      return modeCardMapCache;
-    }
-  } catch (error) {
-    console.warn("[oc-daemon] Failed to load mode-card-map.json, using defaults:", error);
-  }
-
-  modeCardMapCache = {
-    "plant-manager": "plant-orchestrate",
-    "process-orchestrator": "process-orchestrate",
-    architect: "discover-phase",
-    code: "execute-subtask",
-    "audit-orchestrator": "audit-orchestrate",
-    fitter: "fitter-line-health",
-    "code-simplifier": "refactor",
-    "product-skeptic": "friction-audit",
-    "pr-review": "respond-to-pr-review",
-    "docs-specialist": "land-plane",
-    "thinker-abstract": "prepare-phase",
-    "thinker-adversarial": "prepare-phase",
-    "thinker-systems": "prepare-phase",
-    "thinker-concrete": "prepare-phase",
-    "thinker-epistemic": "prepare-phase",
-  };
-  return modeCardMapCache;
-}
+/** Hardcoded fallback for when mode-card-map.json is missing. */
+const MODE_CARD_MAP_DEFAULTS: Record<string, string> = {
+  "plant-manager": "plant-orchestrate",
+  "process-orchestrator": "process-orchestrate",
+  architect: "discover-phase",
+  code: "execute-subtask",
+  "audit-orchestrator": "audit-orchestrate",
+  fitter: "fitter-line-health",
+  "code-simplifier": "refactor",
+  "product-skeptic": "friction-audit",
+  "pr-review": "respond-to-pr-review",
+  "docs-specialist": "land-plane",
+  "thinker-abstract": "prepare-phase",
+  "thinker-adversarial": "prepare-phase",
+  "thinker-systems": "prepare-phase",
+  "thinker-concrete": "prepare-phase",
+  "thinker-epistemic": "prepare-phase",
+};
 
 function pickMode(payload: Record<string, unknown>): string | undefined {
   const direct = pickString(payload, "mode", "agent");
@@ -240,7 +221,7 @@ async function validateSessionCheckpoint(
     return;
   }
 
-  const modeCardMap = await loadModeCardMap();
+  const modeCardMap = await loadModeCardMap(MODE_CARD_MAP_DEFAULTS);
   const cardId = modeCardMap[resolvedMode];
   if (!cardId) {
     console.warn(`[oc-daemon] No punch card configured for mode '${resolvedMode}'; skipping validation`);

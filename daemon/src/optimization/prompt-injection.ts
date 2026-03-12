@@ -1,34 +1,11 @@
 import { readFile } from "node:fs/promises";
 
+import { loadModeCardMap } from "../infra/mode-card.js";
 import { readCardExitPrompt } from "./prompt-reader.js";
 
-type ModeCardMap = Record<string, string>;
-
-const MODE_CARD_MAP_URL = new URL("../../../.kilocode/mode-card-map.json", import.meta.url);
 const KILOCODEMODES_URL = new URL("../../../.kilocodemodes", import.meta.url);
 
-let modeCardMapCache: ModeCardMap | null = null;
 let modesFileCache: string | null = null;
-
-async function loadModeCardMap(): Promise<ModeCardMap> {
-  if (modeCardMapCache) {
-    return modeCardMapCache;
-  }
-
-  try {
-    const raw = await readFile(MODE_CARD_MAP_URL, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === "object") {
-      modeCardMapCache = parsed as ModeCardMap;
-      return modeCardMapCache;
-    }
-  } catch {
-    // Graceful fallback handled by caller.
-  }
-
-  modeCardMapCache = {};
-  return modeCardMapCache;
-}
 
 async function loadModesFile(): Promise<string> {
   if (modesFileCache !== null) {
