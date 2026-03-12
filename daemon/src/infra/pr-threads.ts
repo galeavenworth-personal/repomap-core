@@ -1,27 +1,22 @@
 /**
  * PR Review Threads — Structured Payload for Agent Handoff
  *
- * Migrated from .kilocode/tools/gh_pr_threads.sh (127 lines).
- * Fetches PR review threads as structured JSON using the gh CLI
- * for GitHub API calls, then groups inline comments into threads.
+ * Fetches PR review threads as structured JSON using the GitHubClient
+ * (@octokit/rest SDK), then groups inline comments into threads.
  *
  * Responsibilities:
- *   - Discover PR number from the current branch (if not provided)
  *   - Fetch PR metadata, review comments, reviews, files, issue comments
  *   - Group inline review comments into threads by in_reply_to_id
  *   - Produce a structured JSON payload for downstream agent consumption
  *
- * See: repomap-core-76q.6
+ * See: repomap-core-76q.6, repomap-core-ovm.5
  */
 
-import { execFileSync } from "node:child_process";
+import type { GitHubClient } from "./github-client.js";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
-/** Function signature for running gh CLI commands. Injectable for testing. */
-export type CommandRunner = (args: string[]) => string;
-
-/** PR metadata from `gh pr view`. */
+/** PR metadata from GitHub API. */
 export interface PrMeta {
   number: number;
   title: string;
@@ -89,7 +84,7 @@ export interface IssueComment {
   created_at: string;
 }
 
-/** Review entry from `gh pr view --json reviews`. */
+/** Review entry from GitHub API. */
 export interface Review {
   author: { login: string };
   state: string;
@@ -107,61 +102,7 @@ export interface PrThreadsPayload {
   issue_comments: IssueComment[];
 }
 
-// ── Default command runner ───────────────────────────────────────────────
-
-/**
- * Default command runner: executes `gh` with the given arguments
- * and returns stdout as a string.
- */
-export function defaultCommandRunner(args: string[]): string {
-  return execFileSync("gh", args, {
-    encoding: "utf8",
-    maxBuffer: 50 * 1024 * 1024, // 50 MB for large PRs
-  });
-}
-
 // ── Core logic ───────────────────────────────────────────────────────────
-
-/**
- * Discover the repo owner/name (e.g. "org/repo") via `gh repo view`.
- */
-export function discoverRepo(run: CommandRunner = defaultCommandRunner): string {
-  const output = run(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
-  return output.trim();
-}
-
-/**
- * Discover the current git branch name.
- */
-export function discoverBranch(run: CommandRunner = defaultCommandRunner): string {
-  // Use git directly, not gh, for branch discovery
-  const output = execFileSync("git", ["branch", "--show-current"], { encoding: "utf8" });
-  return output.trim();
-}
-
-/**
- * Discover the PR number for the current branch.
- * Returns null if no PR is found.
- */
-export function discoverPrNumber(
-  branch: string,
-  run: CommandRunner = defaultCommandRunner,
-): number | null {
-  try {
-    const output = run([
-      "pr", "list",
-      "--head", branch,
-      "--json", "number",
-      "--jq", ".[0].number",
-    ]);
-    const trimmed = output.trim();
-    if (trimmed === "" || trimmed === "null") return null;
-    const num = Number.parseInt(trimmed, 10);
-    return Number.isNaN(num) ? null : num;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Group raw review comments into threads by in_reply_to_id.
@@ -206,58 +147,27 @@ export function groupIntoThreads(reviewComments: RawReviewComment[]): InlineThre
 /**
  * Fetch all PR review thread data and assemble the structured payload.
  *
- * @param prNumber - PR number (if null, auto-discovers from current branch)
- * @param run - Command runner (injectable for testing)
+ * @param prNumber - PR number
+ * @param gh       - GitHub client (injectable for testing)
  */
-export function fetchPrThreads(
-  prNumber: number | null = null,
-  run: CommandRunner = defaultCommandRunner,
-): PrThreadsPayload {
-  // Discover PR number if not provided
-  let resolvedPrNumber = prNumber;
-  if (resolvedPrNumber === null) {
-    const branch = discoverBranch();
-    resolvedPrNumber = discoverPrNumber(branch, run);
-    if (resolvedPrNumber === null) {
-      throw new Error(`No PR found for branch '${branch}'`);
-    }
-  }
-
-  const repo = discoverRepo(run);
-  const prStr = String(resolvedPrNumber);
-
-  // 1. PR metadata
-  const metaRaw = run([
-    "pr", "view", prStr,
-    "--json", "number,title,url,headRefName,baseRefName,state,author,body",
+export async function fetchPrThreads(
+  prNumber: number,
+  gh: GitHubClient,
+): Promise<PrThreadsPayload> {
+  // Fetch all data concurrently
+  const [meta, reviewComments, reviewsData, filesData, issueComments] = await Promise.all([
+    gh.getPullRequest(prNumber),
+    gh.listReviewComments(prNumber),
+    gh.listReviews(prNumber),
+    gh.listFiles(prNumber),
+    gh.listIssueComments(prNumber),
   ]);
-  const meta: PrMeta = JSON.parse(metaRaw);
-
-  // 2. Review comments (inline, threaded via in_reply_to_id)
-  const reviewCommentsRaw = run([
-    "api", `repos/${repo}/pulls/${prStr}/comments`, "--paginate",
-  ]);
-  const reviewComments: RawReviewComment[] = JSON.parse(reviewCommentsRaw);
-
-  // 3. PR-level reviews
-  const reviewsRaw = run(["pr", "view", prStr, "--json", "reviews"]);
-  const reviewsData: { reviews: Review[] } = JSON.parse(reviewsRaw);
-
-  // 4. Changed files
-  const filesRaw = run(["pr", "view", prStr, "--json", "files"]);
-  const filesData: { files: Array<{ path: string }> } = JSON.parse(filesRaw);
-
-  // 5. Issue-level comments
-  const issueCommentsRaw = run([
-    "api", `repos/${repo}/issues/${prStr}/comments`, "--paginate",
-  ]);
-  const issueComments: RawIssueComment[] = JSON.parse(issueCommentsRaw);
 
   // Group inline comments into threads
   const inlineThreads = groupIntoThreads(reviewComments);
 
   // Extract changed file paths
-  const changedFiles = (filesData.files ?? []).map((f) => f.path);
+  const changedFiles = filesData.map((f) => f.path);
 
   // Assemble payload
   return {
@@ -269,7 +179,7 @@ export function fetchPrThreads(
       total_issue_comments: issueComments.length,
     },
     inline_threads: inlineThreads,
-    reviews: reviewsData.reviews ?? [],
+    reviews: reviewsData,
     issue_comments: issueComments.map((c) => ({
       user: c.user.login,
       body: c.body,

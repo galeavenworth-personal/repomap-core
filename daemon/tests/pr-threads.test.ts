@@ -1,18 +1,16 @@
 /**
  * Tests for PR review threads structured payload.
  *
- * These tests verify the core logic using mock command runners,
- * without requiring a real GitHub repository or gh CLI.
+ * These tests verify the core logic using mock GitHubClient,
+ * without requiring a real GitHub repository or API token.
  */
 
 import { describe, expect, it } from "vitest";
+import type { GitHubClient } from "../src/infra/github-client.js";
 import {
-  type CommandRunner,
   type RawReviewComment,
   type PrThreadsPayload,
   groupIntoThreads,
-  discoverPrNumber,
-  discoverRepo,
   fetchPrThreads,
 } from "../src/infra/pr-threads.js";
 
@@ -63,23 +61,19 @@ const MOCK_REVIEW_COMMENTS: RawReviewComment[] = [
   },
 ];
 
-const MOCK_REVIEWS = {
-  reviews: [
-    {
-      author: { login: "bob" },
-      state: "CHANGES_REQUESTED",
-      body: "A few nits.",
-      submittedAt: "2026-03-01T10:00:00Z",
-    },
-  ],
-};
+const MOCK_REVIEWS = [
+  {
+    author: { login: "bob" },
+    state: "CHANGES_REQUESTED",
+    body: "A few nits.",
+    submittedAt: "2026-03-01T10:00:00Z",
+  },
+];
 
-const MOCK_FILES = {
-  files: [
-    { path: "src/widget.ts", additions: 20, deletions: 5 },
-    { path: "src/utils.ts", additions: 3, deletions: 1 },
-  ],
-};
+const MOCK_FILES = [
+  { path: "src/widget.ts" },
+  { path: "src/utils.ts" },
+];
 
 const MOCK_ISSUE_COMMENTS = [
   {
@@ -89,78 +83,25 @@ const MOCK_ISSUE_COMMENTS = [
   },
 ];
 
-// ── Mock command runner factory ──────────────────────────────────────────
+// ── Mock client factory ─────────────────────────────────────────────────
 
-function makeMockRunner(
-  overrides: Record<string, string> = {},
-): CommandRunner {
-  const responses: Record<string, string> = {
-    "repo,view,--json,nameWithOwner,--jq,.nameWithOwner": "org/repo\n",
-    "pr,list,--head,feat/widget,--json,number,--jq,.[0].number": "42\n",
-    "pr,view,42,--json,number,title,url,headRefName,baseRefName,state,author,body":
-      JSON.stringify(MOCK_META),
-    "api,repos/org/repo/pulls/42/comments,--paginate":
-      JSON.stringify(MOCK_REVIEW_COMMENTS),
-    "pr,view,42,--json,reviews": JSON.stringify(MOCK_REVIEWS),
-    "pr,view,42,--json,files": JSON.stringify(MOCK_FILES),
-    "api,repos/org/repo/issues/42/comments,--paginate":
-      JSON.stringify(MOCK_ISSUE_COMMENTS),
+function makeMockClient(overrides: Partial<GitHubClient> = {}): GitHubClient {
+  return {
+    getPullRequest: async () => MOCK_META,
+    listReviewComments: async () => MOCK_REVIEW_COMMENTS,
+    listReviews: async () => MOCK_REVIEWS,
+    listFiles: async () => MOCK_FILES,
+    listIssueComments: async () => MOCK_ISSUE_COMMENTS,
+    listMergedPullRequests: async () => [],
+    getRepoSlug: () => "org/repo",
+    isAvailable: async () => true,
     ...overrides,
-  };
-
-  return (args: string[]): string => {
-    const key = args.join(",");
-    const response = responses[key];
-    if (response === undefined) {
-      throw new Error(`Mock runner: unexpected args: ${key}`);
-    }
-    return response;
   };
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
 
 describe("pr-threads", () => {
-  describe("discoverRepo", () => {
-    it("extracts repo name from gh output", () => {
-      const run = makeMockRunner();
-      const repo = discoverRepo(run);
-      expect(repo).toBe("org/repo");
-    });
-  });
-
-  describe("discoverPrNumber", () => {
-    it("discovers PR number from branch name", () => {
-      const run = makeMockRunner();
-      const num = discoverPrNumber("feat/widget", run);
-      expect(num).toBe(42);
-    });
-
-    it("returns null when no PR exists for branch", () => {
-      const run = makeMockRunner({
-        "pr,list,--head,no-pr-branch,--json,number,--jq,.[0].number": "\n",
-      });
-      const num = discoverPrNumber("no-pr-branch", run);
-      expect(num).toBeNull();
-    });
-
-    it("returns null when gh command fails", () => {
-      const run: CommandRunner = () => {
-        throw new Error("gh not found");
-      };
-      const num = discoverPrNumber("any-branch", run);
-      expect(num).toBeNull();
-    });
-
-    it("returns null for null output", () => {
-      const run = makeMockRunner({
-        "pr,list,--head,orphan,--json,number,--jq,.[0].number": "null\n",
-      });
-      const num = discoverPrNumber("orphan", run);
-      expect(num).toBeNull();
-    });
-  });
-
   describe("groupIntoThreads", () => {
     it("groups reply comments under the parent thread", () => {
       const threads = groupIntoThreads(MOCK_REVIEW_COMMENTS);
@@ -231,9 +172,9 @@ describe("pr-threads", () => {
   });
 
   describe("fetchPrThreads", () => {
-    it("assembles complete payload with provided PR number", () => {
-      const run = makeMockRunner();
-      const payload: PrThreadsPayload = fetchPrThreads(42, run);
+    it("assembles complete payload with provided PR number", async () => {
+      const gh = makeMockClient();
+      const payload: PrThreadsPayload = await fetchPrThreads(42, gh);
 
       // PR metadata
       expect(payload.pr.number).toBe(42);
@@ -264,63 +205,46 @@ describe("pr-threads", () => {
       );
     });
 
-    it("handles PR with no review comments", () => {
-      const run = makeMockRunner({
-        "api,repos/org/repo/pulls/42/comments,--paginate": "[]",
+    it("handles PR with no review comments", async () => {
+      const gh = makeMockClient({
+        listReviewComments: async () => [],
       });
-      const payload = fetchPrThreads(42, run);
+      const payload = await fetchPrThreads(42, gh);
       expect(payload.inline_threads).toEqual([]);
       expect(payload.thread_summary.total_threads).toBe(0);
       expect(payload.thread_summary.total_inline_comments).toBe(0);
     });
 
-    it("handles PR with no issue comments", () => {
-      const run = makeMockRunner({
-        "api,repos/org/repo/issues/42/comments,--paginate": "[]",
+    it("handles PR with no issue comments", async () => {
+      const gh = makeMockClient({
+        listIssueComments: async () => [],
       });
-      const payload = fetchPrThreads(42, run);
+      const payload = await fetchPrThreads(42, gh);
       expect(payload.issue_comments).toEqual([]);
       expect(payload.thread_summary.total_issue_comments).toBe(0);
     });
 
-    it("handles PR with no reviews", () => {
-      const run = makeMockRunner({
-        "pr,view,42,--json,reviews": JSON.stringify({ reviews: [] }),
+    it("handles PR with no reviews", async () => {
+      const gh = makeMockClient({
+        listReviews: async () => [],
       });
-      const payload = fetchPrThreads(42, run);
+      const payload = await fetchPrThreads(42, gh);
       expect(payload.reviews).toEqual([]);
     });
 
-    it("handles PR with no changed files", () => {
-      const run = makeMockRunner({
-        "pr,view,42,--json,files": JSON.stringify({ files: [] }),
+    it("handles PR with no changed files", async () => {
+      const gh = makeMockClient({
+        listFiles: async () => [],
       });
-      const payload = fetchPrThreads(42, run);
+      const payload = await fetchPrThreads(42, gh);
       expect(payload.changed_files).toEqual([]);
     });
 
-    it("handles missing files key gracefully", () => {
-      const run = makeMockRunner({
-        "pr,view,42,--json,files": JSON.stringify({}),
+    it("throws when GitHub client fails for required data", async () => {
+      const gh = makeMockClient({
+        getPullRequest: async () => { throw new Error("API rate limit exceeded"); },
       });
-      const payload = fetchPrThreads(42, run);
-      expect(payload.changed_files).toEqual([]);
-    });
-
-    it("handles missing reviews key gracefully", () => {
-      const run = makeMockRunner({
-        "pr,view,42,--json,reviews": JSON.stringify({}),
-      });
-      const payload = fetchPrThreads(42, run);
-      expect(payload.reviews).toEqual([]);
-    });
-
-    it("throws when gh command fails for required data", () => {
-      const run: CommandRunner = (args) => {
-        if (args[0] === "repo") return "org/repo\n";
-        throw new Error("gh api failed");
-      };
-      expect(() => fetchPrThreads(42, run)).toThrow("gh api failed");
+      await expect(fetchPrThreads(42, gh)).rejects.toThrow("API rate limit exceeded");
     });
   });
 });

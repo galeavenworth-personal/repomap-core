@@ -1,27 +1,26 @@
 /**
  * PR Reconciliation — Close Beads issues for merged GitHub PRs
  *
- * Migrated from .kilocode/tools/bd_reconcile_merged_prs.sh (116 lines).
  * For each task-id, queries GitHub for merged PRs with a matching head
  * branch name, then closes the corresponding Beads issue via `bd close`.
  *
+ * Uses the GitHubClient (@octokit/rest SDK) for all GitHub API access.
+ *
  * Responsibilities:
- *   - Query merged PRs by head branch name using gh CLI
+ *   - Query merged PRs by head branch name using GitHubClient
  *   - Close matching Beads issues via bd CLI
  *   - Support --dry-run (report only, no mutations)
- *   - Support --strict (fail on any gh or bd error)
+ *   - Support --strict (fail on any API or bd error)
  *   - Produce structured results per task-id
  *
- * See: repomap-core-76q.7
+ * See: repomap-core-76q.7, repomap-core-ovm.5
  */
 
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
+import type { GitHubClient, MergedPrSummary } from "./github-client.js";
 
 // ── Types ────────────────────────────────────────────────────────────────
-
-/** Function signature for running gh CLI commands. Injectable for testing. */
-export type GhRunner = (args: string[], cwd?: string) => string;
 
 /** Function signature for running bd CLI commands. Injectable for testing. */
 export type BdRunner = (args: string[]) => string;
@@ -39,9 +38,9 @@ export type ReconcileItemResult =
 export interface ReconcileOptions {
   /** Do not mutate Beads; just report what would be closed. */
   dryRun: boolean;
-  /** Fail on any gh or bd error. */
+  /** Fail on any GitHub or bd error. */
   strict: boolean;
-  /** Repository root directory for gh commands. */
+  /** Repository root directory for git commands. */
   rootDir: string;
   /** Path to the bd binary. */
   bdPath: string;
@@ -55,18 +54,6 @@ export interface ReconcileResult {
 }
 
 // ── Default runners ─────────────────────────────────────────────────────
-
-/**
- * Default gh command runner: executes `gh` with the given arguments
- * and returns stdout as a string.
- */
-export function defaultGhRunner(args: string[], cwd?: string): string {
-  return execFileSync("gh", args, {
-    encoding: "utf8",
-    cwd,
-    maxBuffer: 10 * 1024 * 1024,
-  });
-}
 
 /**
  * Default bd command runner: executes the bd binary with the given arguments
@@ -84,32 +71,14 @@ export function makeBdRunner(bdPath: string): BdRunner {
 // ── Core logic ───────────────────────────────────────────────────────────
 
 /**
- * Check whether the gh CLI is available.
- */
-export function isGhAvailable(runGh: GhRunner = defaultGhRunner): boolean {
-  try {
-    runGh(["version"]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Query GitHub for merged PRs with a head branch matching the given task-id.
- * Returns the parsed JSON array (at most 1 result), or throws on gh error.
+ * Returns the parsed array (at most 1 result), or throws on API error.
  */
-export function queryMergedPrs(
+export async function queryMergedPrs(
   taskId: string,
-  rootDir: string,
-  runGh: GhRunner = defaultGhRunner,
-): Array<{ number: number; url: string; title: string; mergedAt: string }> {
-  const output = runGh(
-    ["pr", "list", "--state", "merged", "--head", taskId, "-L", "1", "--json", "number,url,title,mergedAt"],
-    rootDir,
-  );
-  const parsed = JSON.parse(output);
-  return parsed;
+  gh: GitHubClient,
+): Promise<MergedPrSummary[]> {
+  return gh.listMergedPullRequests(taskId, 1);
 }
 
 /**
@@ -142,16 +111,16 @@ export function sanitizeError(raw: unknown, maxLen = 200): string {
 /**
  * Reconcile a single task-id: check for merged PR, close bead if found.
  */
-export function reconcileOne(
+export async function reconcileOne(
   taskId: string,
   opts: ReconcileOptions,
-  runGh: GhRunner = defaultGhRunner,
+  gh: GitHubClient,
   runBd: BdRunner = makeBdRunner(opts.bdPath),
-): ReconcileItemResult {
+): Promise<ReconcileItemResult> {
   // Query merged PRs
-  let mergedPrs: Array<{ number: number; url: string; title: string; mergedAt: string }>;
+  let mergedPrs: MergedPrSummary[];
   try {
-    mergedPrs = queryMergedPrs(taskId, opts.rootDir, runGh);
+    mergedPrs = await queryMergedPrs(taskId, gh);
   } catch (err) {
     const errMsg = sanitizeError(err);
     if (opts.strict) {
@@ -190,23 +159,24 @@ export function reconcileOne(
  *
  * @param taskIds - Task IDs to reconcile
  * @param opts - Reconciliation options
- * @param runGh - gh CLI command runner (injectable for testing)
+ * @param gh - GitHub client (injectable for testing)
  * @param runBd - bd CLI command runner (injectable for testing)
  */
-export function reconcile(
+export async function reconcile(
   taskIds: string[],
   opts: ReconcileOptions,
-  runGh: GhRunner = defaultGhRunner,
+  gh: GitHubClient,
   runBd: BdRunner = makeBdRunner(opts.bdPath),
-): ReconcileResult {
-  // Check gh availability first
-  if (!isGhAvailable(runGh)) {
+): Promise<ReconcileResult> {
+  // Check GitHub API availability first
+  const ghAvailable = await gh.isAvailable();
+  if (!ghAvailable) {
     if (opts.strict) {
       return {
         items: taskIds.map((taskId) => ({
           status: "gh_missing" as const,
           taskId,
-          message: "gh CLI not found on PATH (cannot reconcile merged PRs)",
+          message: "GitHub API not reachable (cannot reconcile merged PRs)",
         })),
         success: false,
       };
@@ -225,7 +195,7 @@ export function reconcile(
   let success = true;
 
   for (const taskId of taskIds) {
-    const result = reconcileOne(taskId, opts, runGh, runBd);
+    const result = await reconcileOne(taskId, opts, gh, runBd);
     items.push(result);
 
     // In strict mode, gh_error and bd_error are fatal
@@ -241,16 +211,14 @@ export function reconcile(
 // ── Default options factory ─────────────────────────────────────────────
 
 /**
- * Resolve the repository root directory (two levels up from .kilocode/tools/).
+ * Resolve the repository root directory.
  */
 export function resolveRootDir(): string {
-  // Use the git rev-parse to find the repo root
   try {
     return execFileSync("git", ["rev-parse", "--show-toplevel"], {
       encoding: "utf8",
     }).trim();
   } catch {
-    // Fallback: assume we're in the repo root
     return process.cwd();
   }
 }
