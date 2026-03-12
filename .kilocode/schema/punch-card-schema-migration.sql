@@ -67,18 +67,6 @@ CREATE TABLE IF NOT EXISTS punch_cards (
     PRIMARY KEY (card_id, punch_type, punch_key_pattern)
 );
 
--- Add enforced column if table was already created without it (idempotent).
--- This ALTER will silently fail if the column already exists in some MySQL/Dolt versions.
--- For Dolt, we use a procedure to handle this gracefully.
-SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns
-    WHERE table_schema = DATABASE() AND table_name = 'punch_cards' AND column_name = 'enforced');
-SET @ddl = IF(@col_exists = 0,
-    'ALTER TABLE punch_cards ADD COLUMN enforced BOOLEAN NOT NULL DEFAULT FALSE',
-    'SELECT 1');
-PREPARE stmt FROM @ddl;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
 CREATE TABLE IF NOT EXISTS checkpoints (
     checkpoint_id    INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
     task_id          VARCHAR(50)  NOT NULL,
