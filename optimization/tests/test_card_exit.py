@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import dspy  # type: ignore[import-untyped]
+import pytest
 from dspy.utils.dummies import DummyLM  # type: ignore[import-untyped]
 
 from optimization import card_exit
@@ -169,7 +170,9 @@ def test_orchestration_compliance_metric_scoring() -> None:
         phase_ordering_instructions="",
         tool_prohibition_instructions="",
     )
-    assert card_exit.orchestration_compliance_metric(example, empty_pred) == 0.0
+    assert card_exit.orchestration_compliance_metric(
+        example, empty_pred
+    ) == pytest.approx(0.0)
 
     # Base only (no keywords matched) → 0.3
     base_pred = dspy.Example(
@@ -177,7 +180,9 @@ def test_orchestration_compliance_metric_scoring() -> None:
         phase_ordering_instructions="do something generic",
         tool_prohibition_instructions="do something generic",
     )
-    assert card_exit.orchestration_compliance_metric(example, base_pred) == 0.3
+    assert card_exit.orchestration_compliance_metric(
+        example, base_pred
+    ) == pytest.approx(0.3)
 
     # All bonuses → 1.0
     full_pred = dspy.Example(
@@ -185,7 +190,9 @@ def test_orchestration_compliance_metric_scoring() -> None:
         phase_ordering_instructions="Execute 3 sequential phases in order.",
         tool_prohibition_instructions="Never call edit_file or write_to_file.",
     )
-    assert card_exit.orchestration_compliance_metric(example, full_pred) == 1.0
+    assert card_exit.orchestration_compliance_metric(
+        example, full_pred
+    ) == pytest.approx(1.0)
 
     # Partial: only child mode match → 0.5
     partial_pred = dspy.Example(
@@ -193,7 +200,9 @@ def test_orchestration_compliance_metric_scoring() -> None:
         phase_ordering_instructions="do generic ordering",
         tool_prohibition_instructions="do generic prohibition",
     )
-    assert card_exit.orchestration_compliance_metric(example, partial_pred) == 0.5
+    assert card_exit.orchestration_compliance_metric(
+        example, partial_pred
+    ) == pytest.approx(0.5)
 
 
 def test_build_refined_orchestration_compliance_returns_refine_module() -> None:

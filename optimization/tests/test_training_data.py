@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import fnmatch
+
 from optimization import training_data as td
 
 
@@ -193,3 +195,47 @@ def test_label_profiles_with_new_fields() -> None:
     assert labeled[0].profile.child_modes == "code"
     assert labeled[0].profile.parent_forbidden_tool_violations == "bash"
     assert labeled[0].profile.workflow_id == "pr-review-orchestrate"
+
+
+# ── _sql_like_to_glob tests ─────────────────────────────────────
+
+
+def test_sql_like_to_glob_basic() -> None:
+    """SQL LIKE wildcards % and _ translate to fnmatch * and ?."""
+    # _ is a SQL LIKE single-char wildcard, converted to ?
+    assert td._sql_like_to_glob("tool_call:%") == "tool?call:*"
+    assert td._sql_like_to_glob("%edit_file%") == "*edit?file*"
+    assert td._sql_like_to_glob("exact_match") == "exact?match"
+    # No wildcards at all
+    assert td._sql_like_to_glob("bash") == "bash"
+
+
+def test_sql_like_to_glob_escapes_fnmatch_metacharacters() -> None:
+    """Literal fnmatch metacharacters in SQL LIKE are escaped."""
+    # Literal * in SQL LIKE should be escaped for fnmatch
+    assert td._sql_like_to_glob("foo*bar") == "foo[*]bar"
+    # Literal ? in SQL LIKE should be escaped for fnmatch
+    assert td._sql_like_to_glob("foo?bar") == "foo[?]bar"
+    # Literal [ in SQL LIKE should be escaped for fnmatch
+    assert td._sql_like_to_glob("foo[bar") == "foo[[]bar"
+    # Combined: SQL wildcards + literal metacharacters
+    # _ -> ?, % -> *, [ -> [[], * -> [*], ] stays literal
+    assert td._sql_like_to_glob("tool_%[*]") == "tool?*[[][*]]"
+
+
+def test_sql_like_to_glob_output_works_with_fnmatchcase() -> None:
+    """Converted patterns produce correct matches via fnmatch.fnmatchcase."""
+    # SQL LIKE '%edit_file%' should match 'my_edit_file_v2'
+    pat = td._sql_like_to_glob("%edit_file%")
+    assert fnmatch.fnmatchcase("my_edit_file_v2", pat)
+    assert not fnmatch.fnmatchcase("read_only", pat)
+
+    # SQL LIKE 'tool_call:%' should match 'tool_call:bash'
+    pat2 = td._sql_like_to_glob("tool_call:%")
+    assert fnmatch.fnmatchcase("tool_call:bash", pat2)
+    assert not fnmatch.fnmatchcase("tool_call", pat2)
+
+    # Literal * should not act as wildcard
+    pat3 = td._sql_like_to_glob("foo*bar")
+    assert fnmatch.fnmatchcase("foo*bar", pat3)
+    assert not fnmatch.fnmatchcase("fooXbar", pat3)

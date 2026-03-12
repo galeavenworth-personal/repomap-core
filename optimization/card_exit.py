@@ -240,6 +240,42 @@ class OrchestrationComplianceModule(dspy.Module):
         )
 
 
+def _score_expected_modes(example: dspy.Example, delegation: str) -> float:
+    """Return 0.2 if any expected child mode appears in delegation text."""
+    expected_modes = _normalize_text(getattr(example, "expected_child_modes", ""))
+    if not expected_modes:
+        return 0.0
+    for mode in expected_modes.split(","):
+        mode = mode.strip()
+        if mode and mode in delegation:
+            return 0.2
+    return 0.0
+
+
+def _score_phase_ordering(example: dspy.Example, phase_ordering: str) -> float:
+    """Return 0.2 if phase count or sequencing keywords appear in ordering text."""
+    phase_count = _normalize_text(getattr(example, "expected_phase_count", ""))
+    if (
+        (phase_count and phase_count in phase_ordering)
+        or "sequential" in phase_ordering
+        or "phase" in phase_ordering
+    ):
+        return 0.2
+    return 0.0
+
+
+def _score_forbidden_tools(example: dspy.Example, tool_prohibition: str) -> float:
+    """Return 0.3 if any forbidden tool appears in prohibition text."""
+    forbidden_tools = _normalize_text(getattr(example, "forbidden_parent_tools", ""))
+    if not forbidden_tools:
+        return 0.0
+    for tool in forbidden_tools.split(","):
+        tool = tool.strip()
+        if tool and tool in tool_prohibition:
+            return 0.3
+    return 0.0
+
+
 def orchestration_compliance_metric(
     example: dspy.Example, prediction: Any, trace: Any = None
 ) -> float:
@@ -256,31 +292,9 @@ def orchestration_compliance_metric(
         return 0.0
 
     score = 0.3
-
-    expected_modes = _normalize_text(getattr(example, "expected_child_modes", ""))
-    if expected_modes:
-        for mode in expected_modes.split(","):
-            mode = mode.strip()
-            if mode and mode in delegation:
-                score += 0.2
-                break
-
-    phase_count = _normalize_text(getattr(example, "expected_phase_count", ""))
-    if (
-        phase_count in phase_ordering
-        or "sequential" in phase_ordering
-        or "phase" in phase_ordering
-    ):
-        score += 0.2
-
-    forbidden_tools = _normalize_text(getattr(example, "forbidden_parent_tools", ""))
-    if forbidden_tools:
-        for tool in forbidden_tools.split(","):
-            tool = tool.strip()
-            if tool and tool in tool_prohibition:
-                score += 0.3
-                break
-
+    score += _score_expected_modes(example, delegation)
+    score += _score_phase_ordering(example, phase_ordering)
+    score += _score_forbidden_tools(example, tool_prohibition)
     return min(score, 1.0)
 
 
