@@ -95,13 +95,14 @@ export interface CardExitPromptResolution {
 
 export async function resolveCardExitPrompt(
   mode: string | undefined,
+  cardIdOverride?: string,
 ): Promise<CardExitPromptResolution> {
   if (!mode) {
     return { cardId: null, prompt: null, source: "none" };
   }
 
   const modeMap = await loadModeCardMap();
-  const cardId = modeMap[mode] ?? null;
+  const cardId = cardIdOverride || (modeMap[mode] ?? null);
 
   if (cardId) {
     try {
