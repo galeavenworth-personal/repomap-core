@@ -1,10 +1,10 @@
 ---
-description: Run an architecture review against the codebase or a target area. Detects parallel paths, build-or-buy candidates, interface discipline violations, SOLID principle issues, and SDK-over-CLI opportunities. Can be used during planning (before writing code) or ad-hoc (on existing code).
+description: Run an architecture review against the codebase or a target area. Detects parallel paths, build-or-buy candidates, interface discipline violations, SOLID principle issues, SDK-over-CLI opportunities, and canonical surface drift. Can be used during planning (before writing code) or ad-hoc (on existing code).
 ---
 
 # Architecture Review Workflow
 
-Run all five lenses below against the **target scope** (a directory, module, or
+Run all six lenses below against the **target scope** (a directory, module, or
 the full `daemon/src/` tree). Produce a structured **review ledger** as output.
 
 The target scope is determined by context:
@@ -366,9 +366,127 @@ still flag PATH trust issues. The *real* fix is often: use the vendor's SDK.
 
 ---
 
+## Lens 6 — Canonical Surface
+
+**Goal**: Every logical resource in the project (database, service, config key,
+path, URL pattern) must have **exactly one canonical name** that all code and
+documentation consistently reference. When multiple names refer to the same
+thing, agents pick up stale or incorrect names from docs, comments, or older
+code paths, then propagate those names into new code — creating silent drift
+that compounds over time.
+
+This is the root cause behind the Dolt database proliferation (three DB names
+for what should have been one), and more generally any situation where an agent
+could read a doc, a rule file, a code comment, or a constant definition and get
+a *different* name for the same logical thing.
+
+### Why this matters for agent-driven development
+
+Agents treat **all text as ground truth**. A stale doc saying
+`DOLT_DATABASE=punch_cards` is indistinguishable from a correct doc saying
+`DOLT_DATABASE=factory`. The agent follows whatever it reads first. Unlike
+human developers who carry ambient context ("oh, we renamed that"), agents
+have no such memory across sessions. Every name divergence is a potential
+bug injection.
+
+### Machine checks
+
+1. **Resource name inventory** — enumerate all logical resources and their names
+   ```bash
+   # Database names
+   grep -rn 'DOLT_DATABASE\|dolt_database\|database:' <scope> \
+     --include='*.ts' --include='*.py' --include='*.sh' --include='*.md' --include='*.yaml' \
+     | grep -v node_modules | grep -v .git
+   ```
+   Group by logical resource. If the same resource appears under 2+ names,
+   that's a finding.
+
+2. **Constant vs. string literal divergence**
+   ```bash
+   # Find hardcoded string literals that should reference a constant
+   grep -rn '"punch_cards"\|"plant"\|"factory"\|"beads_repomap-core"' <scope> \
+     --include='*.ts' | grep -v node_modules
+   ```
+   Every hardcoded resource name that has a corresponding constant but doesn't
+   use it is a canonical surface violation.
+
+3. **Doc/code name mismatch**
+   For each canonical resource name in code (constants, config defaults),
+   search docs for references to the *old* name:
+   ```bash
+   # Example: if canonical DB name is 'factory', find stale references
+   grep -rn 'punch_cards\|plant_db' docs/ .kilocode/rules/ .windsurf/ \
+     --include='*.md' | grep -v 'historical\|archive\|CHANGELOG'
+   ```
+   Exclude explicitly-historical documents. Everything else should use the
+   canonical name.
+
+4. **Rule file audit** — `.kilocode/rules/` files are injected into agent
+   context. Any stale name here has **direct causal impact** on agent behavior:
+   ```bash
+   grep -rn 'database\|DOLT_\|DB_' .kilocode/rules/ --include='*.md'
+   ```
+   Every resource reference in a rule file must match the canonical name.
+
+5. **Workflow file audit** — `.windsurf/workflows/` files define agent
+   procedures. Same rule:
+   ```bash
+   grep -rn 'database\|DOLT_\|DB_' .windsurf/workflows/ --include='*.md'
+   ```
+
+6. **Environment variable canonicalization**
+   ```bash
+   grep -rn 'process\.env\.' <scope> --include='*.ts' | \
+     sed 's/.*process\.env\.\([A-Z_]*\).*/\1/' | sort -u
+   ```
+   Each env var must appear in `.env.example` with the canonical value.
+   If code reads `process.env.DOLT_DATABASE` but `.env.example` says
+   `DOLT_DATABASE=punch_cards`, that's a finding.
+
+7. **Import path consistency** — modules that re-export the same symbol
+   under different names create aliasing:
+   ```bash
+   grep -rn 'export.*as ' <scope> --include='*.ts' | grep -v node_modules
+   ```
+
+### Signal classification
+- **Critical**: Rule file or workflow references a stale name (agents will
+  read this and act on it — direct bug injection vector)
+- **High**: Code constant and code usage disagree (silent runtime bug)
+- **Medium**: Doc references a stale name (confuses human readers, may
+  confuse agents if doc is in retrieval scope)
+- **Low**: Comment or historical doc uses old name (minimal impact)
+
+### Output per finding
+```
+| ID | Resource | Canonical Name | Stale Name | Location | Severity | Action |
+|----|----------|---------------|------------|----------|----------|--------|
+| CS-1 | Dolt DB | factory | punch_cards | .kilocode/rules/dolt-server.md:20 | Critical | Update to canonical |
+| CS-2 | Dolt DB | factory | plant | daemon/src/index.ts:26 | High | Replace with constant |
+```
+
+### Resolution
+1. **Define the canonical name** — add it as a constant or config default
+   in one authoritative location
+2. **Update all code references** — replace hardcoded strings with the constant
+3. **Update all doc references** — rule files first (highest agent impact),
+   then workflows, then general docs
+4. **Add a lint check or grep-based CI gate** to prevent reintroduction
+   of stale names (optional but recommended)
+
+### Relationship to other lenses
+- **Lens 1 (Parallel Paths)** finds duplicate *implementations*; this lens
+  finds duplicate *names* for the same resource
+- **Lens 3 (Interface Discipline)** ensures identifiers are grounded; this
+  lens ensures they're *consistent* across code and docs
+- **Lens 5 (SDK-over-CLI)** eliminates PATH trust; this lens eliminates
+  *name* trust — both reduce environment coupling
+
+---
+
 ## Producing the Review Ledger
 
-After running all five lenses, compile findings into a single ledger:
+After running all six lenses, compile findings into a single ledger:
 
 ```markdown
 # Architecture Review Ledger — <scope> — <date>
@@ -379,6 +497,7 @@ After running all five lenses, compile findings into a single ledger:
 - Interface Discipline: N findings
 - SOLID: N findings
 - SDK-over-CLI: N findings
+- Canonical Surface: N findings
 
 ## Findings
 <tables from each lens>
