@@ -21,7 +21,6 @@ import { join } from "node:path";
 
 import {
   checkPort,
-  isPm2AppOnline,
 } from "./factory-dispatch.js";
 import { findRepoRoot, sleep, timestamp } from "./utils.js";
 import {
@@ -275,14 +274,16 @@ export async function checkStack(
 ): Promise<StackHealth> {
   const components: ComponentHealth[] = [];
 
-  // Run all checks in parallel (pm2 checks are now async via programmatic API)
-  const [kilo, dolt, ocDaemon, temporal, temporalWorker] = await Promise.all([
+  // Run non-PM2 checks in parallel, then serialize PM2 checks to avoid
+  // race on singleton connect/disconnect.
+  const [kilo, dolt, temporal] = await Promise.all([
     checkKiloHealth(config.kiloHost, config.kiloPort, fetchFn),
     checkDoltComponent(config),
-    checkOcDaemon(),
     checkTemporalServer(config.kiloHost, config.temporalPort),
-    checkTemporalWorker(),
   ]);
+  // PM2 checks serialized — each uses its own connect/disconnect cycle
+  const ocDaemon = await checkOcDaemon();
+  const temporalWorker = await checkTemporalWorker();
   components.push(kilo, dolt, ocDaemon, temporal, temporalWorker);
 
   const healthy = components.filter((c) => c.ok).length;
@@ -466,47 +467,65 @@ export async function ensurePm2Ecosystem(
 ): Promise<void> {
   log(`${timestamp()} Starting pm2-managed processes...`);
 
+  // Save previous env values before mutation, restore after PM2 operation
+  const savedEnv = {
+    KILO_HOST: process.env.KILO_HOST,
+    KILO_PORT: process.env.KILO_PORT,
+    DOLT_PORT: process.env.DOLT_PORT,
+  };
+
   // Set env vars that the ecosystem config reads via process.env
   process.env.KILO_HOST = config.kiloHost;
   process.env.KILO_PORT = String(config.kiloPort);
   process.env.DOLT_PORT = String(config.doltPort);
 
-  await pm2Connect();
   try {
-    await pm2Start(config.ecosystemConfig);
+    await pm2Connect();
+    try {
+      await pm2Start(config.ecosystemConfig);
 
-    // Wait up to 15s for both to come online
-    for (let i = 0; i < 15; i++) {
+      // Wait up to 15s for both to come online
+      for (let i = 0; i < 15; i++) {
+        const procs = await pm2List();
+        const ocdOk = procs.some(
+          (p) => p.name === "oc-daemon" && p.pm2_env?.status === "online",
+        );
+        const twOk = procs.some(
+          (p) => p.name === "temporal-worker" && p.pm2_env?.status === "online",
+        );
+        if (ocdOk && twOk) break;
+        await sleep(1000);
+      }
+
+      // Final check
       const procs = await pm2List();
-      const ocdOk = procs.some(
+      const ocdOnline = procs.some(
         (p) => p.name === "oc-daemon" && p.pm2_env?.status === "online",
       );
-      const twOk = procs.some(
+      if (!ocdOnline) {
+        throw new Error(`oc-daemon failed to start. Check: ${config.pm2Bin} logs oc-daemon`);
+      }
+      log(`${timestamp()} ✅ oc-daemon online (pm2, auto-restart enabled).`);
+
+      const twOnline = procs.some(
         (p) => p.name === "temporal-worker" && p.pm2_env?.status === "online",
       );
-      if (ocdOk && twOk) break;
-      await sleep(1000);
+      if (!twOnline) {
+        throw new Error(`Temporal worker failed to start. Check: ${config.pm2Bin} logs temporal-worker`);
+      }
+      log(`${timestamp()} ✅ Temporal worker online (pm2, auto-restart enabled).`);
+    } finally {
+      pm2Disconnect();
     }
-
-    // Final check
-    const procs = await pm2List();
-    const ocdOnline = procs.some(
-      (p) => p.name === "oc-daemon" && p.pm2_env?.status === "online",
-    );
-    if (!ocdOnline) {
-      throw new Error(`oc-daemon failed to start. Check: ${config.pm2Bin} logs oc-daemon`);
-    }
-    log(`${timestamp()} ✅ oc-daemon online (pm2, auto-restart enabled).`);
-
-    const twOnline = procs.some(
-      (p) => p.name === "temporal-worker" && p.pm2_env?.status === "online",
-    );
-    if (!twOnline) {
-      throw new Error(`Temporal worker failed to start. Check: ${config.pm2Bin} logs temporal-worker`);
-    }
-    log(`${timestamp()} ✅ Temporal worker online (pm2, auto-restart enabled).`);
   } finally {
-    pm2Disconnect();
+    // Restore previous env values
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
   }
 }
 

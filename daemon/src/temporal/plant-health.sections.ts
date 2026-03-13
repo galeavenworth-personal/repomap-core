@@ -123,8 +123,18 @@ export async function collectPunchCardStatus(
     });
 
     const anyUnhealthy = activeSessions.some((s) => s.stepCount > 50);
+
+    let status: "unknown" | "degraded" | "ok";
+    if (activeSessions.length === 0) {
+      status = "unknown";
+    } else if (anyUnhealthy) {
+      status = "degraded";
+    } else {
+      status = "ok";
+    }
+
     return {
-      status: activeSessions.length === 0 ? "unknown" : anyUnhealthy ? "degraded" : "ok",
+      status,
       data: {
         activeSessions,
         totalActiveSessions: activeSessions.length,
@@ -256,8 +266,18 @@ export async function collectCostSummary(
     });
 
     const anyBallooned = sessionBreakdown.some((s) => s.zone === "ballooned");
+
+    let status: "unknown" | "degraded" | "ok";
+    if (sessionBreakdown.length === 0) {
+      status = "unknown";
+    } else if (anyBallooned) {
+      status = "degraded";
+    } else {
+      status = "ok";
+    }
+
     return {
-      status: sessionBreakdown.length === 0 ? "unknown" : anyBallooned ? "degraded" : "ok",
+      status,
       data: {
         totalSpend,
         sessionBreakdown,

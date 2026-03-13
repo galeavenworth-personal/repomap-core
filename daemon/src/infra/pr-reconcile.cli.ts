@@ -21,7 +21,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createGitHubClient } from "./github-client.js";
-import { reconcile, defaultOptions } from "./pr-reconcile.js";
+import { reconcile, defaultOptions, type ReconcileItemResult } from "./pr-reconcile.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -112,58 +112,57 @@ if (!owner || !repo) {
   repo ??= remote.repo;
 }
 
-// ── Run reconciliation ──────────────────────────────────────────────────
+// ── Output formatting (extracted to reduce main() complexity) ────────────
 
-async function main(): Promise<void> {
+function reportItem(item: ReconcileItemResult, strictMode: boolean): void {
+  const line = `${item.taskId}: ${item.message}`;
+
+  switch (item.status) {
+    case "gh_error":
+      if (strictMode) {
+        console.error(`ERROR: ${line}`);
+      } else {
+        console.error(`${item.taskId}: WARN GitHub API query failed; reconciliation skipped`);
+        console.log(`${item.taskId}: reconciliation skipped (GitHub API error)`);
+      }
+      break;
+    case "bd_error":
+      if (strictMode) {
+        console.error(`ERROR: ${line}`);
+      } else {
+        console.error(`${item.taskId}: WARN bd close failed; continuing`);
+        console.log(`${item.taskId}: merged PR found; FAILED to close in Beads`);
+      }
+      break;
+    case "gh_missing":
+      if (strictMode) {
+        console.error(`ERROR: ${line}`);
+      } else {
+        console.error(`${item.taskId}: WARN GitHub API unavailable; reconciliation skipped (no-op)`);
+        console.log(`${item.taskId}: reconciliation skipped (GitHub API unavailable)`);
+      }
+      break;
+    default:
+      console.log(line);
+      break;
+  }
+}
+
+// ── Run reconciliation (top-level await) ────────────────────────────────
+
+try {
   const gh = createGitHubClient(owner!, repo!);
   const opts = defaultOptions({ dryRun, strict });
   const result = await reconcile(taskIds, opts, gh);
 
-  // ── Output ──────────────────────────────────────────────────────────────
-
   for (const item of result.items) {
-    const line = `${item.taskId}: ${item.message}`;
-
-    // Route warnings/errors to stderr, normal output to stdout
-    switch (item.status) {
-      case "gh_error":
-        if (strict) {
-          console.error(`ERROR: ${line}`);
-        } else {
-          console.error(`${item.taskId}: WARN gh query failed; reconciliation skipped`);
-          console.log(`${item.taskId}: reconciliation skipped (gh error)`);
-        }
-        break;
-      case "bd_error":
-        if (strict) {
-          console.error(`ERROR: ${line}`);
-        } else {
-          console.error(`${item.taskId}: WARN bd close failed; continuing`);
-          console.log(`${item.taskId}: merged PR found; FAILED to close in Beads`);
-        }
-        break;
-      case "gh_missing":
-        if (strict) {
-          console.error(`ERROR: ${line}`);
-        } else {
-          console.error(`${item.taskId}: WARN gh missing; reconciliation skipped (no-op)`);
-          console.log(`${item.taskId}: reconciliation skipped (gh missing)`);
-        }
-        break;
-      default:
-        console.log(line);
-        break;
-    }
+    reportItem(item, strict);
   }
-
-  // ── Exit code ───────────────────────────────────────────────────────────
 
   if (!result.success) {
     process.exit(2);
   }
-}
-
-main().catch((err) => {
+} catch (err) {
   console.error(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(2);
-});
+}

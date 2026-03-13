@@ -61,6 +61,8 @@ function parseArgs(argv: string[]): {
       owner = argv[++i];
     } else if (arg === "--repo" && i + 1 < argv.length) {
       repo = argv[++i];
+    } else if (arg.startsWith("-")) {
+      console.error(`WARN: unknown flag ignored: ${arg}`);
     } else if (prNumber === null) {
       const n = Number.parseInt(arg, 10);
       if (!Number.isNaN(n)) prNumber = n;
@@ -110,4 +112,5 @@ async function main(): Promise<number> {
   }
 }
 
-main().then((code) => process.exit(code));
+const exitCode = await main();
+process.exit(exitCode);

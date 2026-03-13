@@ -45,7 +45,7 @@ export async function runPostSessionAudit(
   log: Logger,
 ): Promise<AuditResult | null> {
   const validator = new PunchCardValidator({
-    host: config.host === "127.0.0.1" ? config.host : "127.0.0.1",
+    host: config.host || "127.0.0.1",
     port: config.doltPort,
     database: process.env.DOLT_DATABASE ?? "beads_repomap-core",
     user: "root",

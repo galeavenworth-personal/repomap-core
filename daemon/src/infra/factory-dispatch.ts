@@ -245,12 +245,19 @@ export async function preflight(
     detail: doltOk ? `port ${config.doltPort}` : `NOT listening on port ${config.doltPort}`,
   });
 
-  // 3-5: Run remaining checks in parallel (pm2 checks are async via programmatic API)
-  const [ocdOk, temporalOk, twOk] = await Promise.all([
-    isPm2AppOnline(config.pm2Bin, "oc-daemon"),
+  // 3-5: Check remaining components.
+  // PM2 checks are serialized to avoid race on singleton connect/disconnect.
+  // Port check runs concurrently with the PM2 sequence since it's independent.
+  const [temporalOk, pm2Results] = await Promise.all([
     checkPort(config.host, config.temporalPort),
-    isPm2AppOnline(config.pm2Bin, "temporal-worker"),
+    (async () => {
+      const ocd = await isPm2AppOnline(config.pm2Bin, "oc-daemon");
+      const tw = await isPm2AppOnline(config.pm2Bin, "temporal-worker");
+      return { ocd, tw };
+    })(),
   ]);
+  const ocdOk = pm2Results.ocd;
+  const twOk = pm2Results.tw;
 
   if (ocdOk) {
     log(`${timestamp()}   ✅ oc-daemon (SSE → Dolt)`);
@@ -289,7 +296,117 @@ export async function preflight(
   return { ok, components };
 }
 
-// ── Main orchestrator ────────────────────────────────────────────────────
+// ── Main orchestrator (extracted helpers) ─────────────────────────────────
+
+/** Print pre-flight failure banner to stderr. */
+function reportPreflightFailure(components: PreflightComponent[]): void {
+  const missing = components.filter((c) => !c.ok);
+  process.stderr.write("\n");
+  process.stderr.write("═══════════════════════════════════════════════════════════\n");
+  process.stderr.write(" DISPATCH BLOCKED — Stack is incomplete\n");
+  process.stderr.write("═══════════════════════════════════════════════════════════\n");
+  for (const c of missing) {
+    process.stderr.write(`  ❌ ${c.name}: ${c.detail}\n`);
+  }
+  process.stderr.write("Ensure the full stack is healthy first:\n");
+  process.stderr.write("  .kilocode/tools/start-stack.sh --ensure\n");
+  process.stderr.write("\nOr check status with:\n");
+  process.stderr.write("  .kilocode/tools/start-stack.sh --check\n");
+  process.stderr.write("═══════════════════════════════════════════════════════════\n");
+}
+
+/** Inject card exit prompt into the first text part of the payload. */
+async function injectCardExit(
+  config: FactoryDispatchConfig,
+  payload: PromptPayload,
+  log: Logger,
+): Promise<void> {
+  try {
+    const cardResolution = config.cardId
+      ? await resolveCardExitPrompt(config.mode, config.cardId)
+      : await resolveCardExitPrompt(config.mode);
+    if (cardResolution.prompt) {
+      for (const part of payload.parts) {
+        if (part.type === "text" && typeof part.text === "string") {
+          part.text = injectCardExitPrompt(part.text, cardResolution.prompt);
+          break;
+        }
+      }
+      log(
+        `${timestamp()} Card exit prompt injected (card=${cardResolution.cardId}, source=${cardResolution.source})`,
+      );
+    } else {
+      const cardSuffix = config.cardId ? ` card=${config.cardId}` : "";
+      log(`${timestamp()} No card exit prompt found for mode=${config.mode}${cardSuffix}`);
+    }
+  } catch (e) {
+    log(`${timestamp()} Warning: card exit prompt resolution failed: ${(e as Error).message}`);
+  }
+}
+
+/** Resolve the audit result for the session, returning null if unavailable. */
+async function resolveAudit(
+  sessionId: string,
+  config: FactoryDispatchConfig,
+  log: Logger,
+): Promise<AuditResult | null> {
+  const resolvedCardId = config.cardId || undefined;
+  if (resolvedCardId) {
+    return runPostSessionAudit(sessionId, resolvedCardId, config, log);
+  }
+  // Try mode-card-map fallback
+  try {
+    const cardResolution = await resolveCardExitPrompt(config.mode);
+    if (cardResolution.cardId) {
+      return runPostSessionAudit(sessionId, cardResolution.cardId, config, log);
+    }
+  } catch {
+    // Non-fatal — audit is best-effort
+  }
+  return null;
+}
+
+/** Emit final output and log handoff info. */
+function emitOutput(
+  config: FactoryDispatchConfig,
+  sessionId: string,
+  title: string,
+  monitor: import("./kilo-client.js").MonitorResult,
+  result: string,
+  childIds: string[],
+  audit: AuditResult | null,
+  log: Logger,
+): void {
+  if (config.jsonOutput) {
+    const output: DispatchResult = {
+      session_id: sessionId,
+      mode: config.mode,
+      title,
+      children: monitor.childCount,
+      elapsed_seconds: monitor.elapsed,
+      result,
+      child_session_ids: childIds,
+      ...(audit ? { audit } : {}),
+    };
+    process.stdout.write(JSON.stringify(output, null, 2) + "\n");
+  } else {
+    process.stdout.write(result + "\n");
+  }
+
+  if (childIds.length > 0) {
+    log(`${timestamp()} Child session IDs captured for handoff:`);
+    for (const cid of childIds) {
+      log(`  - ${cid}`);
+    }
+  }
+
+  log(
+    `${timestamp()} Done. Session: ${sessionId} | Children: ${monitor.childCount} | Elapsed: ${monitor.elapsed}s`,
+  );
+  log(
+    `${timestamp()} Handoff: use --parent-session ${sessionId} with punch_engine for deterministic child ID resolution`,
+  );
+}
 
 /**
  * Run the full factory dispatch pipeline.
@@ -307,19 +424,7 @@ export async function runDispatch(
   // Phase 1: Pre-flight
   const pf = await preflight(config, log, fetchFn);
   if (!pf.ok) {
-    const missing = pf.components.filter((c) => !c.ok);
-    process.stderr.write("\n");
-    process.stderr.write("═══════════════════════════════════════════════════════════\n");
-    process.stderr.write(" DISPATCH BLOCKED — Stack is incomplete\n");
-    process.stderr.write("═══════════════════════════════════════════════════════════\n");
-    for (const c of missing) {
-      process.stderr.write(`  ❌ ${c.name}: ${c.detail}\n`);
-    }
-    process.stderr.write("Ensure the full stack is healthy first:\n");
-    process.stderr.write("  .kilocode/tools/start-stack.sh --ensure\n");
-    process.stderr.write("\nOr check status with:\n");
-    process.stderr.write("  .kilocode/tools/start-stack.sh --check\n");
-    process.stderr.write("═══════════════════════════════════════════════════════════\n");
+    reportPreflightFailure(pf.components);
     return ExitCode.HEALTH_CHECK_FAILED;
   }
 
@@ -352,30 +457,9 @@ export async function runDispatch(
   log(`${timestamp()} Session created: ${sessionId}`);
   log(`${timestamp()} Title: ${title}`);
 
-  // Inject SESSION_ID into prompt
+  // Inject SESSION_ID and card exit prompt
   injectSessionId(payload, sessionId);
-
-  // Phase 3b: Inject card exit prompt
-  try {
-    const cardResolution = config.cardId
-      ? await resolveCardExitPrompt(config.mode, config.cardId)
-      : await resolveCardExitPrompt(config.mode);
-    if (cardResolution.prompt) {
-      for (const part of payload.parts) {
-        if (part.type === "text" && typeof part.text === "string") {
-          part.text = injectCardExitPrompt(part.text, cardResolution.prompt);
-          break;
-        }
-      }
-      log(
-        `${timestamp()} Card exit prompt injected (card=${cardResolution.cardId}, source=${cardResolution.source})`,
-      );
-    } else {
-      log(`${timestamp()} No card exit prompt found for mode=${config.mode}${config.cardId ? ` card=${config.cardId}` : ""}`);
-    }
-  } catch (e) {
-    log(`${timestamp()} Warning: card exit prompt resolution failed: ${(e as Error).message}`);
-  }
+  await injectCardExit(config, payload, log);
 
   // Phase 4: Dispatch prompt
   try {
@@ -419,62 +503,18 @@ export async function runDispatch(
     return ExitCode.NO_RESPONSE;
   }
 
-  // Fetch children for Phase 8 + 9
-  let children: { id: string; [key: string]: unknown }[] = [];
+  // Fetch children
   let childIds: string[] = [];
   if (monitor.childCount > 0) {
-    children = await fetchChildren(baseUrl, sessionId, fetchFn);
+    const children = await fetchChildren(baseUrl, sessionId, fetchFn);
     childIds = children.map((c) => c.id).filter(Boolean);
   }
 
   // Phase 7b: Post-session punch card audit
-  let audit: AuditResult | null = null;
-  const resolvedCardId = config.cardId || undefined;
-  if (resolvedCardId) {
-    audit = await runPostSessionAudit(sessionId, resolvedCardId, config, log);
-  } else {
-    // Try mode-card-map fallback
-    try {
-      const cardResolution = await resolveCardExitPrompt(config.mode);
-      if (cardResolution.cardId) {
-        audit = await runPostSessionAudit(sessionId, cardResolution.cardId, config, log);
-      }
-    } catch {
-      // Non-fatal — audit is best-effort
-    }
-  }
+  const audit = await resolveAudit(sessionId, config, log);
 
-  // Phase 8: Output
-  if (config.jsonOutput) {
-    const output: DispatchResult = {
-      session_id: sessionId,
-      mode: config.mode,
-      title,
-      children: monitor.childCount,
-      elapsed_seconds: monitor.elapsed,
-      result,
-      child_session_ids: childIds,
-      ...(audit ? { audit } : {}),
-    };
-    process.stdout.write(JSON.stringify(output, null, 2) + "\n");
-  } else {
-    process.stdout.write(result + "\n");
-  }
-
-  // Phase 9: Child session ID capture
-  if (childIds.length > 0) {
-    log(`${timestamp()} Child session IDs captured for handoff:`);
-    for (const cid of childIds) {
-      log(`  - ${cid}`);
-    }
-  }
-
-  log(
-    `${timestamp()} Done. Session: ${sessionId} | Children: ${monitor.childCount} | Elapsed: ${monitor.elapsed}s`,
-  );
-  log(
-    `${timestamp()} Handoff: use --parent-session ${sessionId} with punch_engine for deterministic child ID resolution`,
-  );
+  // Phase 8+9: Output and handoff
+  emitOutput(config, sessionId, title, monitor, result, childIds, audit, log);
 
   return ExitCode.SUCCESS;
 }

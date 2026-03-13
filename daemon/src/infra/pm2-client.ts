@@ -41,17 +41,16 @@ export function pm2Disconnect(): void {
  */
 export function pm2Start(configOrOptions: string | StartOptions): Promise<Proc> {
   return new Promise((resolve, reject) => {
-    if (typeof configOrOptions === "string") {
-      pm2.start(configOrOptions, (err, proc) => {
-        if (err) reject(err);
-        else resolve(proc);
-      });
-    } else {
-      pm2.start(configOrOptions, (err, proc) => {
-        if (err) reject(err);
-        else resolve(proc);
-      });
-    }
+    const cb = (err: Error | null, proc: Proc) => {
+      if (err) reject(err);
+      else resolve(proc);
+    };
+    // pm2.start has separate overloads for string and StartOptions.
+    // Cast to satisfy TypeScript while avoiding duplicate branch code.
+    (pm2.start as (arg: string | StartOptions, cb: (err: Error | null, proc: Proc) => void) => void)(
+      configOrOptions,
+      cb,
+    );
   });
 }
 

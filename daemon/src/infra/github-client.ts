@@ -121,10 +121,10 @@ export function createGitHubClient(
   repo: string,
   token?: string,
 ): GitHubClient {
-  const resolvedToken = token ?? process.env.GITHUB_TOKEN;
+  const resolvedToken = token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
   if (!resolvedToken) {
     throw new Error(
-      "GitHub token not found. Set GITHUB_TOKEN environment variable or pass token explicitly.",
+      "GitHub token not found. Set GITHUB_TOKEN or GH_TOKEN environment variable, or pass token explicitly.",
     );
   }
 

@@ -118,8 +118,17 @@ export async function collectQualityGateResults(
     const allPassing = gates.length > 0 && gates.every((g) => g.status === "pass");
     const anyFailing = gates.some((g) => g.status === "fail");
 
+    let status: "unknown" | "degraded" | "ok";
+    if (gates.length === 0) {
+      status = "unknown";
+    } else if (anyFailing) {
+      status = "degraded";
+    } else {
+      status = "ok";
+    }
+
     return {
-      status: gates.length === 0 ? "unknown" : anyFailing ? "degraded" : "ok",
+      status,
       data: { gates, allPassing },
       error: null,
     };
@@ -132,6 +141,112 @@ export async function collectQualityGateResults(
   }
 }
 
+/** Check kilo serve health via HTTP. */
+async function checkKiloServeHealth(config: PlantHealthConfig): Promise<SubsystemHealth> {
+  try {
+    const { result: res, elapsedMs } = await timed(async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
+      try {
+        return await fetch(`http://${config.kiloHost}:${config.kiloPort}/session`, {
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
+    return res.ok
+      ? buildSubsystemHealth("up", elapsedMs, `HTTP ${res.status}`)
+      : buildSubsystemHealth("down", elapsedMs, `HTTP ${res.status} ${res.statusText}`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { status: "down", message: `unreachable: ${msg}`, latencyMs: null };
+  }
+}
+
+/** TCP connect check with timeout. */
+async function tcpCheck(host: string, port: number): Promise<number> {
+  const { elapsedMs } = await timed(async () => {
+    await new Promise<void>((resolveConn, reject) => {
+      const sock = createConnection({ host, port }, () => {
+        sock.destroy();
+        resolveConn();
+      });
+      sock.on("error", reject);
+      sock.setTimeout(HEALTH_CHECK_TIMEOUT_MS, () => {
+        sock.destroy();
+        reject(new Error("timeout"));
+      });
+    });
+  });
+  return elapsedMs;
+}
+
+/** Check Dolt health via TCP + query latency probe. */
+async function checkDoltHealth(
+  config: PlantHealthConfig,
+): Promise<{ dolt: SubsystemHealth; doltQueryLatencyMs: number | null }> {
+  let doltQueryLatencyMs: number | null = null;
+  try {
+    const elapsedMs = await tcpCheck(config.doltHost, config.doltPort);
+    let dolt: SubsystemHealth = buildSubsystemHealth("up", elapsedMs, `TCP ${config.doltHost}:${config.doltPort}`);
+
+    // Measure query latency via a lightweight query
+    try {
+      let conn: Connection | null = null;
+      try {
+        conn = await mysql.createConnection({
+          host: config.doltHost,
+          port: config.doltPort,
+          database: config.doltDatabase,
+          user: "root",
+          connectTimeout: HEALTH_CHECK_TIMEOUT_MS,
+        });
+        const activeConn = conn;
+        const { elapsedMs: queryMs } = await timed(async () => {
+          await activeConn.execute("SELECT 1");
+        });
+        doltQueryLatencyMs = queryMs;
+      } finally {
+        if (conn) await conn.end();
+      }
+    } catch {
+      dolt = { status: "degraded", latencyMs: elapsedMs, message: "TCP up, but query latency probe failed" };
+    }
+
+    return { dolt, doltQueryLatencyMs };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      dolt: { status: "down", message: `TCP ${config.doltHost}:${config.doltPort} failed: ${msg}`, latencyMs: null },
+      doltQueryLatencyMs: null,
+    };
+  }
+}
+
+/** Check Temporal health via TCP or implicit (inside Temporal activity). */
+async function checkTemporalHealth(config: PlantHealthConfig): Promise<SubsystemHealth> {
+  if (config.insideTemporal) {
+    return { status: "up", message: "implicit: running inside Temporal activity", latencyMs: 0 };
+  }
+
+  const temporalEndpoint = parseTemporalAddress(process.env.TEMPORAL_ADDRESS ?? "localhost:7233");
+  try {
+    const elapsedMs = await tcpCheck(temporalEndpoint.host, temporalEndpoint.port);
+    return buildSubsystemHealth("up", elapsedMs, `TCP ${temporalEndpoint.display}`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { status: "down", message: `TCP ${temporalEndpoint.display} failed: ${msg}`, latencyMs: null };
+  }
+}
+
+/** Aggregate subsystem statuses into an overall daemon health status. */
+function aggregateDaemonStatus(subsystems: SubsystemHealth[]): "ok" | "degraded" | "unhealthy" {
+  if (subsystems.some((s) => s.status === "down")) return "unhealthy";
+  if (subsystems.some((s) => s.status === "degraded")) return "degraded";
+  return "ok";
+}
+
 /**
  * Collect daemon health — kilo serve, Dolt, and Temporal connectivity.
  *
@@ -142,120 +257,16 @@ export async function collectDaemonHealth(
   config: PlantHealthConfig,
 ): Promise<DaemonHealthStatus> {
   try {
-    // Check kilo serve
-    let kiloServe: SubsystemHealth;
-    try {
-      const { result: res, elapsedMs } = await timed(async () => {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
-        try {
-          return await fetch(`http://${config.kiloHost}:${config.kiloPort}/session`, {
-            signal: controller.signal,
-          });
-        } finally {
-          clearTimeout(timeout);
-        }
-      });
-      kiloServe = res.ok
-        ? buildSubsystemHealth("up", elapsedMs, `HTTP ${res.status}`)
-        : buildSubsystemHealth("down", elapsedMs, `HTTP ${res.status} ${res.statusText}`);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      kiloServe = { status: "down", message: `unreachable: ${msg}`, latencyMs: null };
-    }
+    const [kiloServe, doltResult, temporal] = await Promise.all([
+      checkKiloServeHealth(config),
+      checkDoltHealth(config),
+      checkTemporalHealth(config),
+    ]);
 
-    // Check Dolt via TCP
-    let dolt: SubsystemHealth;
-    let doltQueryLatencyMs: number | null = null;
-    try {
-      const { elapsedMs } = await timed(async () => {
-        await new Promise<void>((resolveConn, reject) => {
-          const sock = createConnection(
-            { host: config.doltHost, port: config.doltPort },
-            () => {
-              sock.destroy();
-              resolveConn();
-            },
-          );
-          sock.on("error", reject);
-          sock.setTimeout(HEALTH_CHECK_TIMEOUT_MS, () => {
-            sock.destroy();
-            reject(new Error("timeout"));
-          });
-        });
-      });
-      dolt = buildSubsystemHealth("up", elapsedMs, `TCP ${config.doltHost}:${config.doltPort}`);
-
-      // Measure query latency via a lightweight query
-      try {
-        let conn: Connection | null = null;
-        try {
-          conn = await mysql.createConnection({
-            host: config.doltHost,
-            port: config.doltPort,
-            database: config.doltDatabase,
-            user: "root",
-            connectTimeout: HEALTH_CHECK_TIMEOUT_MS,
-          });
-          const activeConn = conn;
-          const { elapsedMs: queryMs } = await timed(async () => {
-            await activeConn.execute("SELECT 1");
-          });
-          doltQueryLatencyMs = queryMs;
-        } finally {
-          if (conn) {
-            await conn.end();
-          }
-        }
-      } catch {
-        // Query latency probe failed, but TCP was up.
-        dolt = {
-          status: "degraded",
-          latencyMs: elapsedMs,
-          message: "TCP up, but query latency probe failed",
-        };
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      dolt = { status: "down", message: `TCP ${config.doltHost}:${config.doltPort} failed: ${msg}`, latencyMs: null };
-    }
-
-    // Check Temporal
-    let temporal: SubsystemHealth;
-    if (config.insideTemporal) {
-      temporal = { status: "up", message: "implicit: running inside Temporal activity", latencyMs: 0 };
-    } else {
-      // TCP check against configured Temporal address
-      const temporalEndpoint = parseTemporalAddress(process.env.TEMPORAL_ADDRESS ?? "localhost:7233");
-      try {
-        const { elapsedMs } = await timed(async () => {
-          await new Promise<void>((resolveConn, reject) => {
-            const sock = createConnection(
-              { host: temporalEndpoint.host, port: temporalEndpoint.port },
-              () => {
-                sock.destroy();
-                resolveConn();
-              },
-            );
-            sock.on("error", reject);
-            sock.setTimeout(HEALTH_CHECK_TIMEOUT_MS, () => {
-              sock.destroy();
-              reject(new Error("timeout"));
-            });
-          });
-        });
-        temporal = buildSubsystemHealth("up", elapsedMs, `TCP ${temporalEndpoint.display}`);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        temporal = { status: "down", message: `TCP ${temporalEndpoint.display} failed: ${msg}`, latencyMs: null };
-      }
-    }
-
-    const anyDown = [kiloServe, dolt, temporal].some((s) => s.status === "down");
-    const anyDegraded = [kiloServe, dolt, temporal].some((s) => s.status === "degraded");
+    const { dolt, doltQueryLatencyMs } = doltResult;
 
     return {
-      status: anyDown ? "unhealthy" : anyDegraded ? "degraded" : "ok",
+      status: aggregateDaemonStatus([kiloServe, dolt, temporal]),
       data: { kiloServe, dolt, temporal, doltQueryLatencyMs },
       error: null,
     };

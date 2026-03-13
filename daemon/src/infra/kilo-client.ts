@@ -219,6 +219,18 @@ export async function fetchChildren(
 
 // ── Idle Detection ───────────────────────────────────────────────────────
 
+/** Check if a message part represents a running or pending tool. */
+function isToolActive(part: MessagePart): boolean {
+  if (part.type !== "tool") return false;
+  const status = part.state?.status;
+  return status === "running" || status === "pending";
+}
+
+/** Determine if a step-finish reason indicates a terminal stop. */
+function isTerminalReason(reason: string): boolean {
+  return reason === "end_turn" || reason === "stop" || reason === "max_tokens" || reason === "";
+}
+
 /**
  * Check if a session's messages indicate it is done processing.
  * A session is done when it has a terminal step-finish (end_turn/stop, not tool-calls)
@@ -232,17 +244,14 @@ export function isSessionDone(messages: SessionMessage[]): boolean {
 
   for (const msg of messages) {
     for (const part of msg.parts ?? []) {
-      if (part.type === "tool") {
-        const status = part.state?.status;
-        if (status === "running" || status === "pending") {
-          hasRunningTools = true;
-        }
+      if (isToolActive(part)) {
+        hasRunningTools = true;
       }
       if (part.type === "step-finish") {
         const reason = part.reason ?? "";
         if (reason === "tool-calls") {
           hasTerminalFinish = false; // reset — more work coming
-        } else if (reason === "end_turn" || reason === "stop" || reason === "max_tokens" || reason === "") {
+        } else if (isTerminalReason(reason)) {
           hasTerminalFinish = true;
         }
       }
@@ -285,6 +294,31 @@ export interface MonitorConfig {
   idleConfirm: number;
 }
 
+/** Check the session done status, returning "yes", "no", or "error". */
+function checkDoneStatus(messages: SessionMessage[]): "yes" | "no" | "error" {
+  try {
+    return isSessionDone(messages) ? "yes" : "no";
+  } catch {
+    return "error";
+  }
+}
+
+/** Log the poll status line. */
+function logPollStatus(
+  log: Logger,
+  elapsed: number,
+  doneStatus: "yes" | "no" | "error",
+  childCount: number,
+  idleCount: number,
+  idleConfirm: number,
+): void {
+  if (doneStatus === "error") {
+    log(`${timestamp()} [${elapsed}s] Warning: status check failed, retrying...`);
+  } else {
+    log(`${timestamp()} [${elapsed}s] Parent done: ${doneStatus}, children: ${childCount}, idle: ${idleCount}/${idleConfirm}`);
+  }
+}
+
 /**
  * Monitor a session for completion with idle detection and child monitoring.
  *
@@ -316,14 +350,8 @@ export async function monitorSession(
       lastChildCount = childCount;
     }
 
-    // Check session messages
     const messages = await fetchMessages(baseUrl, sessionId, fetchFn);
-    let doneStatus: "yes" | "no" | "error";
-    try {
-      doneStatus = isSessionDone(messages) ? "yes" : "no";
-    } catch {
-      doneStatus = "error";
-    }
+    const doneStatus = checkDoneStatus(messages);
 
     if (doneStatus === "yes") {
       idleCount++;
@@ -336,10 +364,7 @@ export async function monitorSession(
       }
 
       // Confirmed idle — verify all children are done
-      let allChildrenDone = true;
-      if (childCount > 0) {
-        allChildrenDone = await areAllChildrenDone(baseUrl, children, fetchFn);
-      }
+      const allChildrenDone = childCount === 0 || await areAllChildrenDone(baseUrl, children, fetchFn);
 
       if (allChildrenDone) {
         log(
@@ -353,11 +378,7 @@ export async function monitorSession(
       idleCount = 0;
     }
 
-    if (doneStatus === "error") {
-      log(`${timestamp()} [${elapsed}s] Warning: status check failed, retrying...`);
-    } else {
-      log(`${timestamp()} [${elapsed}s] Parent done: ${doneStatus}, children: ${childCount}, idle: ${idleCount}/${config.idleConfirm}`);
-    }
+    logPollStatus(log, elapsed, doneStatus, childCount, idleCount, config.idleConfirm);
   }
 
   return { completed: false, elapsed, childCount: lastChildCount };
@@ -366,31 +387,33 @@ export async function monitorSession(
 // ── Result Extraction ────────────────────────────────────────────────────
 
 /**
+ * Find the last assistant text part matching a predicate.
+ * Iterates messages in reverse order for most-recent-first lookup.
+ */
+function findLastAssistantText(
+  messages: SessionMessage[],
+  predicate: (text: string) => boolean,
+): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.info?.role !== "assistant") continue;
+    for (const part of msg.parts ?? []) {
+      if (part.type === "text" && typeof part.text === "string" && predicate(part.text)) {
+        return part.text;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Extract the final assistant response text from session messages.
  * First looks for substantial text (>100 chars), then falls back to any text.
  */
 export function extractResult(messages: SessionMessage[]): string | null {
-  // First pass: find last assistant message with substantial text
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.info?.role !== "assistant") continue;
-    for (const part of msg.parts ?? []) {
-      if (part.type === "text" && typeof part.text === "string" && part.text.length > 100) {
-        return part.text;
-      }
-    }
-  }
-
-  // Fallback: any assistant text
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.info?.role !== "assistant") continue;
-    for (const part of msg.parts ?? []) {
-      if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
-        return part.text;
-      }
-    }
-  }
-
-  return null;
+  // First pass: substantial text
+  return (
+    findLastAssistantText(messages, (text) => text.length > 100) ??
+    findLastAssistantText(messages, (text) => text.trim().length > 0)
+  );
 }

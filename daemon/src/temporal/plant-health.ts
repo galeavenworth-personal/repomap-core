@@ -48,7 +48,6 @@ import {
 import type {
   PunchCardStatus,
   GovernorStatus,
-  QualityGateStatus,
   CostSummaryStatus,
   SubtaskTreeStatus,
   PlantHealthConfig,
@@ -301,8 +300,10 @@ const isMainModule = process.argv[1]?.endsWith("plant-health.ts") ||
   process.argv[1]?.endsWith("plant-health.js");
 
 if (isMainModule) {
-  main().catch((err) => {
+  try {
+    await main();
+  } catch (err) {
     console.error("[plant-health] Fatal error:", err);
     process.exit(1);
-  });
+  }
 }

@@ -47,7 +47,6 @@ import type {
   ForemanStatus,
   ForemanPhase,
   HealthCheckResult,
-  DispatchOutcome,
   ApprovalDecision,
 } from "./foreman.types.js";
 
@@ -239,7 +238,9 @@ function formatHealthStatus(health: HealthCheckResult): string {
     `  checked: ${health.checkedAt}`,
   ];
   for (const [name, sub] of Object.entries(health.subsystems)) {
-    lines.push(`    ${name}: ${sub.status}${sub.message ? ` — ${sub.message}` : ""}${sub.latencyMs != null ? ` (${sub.latencyMs}ms)` : ""}`);
+    const messageSuffix = sub.message ? ` — ${sub.message}` : "";
+    const latencySuffix = sub.latencyMs != null ? ` (${sub.latencyMs}ms)` : "";
+    lines.push(`    ${name}: ${sub.status}${messageSuffix}${latencySuffix}`);
   }
   return lines.join("\n");
 }
@@ -260,13 +261,17 @@ function formatStatus(status: ForemanStatus): string {
   ];
 
   if (status.interventionReason) {
-    lines.push(`intervention       : ${status.interventionReason}`);
-    lines.push(`awaiting since     : ${status.awaitingInterventionSince ?? "unknown"}`);
+    lines.push(
+      `intervention       : ${status.interventionReason}`,
+      `awaiting since     : ${status.awaitingInterventionSince ?? "unknown"}`,
+    );
   }
 
   if (status.lastHealthCheck) {
-    lines.push(`health:`);
-    lines.push(formatHealthStatus(status.lastHealthCheck));
+    lines.push(
+      `health:`,
+      formatHealthStatus(status.lastHealthCheck),
+    );
   }
 
   if (status.retryLedger.length > 0) {
@@ -382,16 +387,27 @@ async function handleStatus(parsed: ParsedArgs): Promise<void> {
   console.log(formatStatus(status));
 }
 
+const TERMINAL_PHASES = new Set<ForemanPhase>(["shutting_down"]);
+const TERMINAL_WORKFLOW_STATUSES = new Set([
+  "COMPLETED", "FAILED", "CANCELLED", "TERMINATED", "TIMED_OUT",
+]);
+
+/** Check if the workflow execution is in a terminal state via describe(). */
+async function isWorkflowTerminal(handle: { describe(): Promise<{ status?: { name?: string } }> }): Promise<string | null> {
+  try {
+    const described = await handle.describe();
+    const rawStatus = described.status?.name ?? "";
+    return TERMINAL_WORKFLOW_STATUSES.has(rawStatus) ? rawStatus : null;
+  } catch {
+    return null;
+  }
+}
+
 async function handleWatch(parsed: ParsedArgs): Promise<void> {
   const client = await createClient();
   const wfId = resolveWorkflowId(parsed);
   const handle = client.workflow.getHandle(wfId);
   let lastRendered = "";
-
-  const terminalPhases = new Set<ForemanPhase>(["shutting_down"]);
-  const terminalWorkflowStatuses = new Set([
-    "COMPLETED", "FAILED", "CANCELLED", "TERMINATED", "TIMED_OUT",
-  ]);
 
   console.log(`[foreman] Watching workflow: ${wfId} (interval: ${parsed.watchIntervalMs}ms)`);
 
@@ -405,36 +421,23 @@ async function handleWatch(parsed: ParsedArgs): Promise<void> {
         lastRendered = rendered;
       }
 
-      // Check for terminal phase
-      if (terminalPhases.has(status.phase)) {
+      if (TERMINAL_PHASES.has(status.phase)) {
         console.log("\n[foreman] Workflow reached terminal phase.");
         return;
       }
 
-      // Check Temporal execution status
-      try {
-        const described = await handle.describe();
-        const rawStatus = described.status?.name ?? "";
-        if (terminalWorkflowStatuses.has(rawStatus)) {
-          console.log(`\n[foreman] Workflow execution terminal: ${rawStatus}`);
-          return;
-        }
-      } catch {
-        // describe may fail transiently
+      const terminalStatus = await isWorkflowTerminal(handle);
+      if (terminalStatus) {
+        console.log(`\n[foreman] Workflow execution terminal: ${terminalStatus}`);
+        return;
       }
     } catch (err) {
       console.error(`[foreman] Query failed: ${err instanceof Error ? err.message : String(err)}`);
 
-      // If query fails, check if workflow is terminal
-      try {
-        const described = await handle.describe();
-        const rawStatus = described.status?.name ?? "";
-        if (terminalWorkflowStatuses.has(rawStatus)) {
-          console.log(`\n[foreman] Workflow execution terminal: ${rawStatus}`);
-          return;
-        }
-      } catch {
-        // If describe also fails, keep polling
+      const terminalStatus = await isWorkflowTerminal(handle);
+      if (terminalStatus) {
+        console.log(`\n[foreman] Workflow execution terminal: ${terminalStatus}`);
+        return;
       }
     }
 
@@ -602,7 +605,9 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-main().catch((err) => {
+try {
+  await main();
+} catch (err) {
   console.error("[foreman] Fatal error:", err);
   process.exit(1);
-});
+}

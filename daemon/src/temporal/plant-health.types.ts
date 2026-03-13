@@ -176,7 +176,7 @@ export const DEFAULT_PLANT_HEALTH_CONFIG: Omit<PlantHealthConfig, "repoPath"> = 
   kiloHost: "127.0.0.1",
   kiloPort: 4096,
   cheapZoneThresholdUsd: 0.42,
-  balloonedThresholdUsd: 1.0,
+  balloonedThresholdUsd: 1,
   gateRunsPath: ".kilocode/gate_runs.jsonl",
   insideTemporal: false,
 };

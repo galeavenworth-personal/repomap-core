@@ -23,6 +23,10 @@ let cache: ModeCardMap | null = null;
 /**
  * Load and cache the mode-card map from disk.
  *
+ * The file-based result is cached permanently (reset via `_resetModeCardMapCache()`).
+ * When the file is missing or unparseable, each caller's fallback is returned
+ * directly without caching — so different callers can supply different defaults.
+ *
  * @param fallback — optional default map returned when the JSON file
  *   is missing or unparseable. Defaults to `{}`.
  */
@@ -39,11 +43,11 @@ export async function loadModeCardMap(
       return cache;
     }
   } catch {
-    // Graceful fallback — caller-supplied defaults or empty map.
+    // Graceful fallback — caller-supplied defaults (not cached so each
+    // caller's fallback remains effective).
   }
 
-  cache = fallback;
-  return cache;
+  return fallback;
 }
 
 /** Reset the cache (useful for tests). */
