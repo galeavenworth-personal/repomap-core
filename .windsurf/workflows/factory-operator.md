@@ -163,6 +163,11 @@ tail -50 /tmp/oc-daemon.log
 
 ## 5. Delegation Analytics (Query Dolt)
 
+> **⚠ Canonical name migration pending (repomap-core-65s):** The factory database
+> is currently named `punch_cards` but will be renamed to `factory` as part of
+> Dolt consolidation. All new code should use a configurable DB name via
+> `process.env.DOLT_DATABASE` rather than hardcoding either name.
+
 The factory records all delegation and enforcement data in Dolt (`punch_cards` database).
 Use these queries to analyze factory performance.
 
@@ -501,7 +506,7 @@ cd ~/Projects-Employee-1/repomap-core
 
 ---
 
-## 13. Dolt Data Model (punch_cards database)
+## 13. Dolt Data Model (punch_cards database — migrating to `factory`, see repomap-core-65s)
 
 | Table | Records | Purpose |
 |---|---|---|

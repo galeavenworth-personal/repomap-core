@@ -37,5 +37,14 @@ That's it. The script is idempotent — it checks if the server is already runni
 
 - **Do NOT** run `bd dolt start` — it looks for `.beads/dolt` which does not exist
 - **Do NOT** run `bd init` — the database already exists
-- **Do NOT** start Dolt against `.kilocode/dolt` — that is the punch card schema, separate from beads
+- **Do NOT** start Dolt against `.kilocode/dolt` — that contains factory schema definitions, separate from beads
 - **Do NOT** spend time debugging Dolt startup — just run the script above
+
+## Two-Database Topology
+
+The Dolt server hosts **two** logical databases:
+
+1. **`beads_repomap-core`** — External dependency owned by the `bd` CLI. This rule file covers starting it.
+2. **Factory DB** (currently `punch_cards`, migrating to `factory` per repomap-core-65s) — sessions, punches, compiled prompts, etc. Started by `.kilocode/tools/start-stack.sh`.
+
+Do NOT conflate these. `bd` commands use database 1. The daemon and DSPy use database 2.
