@@ -41,6 +41,7 @@
  */
 
 import { Client, Connection } from "@temporalio/client";
+import { formatDuration } from "../infra/cli-format.js";
 import type {
   ForemanInput,
   ForemanStatus,
@@ -211,16 +212,6 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 // ── Formatting ──
-
-function formatDuration(ms: number): string {
-  const sec = Math.round(ms / 1000);
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
 
 function formatPhase(phase: ForemanPhase): string {
   const icons: Record<ForemanPhase, string> = {

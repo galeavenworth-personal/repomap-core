@@ -13,6 +13,7 @@
 
 import { Client, Connection } from "@temporalio/client";
 import { Buffer } from "node:buffer";
+import { formatDuration } from "../infra/cli-format.js";
 import type { AgentTaskStatus } from "./workflows.js";
 
 const DEFAULT_INTERVAL_MS = 5000;
@@ -57,16 +58,6 @@ interface PendingActivityLike {
 function usage(): never {
   console.error("Usage: npx tsx src/temporal/monitor.cli.ts <status|watch|abort> <workflow-id> [--interval <ms>]");
   process.exit(1);
-}
-
-function formatDuration(ms: number): string {
-  const sec = Math.round(ms / 1000);
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
 }
 
 function formatStatus(status: AgentTaskStatus): string {
