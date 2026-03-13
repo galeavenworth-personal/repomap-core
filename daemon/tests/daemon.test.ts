@@ -159,7 +159,7 @@ describe("createDaemon", () => {
       kiloPort: 4096,
       doltHost: "127.0.0.1",
       doltPort: 3307,
-      doltDatabase: "plant",
+      doltDatabase: "factory",
       doltUser: "root",
     });
 
@@ -174,7 +174,7 @@ describe("createDaemon", () => {
       kiloPort: 4096,
       doltHost: "127.0.0.1",
       doltPort: 3307,
-      doltDatabase: "plant",
+      doltDatabase: "factory",
       doltUser: "root",
     });
 
@@ -235,7 +235,7 @@ describe("createDaemon", () => {
       kiloPort: 4096,
       doltHost: "127.0.0.1",
       doltPort: 3307,
-      doltDatabase: "plant",
+      doltDatabase: "factory",
       doltUser: "root",
     });
 
@@ -295,7 +295,7 @@ describe("createDaemon", () => {
       kiloPort: 4096,
       doltHost: "127.0.0.1",
       doltPort: 3307,
-      doltDatabase: "plant",
+      doltDatabase: "factory",
       doltUser: "root",
     });
 
@@ -323,7 +323,7 @@ describe("createDaemon", () => {
       kiloPort: 4096,
       doltHost: "127.0.0.1",
       doltPort: 3307,
-      doltDatabase: "plant",
+      doltDatabase: "factory",
       doltUser: "root",
     });
 
@@ -359,7 +359,7 @@ describe("createDaemon", () => {
       kiloPort: 4096,
       doltHost: "127.0.0.1",
       doltPort: 3307,
-      doltDatabase: "plant",
+      doltDatabase: "factory",
       doltUser: "root",
     });
 

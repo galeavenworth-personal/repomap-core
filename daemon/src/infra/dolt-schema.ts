@@ -6,7 +6,7 @@
  * MySQL protocol queries via mysql2.
  *
  * Responsibilities:
- *   - Create the punch_cards database if it doesn't exist
+ *   - Create the factory database if it doesn't exist
  *   - Create all 8 tables and 1 view via DDL
  *   - Seed punch card definitions
  *   - Apply incremental SQL migration files from .kilocode/schema/
@@ -31,7 +31,7 @@ export interface DoltSchemaConfig {
   user: string;
   /** MySQL password (default: empty string) */
   password: string;
-  /** Database name for punch cards (default: punch_cards) */
+  /** Database name for punch cards (default: factory) */
   database: string;
   /** Repository root directory (for locating schema files) */
   repoRoot: string;
@@ -49,7 +49,7 @@ export function defaultSchemaConfig(): DoltSchemaConfig {
     port: Number.parseInt(process.env.DOLT_PORT ?? "3307", 10),
     user: "root",
     password: "",
-    database: process.env.DOLT_DATABASE ?? "punch_cards",
+    database: process.env.DOLT_DATABASE ?? "factory",
     repoRoot,
   };
 }
@@ -109,7 +109,7 @@ export async function createDatabaseConnection(
 // ── DDL Statements ───────────────────────────────────────────────────────
 
 /**
- * The 8 table DDL statements and 1 view for the punch_cards database.
+ * The 8 table DDL statements and 1 view for the factory database.
  * These match the schema from dolt_punch_init.sh exactly.
  */
 const TABLE_DDL: string[] = [
@@ -376,7 +376,7 @@ const SEED_STATEMENTS: string[] = [
 // ── Core Operations ──────────────────────────────────────────────────────
 
 /**
- * Ensure the punch_cards database exists on the Dolt server.
+ * Ensure the factory database exists on the Dolt server.
  */
 export async function ensureDatabase(config: DoltSchemaConfig): Promise<void> {
   const conn = await createServerConnection(config);
@@ -415,7 +415,7 @@ export async function idempotentDoltCommit(
 }
 
 /**
- * Initialize the full punch_cards schema: 8 tables, 1 view, 11 seed card definitions.
+ * Initialize the full factory schema: 8 tables, 1 view, 11 seed card definitions.
  * Idempotent — uses CREATE TABLE IF NOT EXISTS and INSERT IGNORE.
  */
 export async function initSchema(
@@ -480,7 +480,7 @@ export async function initSchema(
 }
 
 /**
- * Apply a SQL migration file from .kilocode/schema/ to the punch_cards database.
+ * Apply a SQL migration file from .kilocode/schema/ to the factory database.
  * The file is executed as a multi-statement SQL batch via mysql2.
  *
  * @param config - Schema configuration

@@ -28,6 +28,7 @@ Options:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections import defaultdict
 
@@ -39,7 +40,7 @@ from optimization.training_data import build_training_set
 
 DOLT_HOST = "127.0.0.1"
 DOLT_PORT = 3307
-DOLT_DATABASE = "punch_cards"
+DOLT_DATABASE = os.environ.get("DOLT_DATABASE", "factory")
 
 
 def _connect():

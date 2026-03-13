@@ -7,7 +7,7 @@ import { SubtaskVerifier } from "../../src/governor/subtask-verifier.js";
 export const DEFAULT_DOLT_CONFIG = {
   host: "127.0.0.1",
   port: 3307,
-  database: "plant",
+  database: "factory",
 } as const;
 
 /** Set up mysql2 mock connection behavior in beforeEach. */

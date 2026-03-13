@@ -12,7 +12,7 @@
  *   KILO_URL      — kilo serve base URL  (default: http://127.0.0.1:4096)
  *   DOLT_HOST     — Dolt host            (default: 127.0.0.1)
  *   DOLT_PORT     — Dolt port            (default: 3307)
- *   DOLT_DB       — Dolt database        (default: punch_cards)
+ *   DOLT_DATABASE — Dolt database        (default: factory)
  *
  * Pulls session metadata, messages, and parts from the kilo serve REST API
  * and writes them to Dolt via the same writer the daemon uses.
@@ -31,7 +31,7 @@ import { classifyEvent } from "../src/classifier/index.js";
 const KILO_URL = process.env.KILO_URL ?? "http://127.0.0.1:4096";
 const DOLT_HOST = process.env.DOLT_HOST ?? "127.0.0.1";
 const DOLT_PORT = Number(process.env.DOLT_PORT ?? "3307");
-const DOLT_DB = process.env.DOLT_DB ?? "punch_cards";
+const DOLT_DB = process.env.DOLT_DATABASE ?? "factory";
 
 // Session IDs: prefer CLI args, fall back to env vars
 const EPIC_PARENT = process.argv[2] ?? process.env.EPIC_PARENT;

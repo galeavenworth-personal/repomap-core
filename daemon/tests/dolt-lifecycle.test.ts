@@ -35,7 +35,7 @@ describe("DoltLifecycle", () => {
       expect(config.user).toBe("root");
       expect(config.password).toBe("");
       expect(config.requiredDatabases).toContain("beads_repomap-core");
-      expect(config.requiredDatabases).toContain("punch_cards");
+      expect(config.requiredDatabases).toContain("factory");
       expect(config.dataDir).toMatch(/\.dolt-data\/beads$/);
     });
   });
@@ -102,7 +102,7 @@ describe("DoltLifecycle", () => {
         const result = await queryServerDatabases(config);
         expect(result).not.toBeNull();
         expect(result).toContain("beads_repomap-core");
-        expect(result).toContain("punch_cards");
+        expect(result).toContain("factory");
       },
     );
   });
@@ -123,7 +123,7 @@ describe("DoltLifecycle", () => {
         expect(status.state).toBe("healthy");
         if (status.state === "healthy") {
           expect(status.databases).toContain("beads_repomap-core");
-          expect(status.databases).toContain("punch_cards");
+          expect(status.databases).toContain("factory");
         }
       },
     );

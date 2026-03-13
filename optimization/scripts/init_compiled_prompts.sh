@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Initialize compiled_prompts schema in the shared Dolt punch_cards database.
+# Initialize compiled_prompts schema in the configured shared Dolt database.
 
 set -euo pipefail
 
 DOLT_DATA_DIR="${HOME}/.dolt-data/beads"
+DOLT_DATABASE="${DOLT_DATABASE:-factory}"
 
 if ! command -v dolt >/dev/null 2>&1; then
   echo "ERROR: dolt not found in PATH (which dolt failed)" >&2
@@ -19,10 +20,10 @@ fi
 
 cd "${DOLT_DATA_DIR}"
 
-"${DOLT_BIN}" sql -q "CREATE DATABASE IF NOT EXISTS punch_cards"
+"${DOLT_BIN}" sql -q "CREATE DATABASE IF NOT EXISTS ${DOLT_DATABASE}"
 
-"${DOLT_BIN}" sql <<'SQL'
-USE punch_cards;
+"${DOLT_BIN}" sql <<SQL
+USE ${DOLT_DATABASE};
 
 CREATE TABLE IF NOT EXISTS compiled_prompts (
     prompt_id VARCHAR(100) NOT NULL PRIMARY KEY,
@@ -34,5 +35,4 @@ CREATE TABLE IF NOT EXISTS compiled_prompts (
 );
 SQL
 
-"${DOLT_BIN}" sql -q "SHOW TABLES FROM punch_cards"
-
+"${DOLT_BIN}" sql -q "SHOW TABLES FROM ${DOLT_DATABASE}"

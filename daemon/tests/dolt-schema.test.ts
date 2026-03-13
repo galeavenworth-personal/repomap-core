@@ -59,7 +59,7 @@ describe("DoltSchema", () => {
       expect(config.port).toBe(3307);
       expect(config.user).toBe("root");
       expect(config.password).toBe("");
-      expect(config.database).toBe("punch_cards");
+      expect(config.database).toBe("factory");
       expect(typeof config.repoRoot).toBe("string");
       expect(config.repoRoot.length).toBeGreaterThan(0);
     });
@@ -132,7 +132,7 @@ describe("DoltSchema", () => {
         }),
       );
       expect(conn.query).toHaveBeenCalledWith(
-        "CREATE DATABASE IF NOT EXISTS `punch_cards`",
+        "CREATE DATABASE IF NOT EXISTS `factory`",
       );
       expect(conn.end).toHaveBeenCalled();
     });
@@ -207,15 +207,15 @@ describe("DoltSchema", () => {
       // 8. SHOW TABLES
       const showTablesResult = [
         [
-          { "Tables_in_punch_cards": "tasks" },
-          { "Tables_in_punch_cards": "punches" },
-          { "Tables_in_punch_cards": "punch_cards" },
-          { "Tables_in_punch_cards": "checkpoints" },
-          { "Tables_in_punch_cards": "child_relationships" },
-          { "Tables_in_punch_cards": "sessions" },
-          { "Tables_in_punch_cards": "messages" },
-          { "Tables_in_punch_cards": "tool_calls" },
-          { "Tables_in_punch_cards": "cost_aggregate" },
+          { "Tables_in_factory": "tasks" },
+          { "Tables_in_factory": "punches" },
+          { "Tables_in_factory": "punch_cards" },
+          { "Tables_in_factory": "checkpoints" },
+          { "Tables_in_factory": "child_relationships" },
+          { "Tables_in_factory": "sessions" },
+          { "Tables_in_factory": "messages" },
+          { "Tables_in_factory": "tool_calls" },
+          { "Tables_in_factory": "cost_aggregate" },
         ],
       ];
 

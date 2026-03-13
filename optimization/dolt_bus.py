@@ -13,7 +13,7 @@ from pymysql.cursors import DictCursor
 
 HOST = os.getenv("DOLT_HOST", "127.0.0.1")
 PORT = int(os.getenv("DOLT_PORT", "3307"))
-DATABASE = os.getenv("DOLT_DATABASE", "punch_cards")
+DATABASE = os.environ.get("DOLT_DATABASE", "factory")
 USER = os.getenv("DOLT_USER", "root")
 
 

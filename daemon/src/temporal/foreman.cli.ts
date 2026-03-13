@@ -245,7 +245,7 @@ function formatHealthStatus(health: HealthCheckResult): string {
 
 function formatSubsystemHealth(
   name: string,
-  sub: { status: string; message?: string; latencyMs?: number | null },
+  sub: { status: string; message?: string | null; latencyMs?: number | null },
 ): string {
   let line = `    ${name}: ${sub.status}`;
   if (sub.message) {
