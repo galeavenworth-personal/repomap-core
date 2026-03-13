@@ -22,6 +22,10 @@ import {
   closeBeadCore,
   execBd,
 } from "../infra/bead-ops.js";
+import {
+  buildSubsystemHealth,
+  DEGRADED_LATENCY_THRESHOLD_MS,
+} from "./health-utils.js";
 import { timed } from "../infra/utils.js";
 
 import type {
@@ -224,26 +228,6 @@ function classifyEligibleCandidates(
 
 /** Timeout for individual subsystem health checks (5 seconds). */
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
-
-/** Latency threshold above which a subsystem is classified as degraded (3 seconds). */
-const DEGRADED_LATENCY_THRESHOLD_MS = 3_000;
-
-/**
- * Build a SubsystemHealth from a check result.
- * Applies the latency degradation threshold automatically.
- */
-function buildSubsystemHealth(
-  status: "up" | "down",
-  latencyMs: number | null,
-  message: string | null,
-): SubsystemHealth {
-  // If up but slow, classify as degraded
-  const effectiveStatus =
-    status === "up" && latencyMs !== null && latencyMs > DEGRADED_LATENCY_THRESHOLD_MS
-      ? "degraded"
-      : status;
-  return { status: effectiveStatus, message, latencyMs };
-}
 
 /**
  * Check kilo serve health via HTTP GET /session.
