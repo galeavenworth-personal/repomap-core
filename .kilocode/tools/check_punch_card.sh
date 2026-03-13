@@ -17,7 +17,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # Export Dolt connection env vars for the TS CLI
 export DOLT_HOST="${DOLT_HOST:-127.0.0.1}"
 export DOLT_PORT="${DOLT_PORT:-3307}"
-export DOLT_DATABASE="${DOLT_DATABASE:-beads_repomap-core}"
+export DOLT_DATABASE="${DOLT_DATABASE:-factory}"
 
 TSX="${REPO_ROOT}/daemon/node_modules/.bin/tsx"
 if [[ ! -x "$TSX" ]]; then

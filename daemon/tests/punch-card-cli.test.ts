@@ -60,7 +60,7 @@ describe("punch-card-check", () => {
       const config = defaultCheckConfig();
       expect(config.host).toBe("127.0.0.1");
       expect(config.port).toBe(3307);
-      expect(config.database).toBe("beads_repomap-core");
+      expect(config.database).toBe("factory");
       expect(config.user).toBe("root");
       expect(config.password).toBe("");
     });
