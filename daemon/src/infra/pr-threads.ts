@@ -16,15 +16,18 @@
 
 import { execFileSync } from "node:child_process";
 import {
+  type IssueComment,
+  type PrMeta,
+  type RawReviewComment,
+  type Review,
   type GitHubClient,
   createGitHubClient,
   discoverRepo as discoverRepoFromGit,
 } from "./github-client.js";
-import type { IssueComment, PrMeta, RawReviewComment, Review } from "./github-client.js";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
-export type { IssueComment, PrMeta, RawReviewComment, Review };
+export { type IssueComment, type PrMeta, type RawReviewComment, type Review } from "./github-client.js";
 
 /** A single comment within a thread (normalized). */
 export interface ThreadComment {

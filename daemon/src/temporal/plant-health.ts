@@ -58,12 +58,10 @@ export { DEFAULT_PLANT_HEALTH_CONFIG } from "./plant-health.types.js";
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
 
 function computeKeyMetrics(
-  conn: Connection | null,
+  _conn: Connection | null,
   punchCard: PunchCardStatus,
   costSummary: CostSummaryStatus,
 ): PlantKeyMetrics {
-  void conn;
-
   let avgCostPer100kTokens: number | null = null;
   if (costSummary.data) {
     const sessionsWithCost = costSummary.data.sessionBreakdown.filter(
@@ -246,8 +244,10 @@ const isMainModule = process.argv[1]?.endsWith("plant-health.ts") ||
   process.argv[1]?.endsWith("plant-health.js");
 
 if (isMainModule) {
-  main().catch((err) => {
+  try {
+    await main();
+  } catch (err) {
     console.error("[plant-health] Fatal error:", err);
     process.exit(1);
-  });
+  }
 }

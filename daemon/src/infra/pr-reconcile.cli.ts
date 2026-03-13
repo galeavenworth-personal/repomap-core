@@ -19,11 +19,20 @@
 
 import { reconcile, defaultOptions } from "./pr-reconcile.js";
 
-async function main(): Promise<number> {
-  // ── Argument parsing ──────────────────────────────────────────────────
+interface ParsedCliArgs {
+  dryRun: boolean;
+  strict: boolean;
+  taskIds: string[];
+  exitCode: number;
+}
 
-  const args = process.argv.slice(2);
+function printUsage(): void {
+  console.log(
+    "Usage: npx tsx daemon/src/infra/pr-reconcile.cli.ts [--dry-run] [--strict] <task-id> [<task-id> ...]",
+  );
+}
 
+function parseCliArgs(args: string[]): ParsedCliArgs {
   let dryRun = false;
   let strict = false;
   const taskIds: string[] = [];
@@ -43,19 +52,17 @@ async function main(): Promise<number> {
         break;
       case "--help":
       case "-h":
-        console.log(
-          "Usage: npx tsx daemon/src/infra/pr-reconcile.cli.ts [--dry-run] [--strict] <task-id> [<task-id> ...]",
-        );
+        printUsage();
         console.log("  --dry-run   Report what would be closed without mutating Beads");
         console.log("  --strict    Fail on any GitHub client/query or bd error");
-        return 0;
+        return { dryRun, strict, taskIds: [], exitCode: 0 };
       case "--":
         dashDash = true;
         break;
       default:
         if (arg.startsWith("-")) {
           console.error(`ERROR: unknown option: ${arg}`);
-          return 2;
+          return { dryRun, strict, taskIds: [], exitCode: 2 };
         }
         taskIds.push(arg);
         break;
@@ -63,52 +70,64 @@ async function main(): Promise<number> {
   }
 
   if (taskIds.length === 0) {
-    console.error(
-      "Usage: npx tsx daemon/src/infra/pr-reconcile.cli.ts [--dry-run] [--strict] <task-id> [<task-id> ...]",
-    );
-    return 2;
+    printUsage();
+    return { dryRun, strict, taskIds: [], exitCode: 2 };
+  }
+
+  return { dryRun, strict, taskIds, exitCode: -1 };
+}
+
+function printResultLine(
+  item: { taskId: string; message: string; status: string },
+  strict: boolean,
+): void {
+  const line = `${item.taskId}: ${item.message}`;
+
+  switch (item.status) {
+    case "gh_error":
+      if (strict) {
+        console.error(`ERROR: ${line}`);
+      } else {
+        console.error(`${item.taskId}: WARN GitHub query failed; reconciliation skipped`);
+        console.log(`${item.taskId}: reconciliation skipped (gh error)`);
+      }
+      return;
+    case "bd_error":
+      if (strict) {
+        console.error(`ERROR: ${line}`);
+      } else {
+        console.error(`${item.taskId}: WARN bd close failed; continuing`);
+        console.log(`${item.taskId}: merged PR found; FAILED to close in Beads`);
+      }
+      return;
+    case "gh_missing":
+      if (strict) {
+        console.error(`ERROR: ${line}`);
+      } else {
+        console.error(`${item.taskId}: WARN GitHub client unavailable; reconciliation skipped (no-op)`);
+        console.log(`${item.taskId}: reconciliation skipped (GitHub client unavailable)`);
+      }
+      return;
+    default:
+      console.log(line);
+  }
+}
+
+async function main(): Promise<number> {
+  const parsed = parseCliArgs(process.argv.slice(2));
+  if (parsed.exitCode >= 0) {
+    return parsed.exitCode;
   }
 
   // ── Run reconciliation ────────────────────────────────────────────────
 
-  const opts = defaultOptions({ dryRun, strict });
-  const result = await reconcile(taskIds, opts);
+  const opts = defaultOptions({ dryRun: parsed.dryRun, strict: parsed.strict });
+  const result = await reconcile(parsed.taskIds, opts);
 
   // ── Output ────────────────────────────────────────────────────────────
 
   for (const item of result.items) {
-    const line = `${item.taskId}: ${item.message}`;
-
-    // Route warnings/errors to stderr, normal output to stdout
-    switch (item.status) {
-      case "gh_error":
-        if (strict) {
-          console.error(`ERROR: ${line}`);
-        } else {
-          console.error(`${item.taskId}: WARN GitHub query failed; reconciliation skipped`);
-          console.log(`${item.taskId}: reconciliation skipped (gh error)`);
-        }
-        break;
-      case "bd_error":
-        if (strict) {
-          console.error(`ERROR: ${line}`);
-        } else {
-          console.error(`${item.taskId}: WARN bd close failed; continuing`);
-          console.log(`${item.taskId}: merged PR found; FAILED to close in Beads`);
-        }
-        break;
-      case "gh_missing":
-        if (strict) {
-          console.error(`ERROR: ${line}`);
-        } else {
-          console.error(`${item.taskId}: WARN GitHub client unavailable; reconciliation skipped (no-op)`);
-          console.log(`${item.taskId}: reconciliation skipped (GitHub client unavailable)`);
-        }
-        break;
-      default:
-        console.log(line);
-        break;
-    }
+    printResultLine(item, parsed.strict);
   }
 
   // ── Exit code ─────────────────────────────────────────────────────────
@@ -116,12 +135,11 @@ async function main(): Promise<number> {
   return result.success ? 0 : 2;
 }
 
-main()
-  .then((code) => {
-    process.exit(code);
-  })
-  .catch((err) => {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`ERROR: ${message}`);
-    process.exit(2);
-  });
+try {
+  const code = await main();
+  process.exit(code);
+} catch (err) {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`ERROR: ${message}`);
+  process.exit(2);
+}

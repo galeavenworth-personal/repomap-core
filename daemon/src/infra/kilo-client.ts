@@ -23,6 +23,14 @@ export interface ChildSession {
   [key: string]: unknown;
 }
 
+function isToolRunning(part: MessagePart): boolean {
+  return part.type === "tool" && (part.state?.status === "running" || part.state?.status === "pending");
+}
+
+function isTerminalFinishReason(reason: string): boolean {
+  return reason === "end_turn" || reason === "stop" || reason === "max_tokens" || reason === "";
+}
+
 /**
  * Create a new kilo session. Returns the session ID.
  */
@@ -82,17 +90,14 @@ export function isSessionDone(messages: SessionMessage[]): boolean {
 
   for (const msg of messages) {
     for (const part of msg.parts ?? []) {
-      if (part.type === "tool") {
-        const status = part.state?.status;
-        if (status === "running" || status === "pending") {
-          hasRunningTools = true;
-        }
+      if (isToolRunning(part)) {
+        hasRunningTools = true;
       }
       if (part.type === "step-finish") {
         const reason = part.reason ?? "";
         if (reason === "tool-calls") {
           hasTerminalFinish = false; // reset — more work coming
-        } else if (reason === "end_turn" || reason === "stop" || reason === "max_tokens" || reason === "") {
+        } else if (isTerminalFinishReason(reason)) {
           hasTerminalFinish = true;
         }
       }
@@ -164,6 +169,29 @@ export interface MonitorResult {
   childCount: number;
 }
 
+function resolveDoneStatus(messages: SessionMessage[]): "yes" | "no" | "error" {
+  try {
+    return isSessionDone(messages) ? "yes" : "no";
+  } catch {
+    return "error";
+  }
+}
+
+function logDoneStatus(
+  log: Logger,
+  elapsed: number,
+  doneStatus: "yes" | "no" | "error",
+  childCount: number,
+  idleCount: number,
+  idleConfirm: number,
+): void {
+  if (doneStatus === "error") {
+    log(`${timestamp()} [${elapsed}s] Warning: status check failed, retrying...`);
+    return;
+  }
+  log(`${timestamp()} [${elapsed}s] Parent done: ${doneStatus}, children: ${childCount}, idle: ${idleCount}/${idleConfirm}`);
+}
+
 /**
  * Monitor a session for completion with idle detection and child monitoring.
  */
@@ -195,12 +223,7 @@ export async function monitorSession(
 
     // Check session messages
     const messages = await fetchMessages(baseUrl, sessionId, fetchFn);
-    let doneStatus: "yes" | "no" | "error";
-    try {
-      doneStatus = isSessionDone(messages) ? "yes" : "no";
-    } catch {
-      doneStatus = "error";
-    }
+    const doneStatus = resolveDoneStatus(messages);
 
     if (doneStatus === "yes") {
       idleCount++;
@@ -230,11 +253,7 @@ export async function monitorSession(
       idleCount = 0;
     }
 
-    if (doneStatus === "error") {
-      log(`${timestamp()} [${elapsed}s] Warning: status check failed, retrying...`);
-    } else {
-      log(`${timestamp()} [${elapsed}s] Parent done: ${doneStatus}, children: ${childCount}, idle: ${idleCount}/${config.idleConfirm}`);
-    }
+    logDoneStatus(log, elapsed, doneStatus, childCount, idleCount, config.idleConfirm);
   }
 
   return { completed: false, elapsed, childCount: lastChildCount };
@@ -245,27 +264,26 @@ export async function monitorSession(
  * First looks for substantial text (>100 chars), then falls back to any text.
  */
 export function extractResult(messages: SessionMessage[]): string | null {
-  // First pass: find last assistant message with substantial text
+  const substantialText = findAssistantText(messages, (text) => text.length > 100);
+  if (substantialText) {
+    return substantialText;
+  }
+
+  return findAssistantText(messages, (text) => Boolean(text.trim()));
+}
+
+function findAssistantText(
+  messages: SessionMessage[],
+  matcher: (text: string) => boolean,
+): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.info?.role !== "assistant") continue;
     for (const part of msg.parts ?? []) {
-      if (part.type === "text" && typeof part.text === "string" && part.text.length > 100) {
+      if (part.type === "text" && typeof part.text === "string" && matcher(part.text)) {
         return part.text;
       }
     }
   }
-
-  // Fallback: any assistant text
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.info?.role !== "assistant") continue;
-    for (const part of msg.parts ?? []) {
-      if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
-        return part.text;
-      }
-    }
-  }
-
   return null;
 }

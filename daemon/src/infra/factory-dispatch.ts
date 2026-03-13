@@ -301,65 +301,55 @@ export function injectSessionId(payload: PromptPayload, sessionId: string): void
   payload.parts = parts;
 }
 
-export async function runDispatch(
-  config: FactoryDispatchConfig,
-  fetchFn: typeof fetch = fetch,
-): Promise<ExitCodeValue> {
-  const log = makeLogger(config.quiet);
-  const baseUrl = `http://${config.host}:${config.port}`;
-
-  // Phase 1: Pre-flight
-  const pf = await preflight(config, log, fetchFn);
-  if (!pf.ok) {
-    const missing = pf.components.filter((c) => !c.ok);
-    process.stderr.write("\n");
-    process.stderr.write("═══════════════════════════════════════════════════════════\n");
-    process.stderr.write(" DISPATCH BLOCKED — Stack is incomplete\n");
-    process.stderr.write("═══════════════════════════════════════════════════════════\n");
-    for (const c of missing) {
-      process.stderr.write(`  ❌ ${c.name}: ${c.detail}\n`);
-    }
-    process.stderr.write("Ensure the full stack is healthy first:\n");
-    process.stderr.write("  .kilocode/tools/start-stack.sh --ensure\n");
-    process.stderr.write("\nOr check status with:\n");
-    process.stderr.write("  .kilocode/tools/start-stack.sh --check\n");
-    process.stderr.write("═══════════════════════════════════════════════════════════\n");
-    return ExitCode.HEALTH_CHECK_FAILED;
+function reportPreflightFailure(missing: PreflightComponent[]): ExitCodeValue {
+  process.stderr.write("\n");
+  process.stderr.write("═══════════════════════════════════════════════════════════\n");
+  process.stderr.write(" DISPATCH BLOCKED — Stack is incomplete\n");
+  process.stderr.write("═══════════════════════════════════════════════════════════\n");
+  for (const c of missing) {
+    process.stderr.write(`  ❌ ${c.name}: ${c.detail}\n`);
   }
+  process.stderr.write("Ensure the full stack is healthy first:\n");
+  process.stderr.write("  .kilocode/tools/start-stack.sh --ensure\n");
+  process.stderr.write("\nOr check status with:\n");
+  process.stderr.write("  .kilocode/tools/start-stack.sh --check\n");
+  process.stderr.write("═══════════════════════════════════════════════════════════\n");
+  return ExitCode.HEALTH_CHECK_FAILED;
+}
 
-  // Phase 2: Build prompt payload
-  let payload: PromptPayload;
+function resolvePayload(config: FactoryDispatchConfig, log: Logger): PromptPayload | ExitCodeValue {
   try {
-    payload = buildPromptPayload(config.promptArg, config.mode);
+    const payload = buildPromptPayload(config.promptArg, config.mode);
+    if (config.promptArg.endsWith(".json")) {
+      log(`${timestamp()} Loaded prompt from: ${config.promptArg}`);
+    } else {
+      log(`${timestamp()} Built prompt from string (${config.promptArg.length} chars)`);
+    }
+    return payload;
   } catch (e) {
     process.stderr.write(`ERROR: ${(e as Error).message}\n`);
     return ExitCode.USAGE_ERROR;
   }
+}
 
-  if (config.promptArg.endsWith(".json")) {
-    log(`${timestamp()} Loaded prompt from: ${config.promptArg}`);
-  } else {
-    log(`${timestamp()} Built prompt from string (${config.promptArg.length} chars)`);
-  }
-
-  // Phase 3: Create session
-  const title = config.title || `factory: ${config.mode} @ ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
-
-  let sessionId: string;
+async function resolveSessionId(
+  baseUrl: string,
+  title: string,
+  fetchFn: typeof fetch,
+): Promise<string | null> {
   try {
-    sessionId = await createSession(baseUrl, title, fetchFn);
+    return await createSession(baseUrl, title, fetchFn);
   } catch {
     process.stderr.write("ERROR: Failed to create session\n");
-    return ExitCode.SESSION_CREATION_FAILED;
+    return null;
   }
+}
 
-  log(`${timestamp()} Session created: ${sessionId}`);
-  log(`${timestamp()} Title: ${title}`);
-
-  // Inject SESSION_ID into prompt
-  injectSessionId(payload, sessionId);
-
-  // Phase 3b: Inject card exit prompt
+async function maybeInjectCardPrompt(
+  payload: PromptPayload,
+  config: FactoryDispatchConfig,
+  log: Logger,
+): Promise<void> {
   try {
     const cardResolution = config.cardId
       ? await resolveCardExitPrompt(config.mode, config.cardId)
@@ -374,12 +364,99 @@ export async function runDispatch(
       log(
         `${timestamp()} Card exit prompt injected (card=${cardResolution.cardId}, source=${cardResolution.source})`,
       );
-    } else {
-      log(`${timestamp()} No card exit prompt found for mode=${config.mode}${config.cardId ? ` card=${config.cardId}` : ""}`);
+      return;
     }
+
+    const cardSuffix = config.cardId ? ` card=${config.cardId}` : "";
+    log(`${timestamp()} No card exit prompt found for mode=${config.mode}${cardSuffix}`);
   } catch (e) {
     log(`${timestamp()} Warning: card exit prompt resolution failed: ${(e as Error).message}`);
   }
+}
+
+function outputNoMonitorResult(config: FactoryDispatchConfig, sessionId: string, title: string): ExitCodeValue {
+  if (config.jsonOutput) {
+    process.stdout.write(
+      JSON.stringify({ session_id: sessionId, mode: config.mode, title }) + "\n",
+    );
+  } else {
+    process.stdout.write(sessionId + "\n");
+  }
+  return ExitCode.SUCCESS;
+}
+
+function logChildSessionIds(log: Logger, childIds: string[]): void {
+  if (childIds.length === 0) {
+    return;
+  }
+  log(`${timestamp()} Child session IDs captured for handoff:`);
+  for (const cid of childIds) {
+    log(`  - ${cid}`);
+  }
+}
+
+function writeDispatchResultOutput(
+  config: FactoryDispatchConfig,
+  sessionId: string,
+  title: string,
+  monitor: { childCount: number; elapsed: number },
+  result: string,
+  childIds: string[],
+  audit: AuditResult | null,
+): void {
+  if (config.jsonOutput) {
+    const output: DispatchResult = {
+      session_id: sessionId,
+      mode: config.mode,
+      title,
+      children: monitor.childCount,
+      elapsed_seconds: monitor.elapsed,
+      result,
+      child_session_ids: childIds,
+      ...(audit ? { audit } : {}),
+    };
+    process.stdout.write(JSON.stringify(output, null, 2) + "\n");
+    return;
+  }
+  process.stdout.write(result + "\n");
+}
+
+export async function runDispatch(
+  config: FactoryDispatchConfig,
+  fetchFn: typeof fetch = fetch,
+): Promise<ExitCodeValue> {
+  const log = makeLogger(config.quiet);
+  const baseUrl = `http://${config.host}:${config.port}`;
+
+  // Phase 1: Pre-flight
+  const pf = await preflight(config, log, fetchFn);
+  if (!pf.ok) {
+    return reportPreflightFailure(pf.components.filter((c) => !c.ok));
+  }
+
+  // Phase 2: Build prompt payload
+  const resolvedPayload = resolvePayload(config, log);
+  if (typeof resolvedPayload === "number") {
+    return resolvedPayload;
+  }
+  const payload = resolvedPayload;
+
+  // Phase 3: Create session
+  const title = config.title || `factory: ${config.mode} @ ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
+
+  const sessionId = await resolveSessionId(baseUrl, title, fetchFn);
+  if (!sessionId) {
+    return ExitCode.SESSION_CREATION_FAILED;
+  }
+
+  log(`${timestamp()} Session created: ${sessionId}`);
+  log(`${timestamp()} Title: ${title}`);
+
+  // Inject SESSION_ID into prompt
+  injectSessionId(payload, sessionId);
+
+  // Phase 3b: Inject card exit prompt
+  await maybeInjectCardPrompt(payload, config, log);
 
   // Phase 4: Dispatch prompt
   try {
@@ -393,14 +470,7 @@ export async function runDispatch(
 
   // Phase 5: No-monitor early exit
   if (config.noMonitor) {
-    if (config.jsonOutput) {
-      process.stdout.write(
-        JSON.stringify({ session_id: sessionId, mode: config.mode, title }) + "\n",
-      );
-    } else {
-      process.stdout.write(sessionId + "\n");
-    }
-    return ExitCode.SUCCESS;
+    return outputNoMonitorResult(config, sessionId, title);
   }
 
   // Phase 6: Monitor for completion
@@ -449,29 +519,10 @@ export async function runDispatch(
   }
 
   // Phase 8: Output
-  if (config.jsonOutput) {
-    const output: DispatchResult = {
-      session_id: sessionId,
-      mode: config.mode,
-      title,
-      children: monitor.childCount,
-      elapsed_seconds: monitor.elapsed,
-      result,
-      child_session_ids: childIds,
-      ...(audit ? { audit } : {}),
-    };
-    process.stdout.write(JSON.stringify(output, null, 2) + "\n");
-  } else {
-    process.stdout.write(result + "\n");
-  }
+  writeDispatchResultOutput(config, sessionId, title, monitor, result, childIds, audit);
 
   // Phase 9: Child session ID capture
-  if (childIds.length > 0) {
-    log(`${timestamp()} Child session IDs captured for handoff:`);
-    for (const cid of childIds) {
-      log(`  - ${cid}`);
-    }
-  }
+  logChildSessionIds(log, childIds);
 
   log(
     `${timestamp()} Done. Session: ${sessionId} | Children: ${monitor.childCount} | Elapsed: ${monitor.elapsed}s`,

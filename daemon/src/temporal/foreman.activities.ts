@@ -24,7 +24,6 @@ import {
 } from "../infra/bead-ops.js";
 import {
   buildSubsystemHealth,
-  DEGRADED_LATENCY_THRESHOLD_MS,
 } from "./health-utils.js";
 import { timed } from "../infra/utils.js";
 

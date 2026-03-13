@@ -52,12 +52,11 @@ async function main(): Promise<number> {
   }
 }
 
-main()
-  .then((code) => {
-    process.exit(code);
-  })
-  .catch((err) => {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`ERROR: ${message}`);
-    process.exit(1);
-  });
+try {
+  const code = await main();
+  process.exit(code);
+} catch (err) {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`ERROR: ${message}`);
+  process.exit(1);
+}
