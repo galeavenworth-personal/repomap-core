@@ -22,6 +22,17 @@ import {
   findTemporalCli,
 } from "../src/infra/stack-manager.js";
 
+vi.mock("../src/infra/pm2-client.js", () => ({
+  withPm2Connection: vi.fn(async (fn: () => Promise<unknown>) => fn()),
+  isAppOnline: vi.fn(async () => false),
+  pm2Connect: vi.fn(async () => {}),
+  pm2Start: vi.fn(async () => ({})),
+  pm2List: vi.fn(async () => []),
+  pm2Stop: vi.fn(async () => ({})),
+  pm2Delete: vi.fn(async () => ({})),
+  pm2Disconnect: vi.fn(),
+}));
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 function makeTestConfig(overrides: Partial<StackConfig> = {}): StackConfig {
@@ -109,9 +120,8 @@ describe("StackManager", () => {
   });
 
   describe("checkOcDaemon", () => {
-    it("returns unhealthy when pm2 binary not found", () => {
-      // Use a non-existent pm2 binary
-      const result = checkOcDaemon("/nonexistent/pm2");
+    it("returns unhealthy when pm2 app is not online", async () => {
+      const result = await checkOcDaemon("/nonexistent/pm2");
       expect(result.name).toBe("oc-daemon");
       expect(result.ok).toBe(false);
       expect(result.detail).toContain("NOT running");
@@ -143,8 +153,8 @@ describe("StackManager", () => {
   });
 
   describe("checkTemporalWorker", () => {
-    it("returns unhealthy when pm2 binary not found", () => {
-      const result = checkTemporalWorker("/nonexistent/pm2");
+    it("returns unhealthy when pm2 app is not online", async () => {
+      const result = await checkTemporalWorker("/nonexistent/pm2");
       expect(result.name).toBe("Temporal worker");
       expect(result.ok).toBe(false);
       expect(result.detail).toContain("NOT running");
