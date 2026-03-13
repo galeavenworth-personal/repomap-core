@@ -38,15 +38,14 @@ vi.mock("mysql2/promise", () => ({
 
 import { execFile } from "node:child_process";
 import { createConnection } from "mysql2/promise";
+import { execBd, BeadsTransientError } from "../src/infra/bead-ops.js";
 import {
-  execBd,
   parseBdJson,
   selectNextBead,
   getBeadDetail,
   updateBeadStatus,
   closeBead,
   checkStackHealth,
-  BeadsTransientError,
   BeadsContractError,
 } from "../src/temporal/foreman.activities.js";
 import type {

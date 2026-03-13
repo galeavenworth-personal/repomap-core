@@ -115,6 +115,9 @@ export function queryMergedPrs(
 /**
  * Close a Beads issue by task-id via the bd CLI.
  * Throws on bd error.
+ *
+ * This is a thin adapter over an injected {@link BdRunner} for testability.
+ * The canonical bead-close implementation lives in {@link closeBeadCore} from `./bead-ops.js`.
  */
 export function closeBead(
   taskId: string,
