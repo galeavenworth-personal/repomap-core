@@ -17,11 +17,9 @@
 
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
+import { type GitHubClient, type MergedPr, createGitHubClient, discoverRepo } from "./github-client.js";
 
 // ── Types ────────────────────────────────────────────────────────────────
-
-/** Function signature for running gh CLI commands. Injectable for testing. */
-export type GhRunner = (args: string[], cwd?: string) => string;
 
 /** Function signature for running bd CLI commands. Injectable for testing. */
 export type BdRunner = (args: string[]) => string;
@@ -57,18 +55,6 @@ export interface ReconcileResult {
 // ── Default runners ─────────────────────────────────────────────────────
 
 /**
- * Default gh command runner: executes `gh` with the given arguments
- * and returns stdout as a string.
- */
-export function defaultGhRunner(args: string[], cwd?: string): string {
-  return execFileSync("gh", args, {
-    encoding: "utf8",
-    cwd,
-    maxBuffer: 10 * 1024 * 1024,
-  });
-}
-
-/**
  * Default bd command runner: executes the bd binary with the given arguments
  * and returns stdout as a string.
  */
@@ -84,11 +70,15 @@ export function makeBdRunner(bdPath: string): BdRunner {
 // ── Core logic ───────────────────────────────────────────────────────────
 
 /**
- * Check whether the gh CLI is available.
+ * Check whether GitHub access is available.
  */
-export function isGhAvailable(runGh: GhRunner = defaultGhRunner): boolean {
+export function isGhAvailable(client?: GitHubClient): boolean {
+  if (client) {
+    return true;
+  }
+
   try {
-    runGh(["version"]);
+    createGitHubClient();
     return true;
   } catch {
     return false;
@@ -97,19 +87,14 @@ export function isGhAvailable(runGh: GhRunner = defaultGhRunner): boolean {
 
 /**
  * Query GitHub for merged PRs with a head branch matching the given task-id.
- * Returns the parsed JSON array (at most 1 result), or throws on gh error.
+ * Returns merged PR metadata from the GitHub API client.
  */
 export function queryMergedPrs(
   taskId: string,
-  rootDir: string,
-  runGh: GhRunner = defaultGhRunner,
-): Array<{ number: number; url: string; title: string; mergedAt: string }> {
-  const output = runGh(
-    ["pr", "list", "--state", "merged", "--head", taskId, "-L", "1", "--json", "number,url,title,mergedAt"],
-    rootDir,
-  );
-  const parsed = JSON.parse(output);
-  return parsed;
+  client: GitHubClient,
+  repoRef: { owner: string; repo: string },
+): Promise<MergedPr[]> {
+  return client.listMergedPrs(repoRef.owner, repoRef.repo, `${repoRef.owner}:${taskId}`);
 }
 
 /**
@@ -139,16 +124,17 @@ export function sanitizeError(raw: unknown, maxLen = 200): string {
 /**
  * Reconcile a single task-id: check for merged PR, close bead if found.
  */
-export function reconcileOne(
+export async function reconcileOne(
   taskId: string,
   opts: ReconcileOptions,
-  runGh: GhRunner = defaultGhRunner,
+  client: GitHubClient,
+  repoRef: { owner: string; repo: string },
   runBd: BdRunner = makeBdRunner(opts.bdPath),
-): ReconcileItemResult {
+): Promise<ReconcileItemResult> {
   // Query merged PRs
-  let mergedPrs: Array<{ number: number; url: string; title: string; mergedAt: string }>;
+  let mergedPrs: MergedPr[];
   try {
-    mergedPrs = queryMergedPrs(taskId, opts.rootDir, runGh);
+    mergedPrs = await queryMergedPrs(taskId, client, repoRef);
   } catch (err) {
     const errMsg = sanitizeError(err);
     if (opts.strict) {
@@ -187,17 +173,43 @@ export function reconcileOne(
  *
  * @param taskIds - Task IDs to reconcile
  * @param opts - Reconciliation options
- * @param runGh - gh CLI command runner (injectable for testing)
+ * @param client - GitHub client (injectable for testing)
  * @param runBd - bd CLI command runner (injectable for testing)
  */
-export function reconcile(
+export async function reconcile(
   taskIds: string[],
   opts: ReconcileOptions,
-  runGh: GhRunner = defaultGhRunner,
+  client?: GitHubClient,
   runBd: BdRunner = makeBdRunner(opts.bdPath),
-): ReconcileResult {
-  // Check gh availability first
-  if (!isGhAvailable(runGh)) {
+): Promise<ReconcileResult> {
+  let ghClient: GitHubClient;
+  try {
+    ghClient = client ?? createGitHubClient();
+  } catch {
+    if (opts.strict) {
+      return {
+        items: taskIds.map((taskId) => ({
+          status: "gh_missing" as const,
+          taskId,
+          message: "gh CLI not found on PATH (cannot reconcile merged PRs)",
+        })),
+        success: false,
+      };
+    }
+    return {
+      items: taskIds.map((taskId) => ({
+        status: "gh_missing" as const,
+        taskId,
+        message: "reconciliation skipped (gh missing)",
+      })),
+      success: true,
+    };
+  }
+
+  let repoRef: { owner: string; repo: string };
+  try {
+    repoRef = discoverRepo(opts.rootDir);
+  } catch {
     if (opts.strict) {
       return {
         items: taskIds.map((taskId) => ({
@@ -222,7 +234,7 @@ export function reconcile(
   let success = true;
 
   for (const taskId of taskIds) {
-    const result = reconcileOne(taskId, opts, runGh, runBd);
+    const result = await reconcileOne(taskId, opts, ghClient, repoRef, runBd);
     items.push(result);
 
     // In strict mode, gh_error and bd_error are fatal

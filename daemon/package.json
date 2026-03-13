@@ -30,6 +30,7 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@octokit/rest": "^22.0.0",
     "@opencode-ai/sdk": "^1.2.10",
     "@temporalio/activity": "^1.11.0",
     "@temporalio/client": "^1.11.0",

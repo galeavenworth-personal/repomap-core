@@ -1,18 +1,16 @@
 /**
  * Tests for PR review threads structured payload.
  *
- * These tests verify the core logic using mock command runners,
- * without requiring a real GitHub repository or gh CLI.
+ * These tests verify the core logic using a mock GitHub client.
  */
 
 import { describe, expect, it } from "vitest";
+import { parseGitRemoteUrl, type GitHubClient, type IssueComment, type PrMeta, type Review } from "../src/infra/github-client.js";
 import {
-  type CommandRunner,
   type RawReviewComment,
   type PrThreadsPayload,
   groupIntoThreads,
   discoverPrNumber,
-  discoverRepo,
   fetchPrThreads,
 } from "../src/infra/pr-threads.js";
 
@@ -27,7 +25,7 @@ const MOCK_META = {
   state: "OPEN",
   author: { login: "alice" },
   body: "Adds the widget feature.",
-};
+} satisfies PrMeta;
 
 const MOCK_REVIEW_COMMENTS: RawReviewComment[] = [
   {
@@ -63,100 +61,82 @@ const MOCK_REVIEW_COMMENTS: RawReviewComment[] = [
   },
 ];
 
-const MOCK_REVIEWS = {
-  reviews: [
-    {
-      author: { login: "bob" },
-      state: "CHANGES_REQUESTED",
-      body: "A few nits.",
-      submittedAt: "2026-03-01T10:00:00Z",
-    },
-  ],
-};
-
-const MOCK_FILES = {
-  files: [
-    { path: "src/widget.ts", additions: 20, deletions: 5 },
-    { path: "src/utils.ts", additions: 3, deletions: 1 },
-  ],
-};
-
-const MOCK_ISSUE_COMMENTS = [
+const MOCK_REVIEWS: Review[] = [
   {
-    user: { login: "dave" },
+    author: { login: "bob" },
+    state: "CHANGES_REQUESTED",
+    body: "A few nits.",
+    submittedAt: "2026-03-01T10:00:00Z",
+  },
+];
+
+const MOCK_FILES = ["src/widget.ts", "src/utils.ts"];
+
+const MOCK_ISSUE_COMMENTS: IssueComment[] = [
+  {
+    user: "dave",
     body: "LGTM overall, just the inline comments.",
     created_at: "2026-03-01T13:00:00Z",
   },
 ];
 
-// ── Mock command runner factory ──────────────────────────────────────────
+// ── Mock GitHub client factory ────────────────────────────────────────────
 
-function makeMockRunner(
-  overrides: Record<string, string> = {},
-): CommandRunner {
-  const responses: Record<string, string> = {
-    "repo,view,--json,nameWithOwner,--jq,.nameWithOwner": "org/repo\n",
-    "pr,list,--head,feat/widget,--json,number,--jq,.[0].number": "42\n",
-    "pr,view,42,--json,number,title,url,headRefName,baseRefName,state,author,body":
-      JSON.stringify(MOCK_META),
-    "api,repos/org/repo/pulls/42/comments,--paginate":
-      JSON.stringify(MOCK_REVIEW_COMMENTS),
-    "pr,view,42,--json,reviews": JSON.stringify(MOCK_REVIEWS),
-    "pr,view,42,--json,files": JSON.stringify(MOCK_FILES),
-    "api,repos/org/repo/issues/42/comments,--paginate":
-      JSON.stringify(MOCK_ISSUE_COMMENTS),
+function makeMockClient(overrides: Partial<GitHubClient> = {}): GitHubClient {
+  const client: GitHubClient = {
+    getPr: async () => MOCK_META,
+    listPrs: async () => [{ number: 42 } as Awaited<ReturnType<GitHubClient["listPrs"]>>[number],
+    ],
+    listReviewComments: async () => MOCK_REVIEW_COMMENTS,
+    listReviews: async () => MOCK_REVIEWS,
+    listFiles: async () => MOCK_FILES,
+    listIssueComments: async () => MOCK_ISSUE_COMMENTS,
+    listMergedPrs: async () => [],
     ...overrides,
   };
 
-  return (args: string[]): string => {
-    const key = args.join(",");
-    const response = responses[key];
-    if (response === undefined) {
-      throw new Error(`Mock runner: unexpected args: ${key}`);
-    }
-    return response;
-  };
+  return client;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
 
 describe("pr-threads", () => {
-  describe("discoverRepo", () => {
-    it("extracts repo name from gh output", () => {
-      const run = makeMockRunner();
-      const repo = discoverRepo(run);
-      expect(repo).toBe("org/repo");
+  describe("parseGitRemoteUrl", () => {
+    it("parses owner and repo from https remote", () => {
+      const repo = parseGitRemoteUrl("https://github.com/org/repo.git");
+      expect(repo).toEqual({ owner: "org", repo: "repo" });
     });
   });
 
   describe("discoverPrNumber", () => {
-    it("discovers PR number from branch name", () => {
-      const run = makeMockRunner();
-      const num = discoverPrNumber("feat/widget", run);
+    it("discovers PR number from branch name", async () => {
+      const client = makeMockClient({
+        listPrs: async (_owner, _repo, params) => {
+          if (params?.head === "org:feat/widget") {
+            return [{ number: 42 } as Awaited<ReturnType<GitHubClient["listPrs"]>>[number]];
+          }
+          return [];
+        },
+      });
+      const num = await discoverPrNumber("feat/widget", client, { owner: "org", repo: "repo" });
       expect(num).toBe(42);
     });
 
-    it("returns null when no PR exists for branch", () => {
-      const run = makeMockRunner({
-        "pr,list,--head,no-pr-branch,--json,number,--jq,.[0].number": "\n",
+    it("returns null when no PR exists for branch", async () => {
+      const client = makeMockClient({
+        listPrs: async () => [],
       });
-      const num = discoverPrNumber("no-pr-branch", run);
+      const num = await discoverPrNumber("no-pr-branch", client, { owner: "org", repo: "repo" });
       expect(num).toBeNull();
     });
 
-    it("returns null when gh command fails", () => {
-      const run: CommandRunner = () => {
-        throw new Error("gh not found");
-      };
-      const num = discoverPrNumber("any-branch", run);
-      expect(num).toBeNull();
-    });
-
-    it("returns null for null output", () => {
-      const run = makeMockRunner({
-        "pr,list,--head,orphan,--json,number,--jq,.[0].number": "null\n",
+    it("returns null when client list call fails", async () => {
+      const client = makeMockClient({
+        listPrs: async () => {
+          throw new Error("api error");
+        },
       });
-      const num = discoverPrNumber("orphan", run);
+      const num = await discoverPrNumber("orphan", client, { owner: "org", repo: "repo" });
       expect(num).toBeNull();
     });
   });
@@ -231,9 +211,9 @@ describe("pr-threads", () => {
   });
 
   describe("fetchPrThreads", () => {
-    it("assembles complete payload with provided PR number", () => {
-      const run = makeMockRunner();
-      const payload: PrThreadsPayload = fetchPrThreads(42, run);
+    it("assembles complete payload with provided PR number", async () => {
+      const client = makeMockClient();
+      const payload: PrThreadsPayload = await fetchPrThreads(42, client);
 
       // PR metadata
       expect(payload.pr.number).toBe(42);
@@ -264,63 +244,48 @@ describe("pr-threads", () => {
       );
     });
 
-    it("handles PR with no review comments", () => {
-      const run = makeMockRunner({
-        "api,repos/org/repo/pulls/42/comments,--paginate": "[]",
+    it("handles PR with no review comments", async () => {
+      const client = makeMockClient({
+        listReviewComments: async () => [],
       });
-      const payload = fetchPrThreads(42, run);
+      const payload = await fetchPrThreads(42, client);
       expect(payload.inline_threads).toEqual([]);
       expect(payload.thread_summary.total_threads).toBe(0);
       expect(payload.thread_summary.total_inline_comments).toBe(0);
     });
 
-    it("handles PR with no issue comments", () => {
-      const run = makeMockRunner({
-        "api,repos/org/repo/issues/42/comments,--paginate": "[]",
+    it("handles PR with no issue comments", async () => {
+      const client = makeMockClient({
+        listIssueComments: async () => [],
       });
-      const payload = fetchPrThreads(42, run);
+      const payload = await fetchPrThreads(42, client);
       expect(payload.issue_comments).toEqual([]);
       expect(payload.thread_summary.total_issue_comments).toBe(0);
     });
 
-    it("handles PR with no reviews", () => {
-      const run = makeMockRunner({
-        "pr,view,42,--json,reviews": JSON.stringify({ reviews: [] }),
+    it("handles PR with no reviews", async () => {
+      const client = makeMockClient({
+        listReviews: async () => [],
       });
-      const payload = fetchPrThreads(42, run);
+      const payload = await fetchPrThreads(42, client);
       expect(payload.reviews).toEqual([]);
     });
 
-    it("handles PR with no changed files", () => {
-      const run = makeMockRunner({
-        "pr,view,42,--json,files": JSON.stringify({ files: [] }),
+    it("handles PR with no changed files", async () => {
+      const client = makeMockClient({
+        listFiles: async () => [],
       });
-      const payload = fetchPrThreads(42, run);
+      const payload = await fetchPrThreads(42, client);
       expect(payload.changed_files).toEqual([]);
     });
 
-    it("handles missing files key gracefully", () => {
-      const run = makeMockRunner({
-        "pr,view,42,--json,files": JSON.stringify({}),
+    it("throws when client method fails for required data", async () => {
+      const client = makeMockClient({
+        getPr: async () => {
+          throw new Error("api failed");
+        },
       });
-      const payload = fetchPrThreads(42, run);
-      expect(payload.changed_files).toEqual([]);
-    });
-
-    it("handles missing reviews key gracefully", () => {
-      const run = makeMockRunner({
-        "pr,view,42,--json,reviews": JSON.stringify({}),
-      });
-      const payload = fetchPrThreads(42, run);
-      expect(payload.reviews).toEqual([]);
-    });
-
-    it("throws when gh command fails for required data", () => {
-      const run: CommandRunner = (args) => {
-        if (args[0] === "repo") return "org/repo\n";
-        throw new Error("gh api failed");
-      };
-      expect(() => fetchPrThreads(42, run)).toThrow("gh api failed");
+      await expect(fetchPrThreads(42, client)).rejects.toThrow("api failed");
     });
   });
 });

@@ -21,7 +21,7 @@
 
 import { fetchPrThreads } from "./pr-threads.js";
 
-function main(): number {
+async function main(): Promise<number> {
   const arg = process.argv[2];
   let prNumber: number | null = null;
 
@@ -42,7 +42,7 @@ function main(): number {
   }
 
   try {
-    const payload = fetchPrThreads(prNumber);
+    const payload = await fetchPrThreads(prNumber);
     console.log(JSON.stringify(payload, null, 2));
     return 0;
   } catch (err) {
@@ -52,5 +52,12 @@ function main(): number {
   }
 }
 
-const code = main();
-process.exit(code);
+main()
+  .then((code) => {
+    process.exit(code);
+  })
+  .catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`ERROR: ${message}`);
+    process.exit(1);
+  });
