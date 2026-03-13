@@ -86,6 +86,7 @@ export KILO_PORT="${KILO_PORT:-4096}"
 export TEMPORAL_PORT="${TEMPORAL_PORT:-7233}"
 export TEMPORAL_UI_PORT="${TEMPORAL_UI_PORT:-8233}"
 export DOLT_PORT="${DOLT_PORT:-3307}"
+export DOLT_DATABASE="${DOLT_DATABASE:-factory}"
 export DOLT_DATA_DIR="${DOLT_DATA_DIR:-${HOME}/.dolt-data/beads}"
 export DOLT_BIN="${DOLT_BIN:-}"
 
