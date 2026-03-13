@@ -15,37 +15,19 @@
  */
 
 import { execFileSync } from "node:child_process";
+import {
+  type IssueComment,
+  type PrMeta,
+  type RawReviewComment,
+  type Review,
+  type GitHubClient,
+  createGitHubClient,
+  discoverRepo as discoverRepoFromGit,
+} from "./github-client.js";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
-/** Function signature for running gh CLI commands. Injectable for testing. */
-export type CommandRunner = (args: string[]) => string;
-
-/** PR metadata from `gh pr view`. */
-export interface PrMeta {
-  number: number;
-  title: string;
-  url: string;
-  headRefName: string;
-  baseRefName: string;
-  state: string;
-  author: { login: string };
-  body: string;
-}
-
-/** Raw review comment from the GitHub REST API. */
-export interface RawReviewComment {
-  id: number;
-  in_reply_to_id?: number;
-  user: { login: string };
-  body: string;
-  path?: string;
-  line?: number | null;
-  original_line?: number | null;
-  side?: string;
-  created_at: string;
-  diff_hunk?: string;
-}
+export { type IssueComment, type PrMeta, type RawReviewComment, type Review } from "./github-client.js";
 
 /** A single comment within a thread (normalized). */
 export interface ThreadComment {
@@ -75,28 +57,6 @@ export interface ThreadSummary {
   total_issue_comments: number;
 }
 
-/** Raw issue comment from the GitHub REST API. */
-export interface RawIssueComment {
-  user: { login: string };
-  body: string;
-  created_at: string;
-}
-
-/** Normalized issue comment in the payload. */
-export interface IssueComment {
-  user: string;
-  body: string;
-  created_at: string;
-}
-
-/** Review entry from `gh pr view --json reviews`. */
-export interface Review {
-  author: { login: string };
-  state: string;
-  body: string;
-  submittedAt: string;
-}
-
 /** The complete structured payload. */
 export interface PrThreadsPayload {
   pr: PrMeta;
@@ -107,33 +67,20 @@ export interface PrThreadsPayload {
   issue_comments: IssueComment[];
 }
 
-// ── Default command runner ───────────────────────────────────────────────
-
-/**
- * Default command runner: executes `gh` with the given arguments
- * and returns stdout as a string.
- */
-export function defaultCommandRunner(args: string[]): string {
-  return execFileSync("gh", args, {
-    encoding: "utf8",
-    maxBuffer: 50 * 1024 * 1024, // 50 MB for large PRs
-  });
-}
-
 // ── Core logic ───────────────────────────────────────────────────────────
 
 /**
- * Discover the repo owner/name (e.g. "org/repo") via `gh repo view`.
+ * Discover the repo owner/name (e.g. "org/repo") via git origin URL.
  */
-export function discoverRepo(run: CommandRunner = defaultCommandRunner): string {
-  const output = run(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
-  return output.trim();
+export function discoverRepoStr(cwd?: string): string {
+  const repoRef = discoverRepoFromGit(cwd);
+  return `${repoRef.owner}/${repoRef.repo}`;
 }
 
 /**
  * Discover the current git branch name.
  */
-export function discoverBranch(run: CommandRunner = defaultCommandRunner): string {
+export function discoverBranch(): string {
   // Use git directly, not gh, for branch discovery
   const output = execFileSync("git", ["branch", "--show-current"], { encoding: "utf8" });
   return output.trim();
@@ -143,21 +90,18 @@ export function discoverBranch(run: CommandRunner = defaultCommandRunner): strin
  * Discover the PR number for the current branch.
  * Returns null if no PR is found.
  */
-export function discoverPrNumber(
+export async function discoverPrNumber(
   branch: string,
-  run: CommandRunner = defaultCommandRunner,
-): number | null {
+  client: GitHubClient,
+  repoRef: { owner: string; repo: string },
+): Promise<number | null> {
   try {
-    const output = run([
-      "pr", "list",
-      "--head", branch,
-      "--json", "number",
-      "--jq", ".[0].number",
-    ]);
-    const trimmed = output.trim();
-    if (trimmed === "" || trimmed === "null") return null;
-    const num = Number.parseInt(trimmed, 10);
-    return Number.isNaN(num) ? null : num;
+    const prs = await client.listPrs(repoRef.owner, repoRef.repo, {
+      head: `${repoRef.owner}:${branch}`,
+      state: "open",
+    });
+    const num = prs[0]?.number;
+    return typeof num === "number" ? num : null;
   } catch {
     return null;
   }
@@ -207,57 +151,42 @@ export function groupIntoThreads(reviewComments: RawReviewComment[]): InlineThre
  * Fetch all PR review thread data and assemble the structured payload.
  *
  * @param prNumber - PR number (if null, auto-discovers from current branch)
- * @param run - Command runner (injectable for testing)
+ * @param client - GitHub client (injectable for testing)
  */
-export function fetchPrThreads(
+export async function fetchPrThreads(
   prNumber: number | null = null,
-  run: CommandRunner = defaultCommandRunner,
-): PrThreadsPayload {
+  client?: GitHubClient,
+): Promise<PrThreadsPayload> {
+  const ghClient = client ?? createGitHubClient();
+  const repoRef = discoverRepoFromGit();
+
   // Discover PR number if not provided
   let resolvedPrNumber = prNumber;
   if (resolvedPrNumber === null) {
     const branch = discoverBranch();
-    resolvedPrNumber = discoverPrNumber(branch, run);
+    resolvedPrNumber = await discoverPrNumber(branch, ghClient, repoRef);
     if (resolvedPrNumber === null) {
       throw new Error(`No PR found for branch '${branch}'`);
     }
   }
 
-  const repo = discoverRepo(run);
-  const prStr = String(resolvedPrNumber);
-
   // 1. PR metadata
-  const metaRaw = run([
-    "pr", "view", prStr,
-    "--json", "number,title,url,headRefName,baseRefName,state,author,body",
-  ]);
-  const meta: PrMeta = JSON.parse(metaRaw);
+  const meta = await ghClient.getPr(repoRef.owner, repoRef.repo, resolvedPrNumber);
 
   // 2. Review comments (inline, threaded via in_reply_to_id)
-  const reviewCommentsRaw = run([
-    "api", `repos/${repo}/pulls/${prStr}/comments`, "--paginate",
-  ]);
-  const reviewComments: RawReviewComment[] = JSON.parse(reviewCommentsRaw);
+  const reviewComments = await ghClient.listReviewComments(repoRef.owner, repoRef.repo, resolvedPrNumber);
 
   // 3. PR-level reviews
-  const reviewsRaw = run(["pr", "view", prStr, "--json", "reviews"]);
-  const reviewsData: { reviews: Review[] } = JSON.parse(reviewsRaw);
+  const reviews = await ghClient.listReviews(repoRef.owner, repoRef.repo, resolvedPrNumber);
 
   // 4. Changed files
-  const filesRaw = run(["pr", "view", prStr, "--json", "files"]);
-  const filesData: { files: Array<{ path: string }> } = JSON.parse(filesRaw);
+  const changedFiles = await ghClient.listFiles(repoRef.owner, repoRef.repo, resolvedPrNumber);
 
   // 5. Issue-level comments
-  const issueCommentsRaw = run([
-    "api", `repos/${repo}/issues/${prStr}/comments`, "--paginate",
-  ]);
-  const issueComments: RawIssueComment[] = JSON.parse(issueCommentsRaw);
+  const issueComments = await ghClient.listIssueComments(repoRef.owner, repoRef.repo, resolvedPrNumber);
 
   // Group inline comments into threads
   const inlineThreads = groupIntoThreads(reviewComments);
-
-  // Extract changed file paths
-  const changedFiles = (filesData.files ?? []).map((f) => f.path);
 
   // Assemble payload
   return {
@@ -269,11 +198,7 @@ export function fetchPrThreads(
       total_issue_comments: issueComments.length,
     },
     inline_threads: inlineThreads,
-    reviews: reviewsData.reviews ?? [],
-    issue_comments: issueComments.map((c) => ({
-      user: c.user.login,
-      body: c.body,
-      created_at: c.created_at,
-    })),
+    reviews,
+    issue_comments: issueComments,
   };
 }

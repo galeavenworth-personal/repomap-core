@@ -16,8 +16,16 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createConnection } from "mysql2/promise";
-import { resolve } from "node:path";
 import { log } from "@temporalio/activity";
+import {
+  BeadsTransientError,
+  closeBeadCore,
+  execBd,
+} from "../infra/bead-ops.js";
+import {
+  buildSubsystemHealth,
+} from "./health-utils.js";
+import { timed } from "../infra/utils.js";
 
 import type {
   BeadCandidate,
@@ -30,23 +38,6 @@ import type {
 } from "./foreman.types.js";
 
 // ── Error Types ──
-
-/**
- * Transient CLI failure — process exit, timeout, or I/O error.
- * Temporal should retry these.
- */
-export class BeadsTransientError extends Error {
-  public readonly retryable = true;
-
-  constructor(
-    message: string,
-    public readonly exitCode: number | null,
-    public readonly stderr: string,
-  ) {
-    super(message);
-    this.name = "BeadsTransientError";
-  }
-}
 
 /**
  * Contract failure — bd returned successfully but the output does not
@@ -67,24 +58,6 @@ export class BeadsContractError extends Error {
 
 // ── Private Helpers ──
 
-/** Result of a bd CLI invocation. */
-export interface BdExecResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
-
-/**
- * Resolve the path to the bd CLI wrapper.
- * The wrapper lives at `.kilocode/tools/bd` relative to the repo root.
- */
-function resolveBdPath(repoPath: string): string {
-  return resolve(repoPath, ".kilocode", "tools", "bd");
-}
-
-/** Default timeout for bd commands (15 seconds). */
-const BD_TIMEOUT_MS = 15_000;
-
 /**
  * Resolve the absolute path to the git binary.
  * Checks well-known fixed paths to avoid insecure PATH resolution (SonarQube S4036).
@@ -94,69 +67,6 @@ function resolveGitBin(): string {
     if (existsSync(p)) return p;
   }
   return "git"; // fallback — will use PATH if no fixed path found
-}
-
-/**
- * Execute a bd CLI command with proper path resolution and error handling.
- *
- * Uses execFile (no shell) for security. Captures stdout, stderr, and exit code.
- * Throws BeadsTransientError on non-zero exit or process errors.
- */
-export function execBd(
-  repoPath: string,
-  args: string[],
-  timeoutMs: number = BD_TIMEOUT_MS,
-): Promise<BdExecResult> {
-  const bdPath = resolveBdPath(repoPath);
-
-  return new Promise((resolvePromise, reject) => {
-    execFile(
-      bdPath,
-      args,
-      {
-        cwd: repoPath,
-        timeout: timeoutMs,
-        maxBuffer: 1024 * 1024, // 1MB
-        env: { ...process.env },
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          // Timeout
-          if (error.killed || error.code === "ETIMEDOUT") {
-            reject(
-              new BeadsTransientError(
-                `bd ${args.join(" ")} timed out after ${timeoutMs}ms`,
-                null,
-                stderr,
-              ),
-            );
-            return;
-          }
-
-          // Non-zero exit
-          const exitCode =
-            error.code != null && typeof error.code === "number"
-              ? error.code
-              : (error as NodeJS.ErrnoException & { status?: number }).status ??
-                1;
-          reject(
-            new BeadsTransientError(
-              `bd ${args.join(" ")} exited with code ${exitCode}: ${stderr || error.message}`,
-              exitCode,
-              stderr,
-            ),
-          );
-          return;
-        }
-
-        resolvePromise({
-          stdout,
-          stderr,
-          exitCode: 0,
-        });
-      },
-    );
-  });
 }
 
 /**
@@ -317,36 +227,6 @@ function classifyEligibleCandidates(
 
 /** Timeout for individual subsystem health checks (5 seconds). */
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
-
-/** Latency threshold above which a subsystem is classified as degraded (3 seconds). */
-const DEGRADED_LATENCY_THRESHOLD_MS = 3_000;
-
-/**
- * Measure elapsed time for an async operation.
- * Returns the result and elapsed time in milliseconds.
- */
-async function timed<T>(fn: () => Promise<T>): Promise<{ result: T; elapsedMs: number }> {
-  const start = performance.now();
-  const result = await fn();
-  return { result, elapsedMs: Math.round(performance.now() - start) };
-}
-
-/**
- * Build a SubsystemHealth from a check result.
- * Applies the latency degradation threshold automatically.
- */
-function buildSubsystemHealth(
-  status: "up" | "down",
-  latencyMs: number | null,
-  message: string | null,
-): SubsystemHealth {
-  // If up but slow, classify as degraded
-  const effectiveStatus =
-    status === "up" && latencyMs !== null && latencyMs > DEGRADED_LATENCY_THRESHOLD_MS
-      ? "degraded"
-      : status;
-  return { status: effectiveStatus, message, latencyMs };
-}
 
 /**
  * Check kilo serve health via HTTP GET /session.
@@ -703,11 +583,11 @@ export async function updateBeadStatus(
 export async function closeBead(
   input: CloseBeadInput,
 ): Promise<CloseBeadOutput> {
-  const { repoPath, beadId } = input;
+  const { beadId } = input;
 
   log.info(`closeBead: bd close ${beadId}`);
   try {
-    await execBd(repoPath, ["close", beadId]);
+    await closeBeadCore(input.repoPath, beadId);
     log.info(`closeBead: ${beadId} closed successfully`);
     return { closed: true, error: null };
   } catch (e) {

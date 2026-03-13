@@ -18,11 +18,21 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { findRepoRoot, sleep, timestamp } from "./utils.js";
 
 import {
   checkPort,
   isPm2AppOnline,
 } from "./factory-dispatch.js";
+
+import {
+  withPm2Connection,
+  pm2Start,
+  pm2List,
+  pm2Stop,
+  pm2Delete,
+  isAppOnline,
+} from "./pm2-client.js";
 
 import {
   checkServerHealth as checkDoltHealth,
@@ -61,14 +71,6 @@ export interface StackConfig {
 }
 
 const HOME = process.env.HOME ?? "/home/user";
-
-function findRepoRoot(): string {
-  try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
-  } catch {
-    return process.cwd();
-  }
-}
 
 export function defaultConfig(): StackConfig {
   const repoRoot = process.env.REPO_ROOT ?? findRepoRoot();
@@ -130,14 +132,6 @@ export interface EnsureResult {
 export type Logger = (msg: string) => void;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function timestamp(): string {
-  return new Date().toTimeString().slice(0, 8);
-}
 
 /**
  * Resolve a binary from multiple candidate paths, then fall back to PATH.
@@ -233,8 +227,8 @@ export async function checkDoltComponent(
  * Check oc-daemon health via pm2 jlist.
  * Replaces: pm2 jlist | grep.
  */
-export function checkOcDaemon(pm2Bin: string): ComponentHealth {
-  const ok = isPm2AppOnline(pm2Bin, "oc-daemon");
+export async function checkOcDaemon(pm2Bin: string): Promise<ComponentHealth> {
+  const ok = await isPm2AppOnline(pm2Bin, "oc-daemon");
   return {
     name: "oc-daemon",
     ok,
@@ -262,8 +256,8 @@ export async function checkTemporalServer(
  * Check Temporal worker health via pm2 jlist.
  * Replaces: pm2 jlist | grep.
  */
-export function checkTemporalWorker(pm2Bin: string): ComponentHealth {
-  const ok = isPm2AppOnline(pm2Bin, "temporal-worker");
+export async function checkTemporalWorker(pm2Bin: string): Promise<ComponentHealth> {
+  const ok = await isPm2AppOnline(pm2Bin, "temporal-worker");
   return {
     name: "Temporal worker",
     ok,
@@ -279,22 +273,14 @@ export async function checkStack(
   config: StackConfig,
   fetchFn: typeof fetch = fetch,
 ): Promise<StackHealth> {
-  const components: ComponentHealth[] = [];
-
-  // Run port-based checks in parallel
-  const [kilo, dolt, temporal] = await Promise.all([
+  const [kilo, dolt, ocDaemon, temporal, temporalWorker] = await Promise.all([
     checkKiloHealth(config.kiloHost, config.kiloPort, fetchFn),
     checkDoltComponent(config),
-    checkTemporalServer(config.kiloHost, config.temporalPort),
-  ]);
-  components.push(
-    kilo,
-    dolt,
-    // pm2 checks are synchronous (execFileSync)
     checkOcDaemon(config.pm2Bin),
-    temporal,
+    checkTemporalServer(config.kiloHost, config.temporalPort),
     checkTemporalWorker(config.pm2Bin),
-  );
+  ]);
+  const components: ComponentHealth[] = [kilo, dolt, ocDaemon, temporal, temporalWorker];
 
   const healthy = components.filter((c) => c.ok).length;
   return {
@@ -476,31 +462,48 @@ export async function ensurePm2Ecosystem(
 ): Promise<void> {
   log(`${timestamp()} Starting pm2-managed processes...`);
 
-  execFileSync(config.pm2Bin, ["start", config.ecosystemConfig], {
-    encoding: "utf8",
-    timeout: 30000,
-    env: {
-      ...process.env,
-      KILO_HOST: config.kiloHost,
-      KILO_PORT: String(config.kiloPort),
-      DOLT_PORT: String(config.doltPort),
-    },
-  });
-
-  // Wait up to 15s for both to come online
-  for (let i = 0; i < 15; i++) {
-    const ocdOk = isPm2AppOnline(config.pm2Bin, "oc-daemon");
-    const twOk = isPm2AppOnline(config.pm2Bin, "temporal-worker");
-    if (ocdOk && twOk) break;
-    await sleep(1000);
+  // Set env vars that the ecosystem config reads from process.env
+  const savedEnv = {
+    KILO_HOST: process.env.KILO_HOST,
+    KILO_PORT: process.env.KILO_PORT,
+    DOLT_PORT: process.env.DOLT_PORT,
+  };
+  process.env.KILO_HOST = config.kiloHost;
+  process.env.KILO_PORT = String(config.kiloPort);
+  process.env.DOLT_PORT = String(config.doltPort);
+  try {
+    await withPm2Connection(() => pm2Start(config.ecosystemConfig));
+  } finally {
+    // Restore original env values
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) delete process.env[key];
+      else process.env[key] = val;
+    }
   }
 
-  if (!isPm2AppOnline(config.pm2Bin, "oc-daemon")) {
+  const { ocDaemonOnline, temporalWorkerOnline } = await withPm2Connection(async () => {
+    // Wait up to 15s for both to come online using one PM2 connection.
+    for (let i = 0; i < 15; i++) {
+      const ocdOk = await isAppOnline("oc-daemon");
+      const twOk = await isAppOnline("temporal-worker");
+      if (ocdOk && twOk) {
+        return { ocDaemonOnline: true, temporalWorkerOnline: true };
+      }
+      await sleep(1000);
+    }
+
+    return {
+      ocDaemonOnline: await isAppOnline("oc-daemon"),
+      temporalWorkerOnline: await isAppOnline("temporal-worker"),
+    };
+  });
+
+  if (!ocDaemonOnline) {
     throw new Error(`oc-daemon failed to start. Check: ${config.pm2Bin} logs oc-daemon`);
   }
   log(`${timestamp()} ✅ oc-daemon online (pm2, auto-restart enabled).`);
 
-  if (!isPm2AppOnline(config.pm2Bin, "temporal-worker")) {
+  if (!temporalWorkerOnline) {
     throw new Error(`Temporal worker failed to start. Check: ${config.pm2Bin} logs temporal-worker`);
   }
   log(`${timestamp()} ✅ Temporal worker online (pm2, auto-restart enabled).`);
@@ -618,19 +621,16 @@ export async function stopStack(
 
   // Stop pm2-managed Node.js processes
   try {
-    const jlist = execFileSync(config.pm2Bin, ["jlist"], {
-      encoding: "utf8",
-      timeout: 5000,
-      stdio: ["pipe", "pipe", "ignore"],
+    await withPm2Connection(async () => {
+      const processes = await pm2List();
+      if (processes.length > 0) {
+        await pm2Stop("all");
+        await pm2Delete("all");
+        log(`${timestamp()} pm2 processes stopped (oc-daemon, temporal-worker).`);
+      } else {
+        log(`${timestamp()} No pm2 processes to stop.`);
+      }
     });
-    const processes = JSON.parse(jlist) as unknown[];
-    if (processes.length > 0) {
-      execFileSync(config.pm2Bin, ["stop", "all"], { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "ignore"] });
-      execFileSync(config.pm2Bin, ["delete", "all"], { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "ignore"] });
-      log(`${timestamp()} pm2 processes stopped (oc-daemon, temporal-worker).`);
-    } else {
-      log(`${timestamp()} No pm2 processes to stop.`);
-    }
   } catch {
     log(`${timestamp()} No pm2 processes to stop.`);
   }

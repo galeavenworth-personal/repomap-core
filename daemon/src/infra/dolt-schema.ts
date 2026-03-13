@@ -506,19 +506,11 @@ export async function applyMigration(
     // Ensure database exists
     await ensureDatabase(config);
 
-    // Connect to the database and apply migration
-    // Split into individual statements — Dolt's multi-statement parser
-    // cannot handle large batches reliably (e.g. "unable to get sub statement").
+    // Connect to the database and apply migration.
     const conn = await createDatabaseConnection(config);
     try {
-      const statements = sql
-        .split(/;\s*\n/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0 && !s.startsWith("--"));
-      for (const stmt of statements) {
-        await conn.query(stmt);
-      }
-      log(`Applied migration SQL (${statements.length} statements)`);
+      await conn.query(sql);
+      log("Applied migration SQL");
 
       // Dolt commit
       const commitHash = await idempotentDoltCommit(conn, commitMessage);

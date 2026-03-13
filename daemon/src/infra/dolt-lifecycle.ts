@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { existsSync, openSync, readFileSync, readlinkSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import mysql from "mysql2/promise";
+import { sleep } from "./utils.js";
 
 // ── Configuration ────────────────────────────────────────────────────────
 
@@ -415,10 +416,4 @@ export async function stopServer(
   } else {
     log("Dolt server was not running.");
   }
-}
-
-// ── Utility ──────────────────────────────────────────────────────────────
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

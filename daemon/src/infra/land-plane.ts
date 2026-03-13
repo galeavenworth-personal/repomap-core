@@ -23,6 +23,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { closeBeadSync } from "./bead-ops.js";
 
 // ── Configuration ────────────────────────────────────────────────────────
 
@@ -282,15 +283,17 @@ export function closeBead(
 ): boolean {
   log(`Closing bead: ${beadId}`);
 
-  const result = spawnSync(config.bdBin, ["close", beadId], {
-    cwd: config.rootDir,
-    stdio: ["ignore", "inherit", "inherit"],
-    timeout: 30_000,
-  });
+  const result = closeBeadSync(config.bdBin, config.rootDir, beadId);
 
   // Idempotent: always return true (matches `|| true` in shell)
-  if (result.status !== 0) {
-    log(`bd close exited with ${result.status ?? "signal"} (ignored, idempotent)`);
+  if (result.exitCode !== 0) {
+    log(`bd close exited with ${result.exitCode ?? "signal"} (ignored, idempotent)`);
+    if (result.stderr.trim()) {
+      log(`bd close stderr: ${result.stderr.trim()}`);
+    }
+    if (result.stdout.trim()) {
+      log(`bd close stdout: ${result.stdout.trim()}`);
+    }
   }
 
   return true;

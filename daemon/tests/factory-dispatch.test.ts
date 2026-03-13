@@ -25,7 +25,9 @@ import {
   dispatchPrompt,
   ExitCode,
   checkPort,
+  isPm2AppOnline,
 } from "../src/infra/factory-dispatch.js";
+import * as pm2Client from "../src/infra/pm2-client.js";
 import { writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -554,6 +556,14 @@ describe("FactoryDispatch", () => {
       // Use a port unlikely to be in use
       const result = await checkPort("127.0.0.1", 19998, 500);
       expect(result).toBe(false);
+    });
+  });
+
+  describe("isPm2AppOnline", () => {
+    it("returns false when PM2 connection fails", async () => {
+      vi.spyOn(pm2Client, "withPm2Connection").mockRejectedValue(new Error("pm2 daemon unreachable"));
+
+      await expect(isPm2AppOnline("pm2", "oc-daemon")).resolves.toBe(false);
     });
   });
 

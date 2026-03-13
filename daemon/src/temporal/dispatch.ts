@@ -36,6 +36,7 @@ import { Client, Connection } from "@temporalio/client";
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, readFileSync } from "node:fs";
 import { createConnection } from "node:net";
+import { MODE_CARD_MAP_URL, type ModeCardMap } from "../infra/mode-card-map.js";
 import type { AgentTaskInput, AgentTaskResult, AgentTaskStatus } from "./workflows.js";
 
 const TASK_QUEUE = "agent-tasks";
@@ -76,13 +77,9 @@ function resolveBinary(name: string, fallbackPaths: string[] = []): string {
 
 const PGREP = resolveBinary("pgrep", ["/usr/bin/pgrep", "/bin/pgrep"]);
 
-type ModeCardMap = Record<string, string>;
-
-const MODE_CARD_MAP_PATH = new URL("../../../.kilocode/mode-card-map.json", import.meta.url);
-
 function loadModeCardMap(): ModeCardMap {
   try {
-    const raw = readFileSync(MODE_CARD_MAP_PATH, "utf8");
+    const raw = readFileSync(MODE_CARD_MAP_URL, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (parsed && typeof parsed === "object") {
       return parsed as ModeCardMap;

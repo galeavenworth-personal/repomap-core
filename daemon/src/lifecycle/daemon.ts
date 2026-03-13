@@ -1,24 +1,10 @@
-/**
- * Daemon Lifecycle
- *
- * Manages the daemon's connection to kilo serve and Dolt,
- * subscribes to the SSE event stream, and orchestrates the
- * classify → mint → write pipeline.
- *
- * Lifecycle:
- *   1. Connect to kilo serve (verify health)
- *   2. Connect to Dolt
- *   3. Subscribe to SSE event stream
- *   4. For each event: classify → write punch (if punch-worthy)
- *   5. On shutdown: unsubscribe, disconnect, exit cleanly
- */
-
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
 
 import { classifyEvent, type RawEvent } from "../classifier/index.js";
 import { PunchCardValidator } from "../governor/punch-card-validator.js";
+import { DEFAULT_MODE_CARD_MAP, loadModeCardMap } from "../infra/mode-card-map.js";
+import { sortKeysDeep } from "../infra/utils.js";
 import { createDoltWriter, type DoltWriter } from "../writer/index.js";
 import { runCatchUp } from "./catchup.js";
 
@@ -38,10 +24,6 @@ export interface Daemon {
 }
 
 type OcClient = ReturnType<typeof createOpencodeClient>;
-type ModeCardMap = Record<string, string>;
-
-const MODE_CARD_MAP_URL = new URL("../../../.kilocode/mode-card-map.json", import.meta.url);
-let modeCardMapCache: ModeCardMap | null = null;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -94,19 +76,6 @@ function pickTimestamp(record: Record<string, unknown>): number {
 
   // Only warn once per event type to reduce log spam
   return Date.now();
-}
-
-function sortKeysDeep(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeysDeep);
-  if (value !== null && typeof value === "object") {
-    return Object.keys(value as Record<string, unknown>)
-      .sort((a, b) => a.localeCompare(b))
-      .reduce<Record<string, unknown>>((acc, key) => {
-        acc[key] = sortKeysDeep((value as Record<string, unknown>)[key]);
-        return acc;
-      }, {});
-  }
-  return value;
 }
 
 function computeRawEventSourceHash(event: RawEvent): string {
@@ -187,40 +156,6 @@ function resolveMessageRole(part: Record<string, unknown>, properties: Record<st
   return "assistant";
 }
 
-async function loadModeCardMap(): Promise<ModeCardMap> {
-  if (modeCardMapCache) return modeCardMapCache;
-
-  try {
-    const raw = await readFile(MODE_CARD_MAP_URL, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === "object") {
-      modeCardMapCache = parsed as ModeCardMap;
-      return modeCardMapCache;
-    }
-  } catch (error) {
-    console.warn("[oc-daemon] Failed to load mode-card-map.json, using defaults:", error);
-  }
-
-  modeCardMapCache = {
-    "plant-manager": "plant-orchestrate",
-    "process-orchestrator": "process-orchestrate",
-    architect: "discover-phase",
-    code: "execute-subtask",
-    "audit-orchestrator": "audit-orchestrate",
-    fitter: "fitter-line-health",
-    "code-simplifier": "refactor",
-    "product-skeptic": "friction-audit",
-    "pr-review": "respond-to-pr-review",
-    "docs-specialist": "land-plane",
-    "thinker-abstract": "prepare-phase",
-    "thinker-adversarial": "prepare-phase",
-    "thinker-systems": "prepare-phase",
-    "thinker-concrete": "prepare-phase",
-    "thinker-epistemic": "prepare-phase",
-  };
-  return modeCardMapCache;
-}
-
 function pickMode(payload: Record<string, unknown>): string | undefined {
   const direct = pickString(payload, "mode", "agent");
   if (direct) return direct;
@@ -252,7 +187,7 @@ async function validateSessionCheckpoint(
     return;
   }
 
-  const modeCardMap = await loadModeCardMap();
+  const modeCardMap = await loadModeCardMap(DEFAULT_MODE_CARD_MAP);
   const cardId = modeCardMap[resolvedMode];
   if (!cardId) {
     console.warn(`[oc-daemon] No punch card configured for mode '${resolvedMode}'; skipping validation`);
