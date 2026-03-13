@@ -60,7 +60,7 @@ cd ~/Projects-Employee-1/repomap-core
 ```
 
 This starts 4 components (oc-daemon and Temporal worker managed by **pm2**):
-1. **Dolt SQL server** — port 3307, data at `~/.kilocode/dolt/plant/`
+1. **Dolt SQL server** — port 3307, data at `~/.kilocode/dolt/factory/`
 2. **oc-daemon** — SSE event stream → Dolt punch writer (pm2, log: /tmp/oc-daemon.log)
 3. **Temporal dev server** — port 7233, UI at http://localhost:8233
 4. **Temporal worker** — polls `agent-tasks` queue (pm2, log: /tmp/temporal-worker.log)
@@ -138,11 +138,11 @@ curl -s http://127.0.0.1:4096/session/<SESSION_ID>/message | jq '.[].info.role'
 
 ```bash
 # Punches for a session
-mysql -h 127.0.0.1 -P 3307 -u root punch_cards -e \
+mysql -h 127.0.0.1 -P 3307 -u root factory -e \
   "SELECT punch_type, punch_key, cost FROM punches WHERE task_id='<SESSION_ID>' ORDER BY observed_at"
 
 # Checkpoint results
-mysql -h 127.0.0.1 -P 3307 -u root punch_cards -e \
+mysql -h 127.0.0.1 -P 3307 -u root factory -e \
   "SELECT card_id, status, missing_punches FROM checkpoints WHERE task_id='<SESSION_ID>'"
 ```
 
@@ -163,12 +163,7 @@ tail -50 /tmp/oc-daemon.log
 
 ## 5. Delegation Analytics (Query Dolt)
 
-> **⚠ Canonical name migration pending (repomap-core-65s):** The factory database
-> is currently named `punch_cards` but will be renamed to `factory` as part of
-> Dolt consolidation. All new code should use a configurable DB name via
-> `process.env.DOLT_DATABASE` rather than hardcoding either name.
-
-The factory records all delegation and enforcement data in Dolt (`punch_cards` database).
+The factory records all delegation and enforcement data in Dolt (`factory` database).
 Use these queries to analyze factory performance.
 
 ```sql
@@ -207,7 +202,7 @@ Run via Python for richer analysis:
 cd ~/Projects-Employee-1/repomap-core
 .venv/bin/python -c "
 import pymysql
-conn = pymysql.connect(host='127.0.0.1', port=3307, user='root', database='punch_cards')
+conn = pymysql.connect(host='127.0.0.1', port=3307, user='root', database='factory')
 cur = conn.cursor(pymysql.cursors.DictCursor)
 cur.execute('<SQL HERE>')
 for r in cur.fetchall(): print(r)
@@ -416,7 +411,7 @@ cd ~/Projects/repomap-core  # or Employee-1
 ```
 
 Beads Dolt data lives at `~/.dolt-data/beads/` (database: `beads_repomap-core`).
-This is separate from the punch card Dolt at `~/.kilocode/dolt/plant/`.
+This is separate from the factory Dolt at `~/.kilocode/dolt/factory/`.
 
 ---
 
@@ -488,7 +483,7 @@ cd ~/Projects-Employee-1/repomap-core
 | Service | Port | Log |
 |---|---|---|
 | kilo serve | 4096 | terminal foreground |
-| Dolt SQL (punch cards) | 3307 | /tmp/dolt-server.log |
+| Dolt SQL (factory) | 3307 | /tmp/dolt-server.log |
 | oc-daemon | — | /tmp/oc-daemon.log |
 | Temporal gRPC | 7233 | — |
 | Temporal UI | 8233 | — |
@@ -497,7 +492,7 @@ cd ~/Projects-Employee-1/repomap-core
 |---|---|
 | `~/.local/share/kilo/auth.json` | OAuth credentials for kilo serve |
 | `~/.config/kilo/opencode.json` | Model routing config |
-| `~/.kilocode/dolt/plant/` | Dolt data (punch cards, sessions, compiled prompts) |
+| `~/.kilocode/dolt/factory/` | Dolt data (factory: sessions, punches, compiled prompts) |
 | `~/.dolt-data/beads/` | Dolt data (beads issue tracking) |
 | `~/.temporalio/bin/temporal` | Temporal CLI |
 | `/tmp/temporal-dev.db` | Temporal dev server SQLite storage |
@@ -506,7 +501,7 @@ cd ~/Projects-Employee-1/repomap-core
 
 ---
 
-## 13. Dolt Data Model (punch_cards database — migrating to `factory`, see repomap-core-65s)
+## 13. Dolt Data Model (`factory` database)
 
 | Table | Records | Purpose |
 |---|---|---|

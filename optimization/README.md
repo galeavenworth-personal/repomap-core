@@ -24,7 +24,7 @@ Run the DSPy local smoke test (no API keys required):
 ## Dolt-as-Bus Pattern
 
 - Python writer: [`optimization/dolt_bus.py`](optimization/dolt_bus.py)
-  - Writes/reads `compiled_prompts` records in Dolt (`punch_cards` DB over MySQL wire protocol).
+  - Writes/reads `compiled_prompts` records in Dolt (`factory` DB over MySQL wire protocol).
 - TypeScript reader: [`daemon/src/optimization/prompt-reader.ts`](daemon/src/optimization/prompt-reader.ts)
   - Reads single/multiple compiled prompt records for daemon-side consumption.
 - DDL init script: [`optimization/scripts/init_compiled_prompts.sh`](optimization/scripts/init_compiled_prompts.sh)
