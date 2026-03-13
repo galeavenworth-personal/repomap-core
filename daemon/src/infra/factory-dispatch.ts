@@ -1,63 +1,46 @@
 /**
- * Factory Dispatch — TypeScript logic module
+ * Factory Dispatch — Orchestration module
  *
- * Replaces the 7 Python heredocs and curl calls in factory_dispatch.sh
- * with native Node.js fetch() and JSON manipulation.
- *
- * Responsibilities:
- *   - Pre-flight health check of 5 stack components
- *   - Build prompt payload from JSON file or plain text
- *   - Inject SESSION_ID into prompt text
- *   - Create kilo session
- *   - Dispatch prompt asynchronously
- *   - Monitor session for completion (idle detection)
- *   - Monitor child sessions
- *   - Extract result text
- *   - JSON output with child session IDs
+ * Main entry point for factory dispatch pipeline.
+ * Delegates session transport to kilo-client.ts and
+ * post-session validation to punch-card-audit.ts.
  *
  * See: repomap-core-76q
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
-import { findRepoRoot, sleep, timestamp } from "./utils.js";
+import { findRepoRoot, timestamp } from "./utils.js";
 import { withPm2Connection, isAppOnline } from "./pm2-client.js";
+import {
+  createSession,
+  dispatchPrompt,
+  fetchChildren,
+  fetchMessages,
+  monitorSession,
+  extractResult,
+} from "./kilo-client.js";
+import type { ChildSession } from "./kilo-client.js";
 
 import { resolveCardExitPrompt, injectCardExitPrompt } from "../optimization/prompt-injection.js";
-import { PunchCardValidator } from "../governor/punch-card-validator.js";
-
-// ── Configuration ────────────────────────────────────────────────────────
+import { runPostSessionAudit } from "./punch-card-audit.js";
+import type { AuditResult } from "./punch-card-audit.js";
 
 export interface FactoryDispatchConfig {
-  /** Agent mode to dispatch to (default: plant-manager) */
   mode: string;
-  /** Session title (default: auto-generated) */
   title: string;
-  /** Kilo serve host (default: 127.0.0.1) */
   host: string;
-  /** Kilo serve port (default: 4096) */
   port: number;
-  /** Max wait for completion in seconds (default: 600) */
   maxWait: number;
-  /** Poll interval in seconds (default: 10) */
   pollInterval: number;
-  /** Suppress progress output (default: false) */
   quiet: boolean;
-  /** Fire and forget — print session ID and exit (default: false) */
   noMonitor: boolean;
-  /** Output final result as JSON (default: false) */
   jsonOutput: boolean;
-  /** Prompt argument — file path or string */
   promptArg: string;
-  /** Consecutive idle polls required before declaring completion */
   idleConfirm: number;
-  /** Dolt server port for pre-flight check */
   doltPort: number;
-  /** Temporal server port for pre-flight check */
   temporalPort: number;
-  /** Path to pm2 binary */
   pm2Bin: string;
-  /** Override punch card ID (bypasses mode-card-map lookup) */
   cardId: string;
 }
 
@@ -82,66 +65,29 @@ export function defaultConfig(): FactoryDispatchConfig {
   };
 }
 
-// ── Types ────────────────────────────────────────────────────────────────
-
-/** A single part in a kilo prompt payload. */
 export interface PromptPart {
   type: string;
   text?: string;
   [key: string]: unknown;
 }
 
-/** The prompt payload sent to kilo serve. */
 export interface PromptPayload {
   agent?: string;
   parts: PromptPart[];
   [key: string]: unknown;
 }
 
-/** A message part from the kilo session message API. */
-export interface MessagePart {
-  type: string;
-  text?: string;
-  reason?: string;
-  state?: { status?: string };
-  [key: string]: unknown;
-}
-
-/** A message from the kilo session message API. */
-export interface SessionMessage {
-  info?: { role?: string };
-  parts?: MessagePart[];
-  [key: string]: unknown;
-}
-
-/** A child session object from the kilo children API. */
-export interface ChildSession {
-  id: string;
-  [key: string]: unknown;
-}
-
-/** Pre-flight check result for a single component. */
 export interface PreflightComponent {
   name: string;
   ok: boolean;
   detail: string;
 }
 
-/** Overall pre-flight result. */
 export interface PreflightResult {
   ok: boolean;
   components: PreflightComponent[];
 }
 
-/** Post-session audit result. */
-export interface AuditResult {
-  cardId: string;
-  status: "pass" | "fail";
-  missing: string[];
-  violations: string[];
-}
-
-/** Dispatch result for JSON output mode. */
 export interface DispatchResult {
   session_id: string;
   mode: string;
@@ -153,7 +99,6 @@ export interface DispatchResult {
   audit?: AuditResult;
 }
 
-/** Exit codes matching the shell script. */
 export const ExitCode = {
   SUCCESS: 0,
   USAGE_ERROR: 1,
@@ -166,7 +111,24 @@ export const ExitCode = {
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
 
-// ── Helpers ──────────────────────────────────────────────────────────────
+export {
+  createSession,
+  dispatchPrompt,
+  isSessionDone,
+  fetchChildren,
+  fetchMessages,
+  areAllChildrenDone,
+  monitorSession,
+  extractResult,
+} from "./kilo-client.js";
+export type {
+  MessagePart,
+  SessionMessage,
+  ChildSession,
+  MonitorResult,
+} from "./kilo-client.js";
+export { runPostSessionAudit } from "./punch-card-audit.js";
+export type { AuditResult } from "./punch-card-audit.js";
 
 export type Logger = (msg: string) => void;
 
@@ -178,10 +140,6 @@ function makeLogger(quiet: boolean): Logger {
   };
 }
 
-/**
- * Check if a TCP port is listening on localhost.
- * Returns true if a connection can be established within timeoutMs.
- */
 export function checkPort(host: string, port: number, timeoutMs = 2000): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = createConnection({ host, port });
@@ -202,18 +160,10 @@ export function checkPort(host: string, port: number, timeoutMs = 2000): Promise
   });
 }
 
-/**
- * Check if a pm2 app is online by parsing pm2 jlist output.
- */
 export async function isPm2AppOnline(_pm2Bin: string, appName: string): Promise<boolean> {
   return withPm2Connection(() => isAppOnline(appName));
 }
 
-// ── Phase 1: Pre-flight ──────────────────────────────────────────────────
-
-/**
- * Run pre-flight health check on all 5 stack components.
- */
 export async function preflight(
   config: FactoryDispatchConfig,
   log: Logger,
@@ -292,11 +242,6 @@ export async function preflight(
   return { ok, components };
 }
 
-// ── Phase 2: Build prompt payload ────────────────────────────────────────
-
-/**
- * Build the prompt payload from a JSON file path or a plain text string.
- */
 export function buildPromptPayload(promptArg: string, mode: string): PromptPayload {
   if (promptArg.endsWith(".json")) {
     try {
@@ -322,12 +267,6 @@ export function buildPromptPayload(promptArg: string, mode: string): PromptPaylo
   };
 }
 
-// ── Phase 3: Inject SESSION_ID ───────────────────────────────────────────
-
-/**
- * Inject SESSION_ID into prompt parts for punch card tracking.
- * Modifies the payload in-place.
- */
 export function injectSessionId(payload: PromptPayload, sessionId: string): void {
   const sessionContext =
     `Dispatch context:\n- SESSION_ID: ${sessionId}\n` +
@@ -358,267 +297,6 @@ export function injectSessionId(payload: PromptPayload, sessionId: string): void
   payload.parts = parts;
 }
 
-// ── Phase 3+4: Create session & dispatch ─────────────────────────────────
-
-/**
- * Create a new kilo session. Returns the session ID.
- */
-export async function createSession(
-  baseUrl: string,
-  title: string,
-  fetchFn: typeof fetch = fetch,
-): Promise<string> {
-  const resp = await fetchFn(`${baseUrl}/session`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title }),
-  });
-
-  if (!resp.ok) {
-    throw new Error(`Failed to create session (HTTP ${resp.status})`);
-  }
-
-  const data = (await resp.json()) as { id: string };
-  if (!data.id) {
-    throw new Error("Session response missing 'id' field");
-  }
-
-  return data.id;
-}
-
-/**
- * Dispatch a prompt to a session asynchronously.
- * Uses the prompt_async endpoint so we can monitor via polling.
- */
-export async function dispatchPrompt(
-  baseUrl: string,
-  sessionId: string,
-  payload: PromptPayload,
-  fetchFn: typeof fetch = fetch,
-): Promise<void> {
-  const resp = await fetchFn(`${baseUrl}/session/${sessionId}/prompt_async`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  // Any 2xx is success
-  if (resp.status < 200 || resp.status >= 300) {
-    throw new Error(`Prompt dispatch failed (HTTP ${resp.status})`);
-  }
-}
-
-// ── Phase 6: Monitor for completion ──────────────────────────────────────
-
-/**
- * Check if a session's messages indicate it is done processing.
- * A session is done when it has a terminal step-finish (end_turn/stop, not tool-calls)
- * and no running/pending tools.
- */
-export function isSessionDone(messages: SessionMessage[]): boolean {
-  let hasTerminalFinish = false;
-  let hasRunningTools = false;
-
-  for (const msg of messages) {
-    for (const part of msg.parts ?? []) {
-      if (part.type === "tool") {
-        const status = part.state?.status;
-        if (status === "running" || status === "pending") {
-          hasRunningTools = true;
-        }
-      }
-      if (part.type === "step-finish") {
-        const reason = part.reason ?? "";
-        if (reason === "tool-calls") {
-          hasTerminalFinish = false; // reset — more work coming
-        } else if (reason === "end_turn" || reason === "stop" || reason === "max_tokens" || reason === "") {
-          hasTerminalFinish = true;
-        }
-      }
-    }
-  }
-
-  return hasTerminalFinish && !hasRunningTools;
-}
-
-/**
- * Fetch the children of a session. Returns array of child session objects.
- */
-export async function fetchChildren(
-  baseUrl: string,
-  sessionId: string,
-  fetchFn: typeof fetch = fetch,
-): Promise<ChildSession[]> {
-  try {
-    const resp = await fetchFn(`${baseUrl}/session/${sessionId}/children`);
-    if (!resp.ok) return [];
-    return (await resp.json()) as ChildSession[];
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Fetch session messages.
- */
-export async function fetchMessages(
-  baseUrl: string,
-  sessionId: string,
-  fetchFn: typeof fetch = fetch,
-): Promise<SessionMessage[]> {
-  try {
-    const resp = await fetchFn(`${baseUrl}/session/${sessionId}/message`);
-    if (!resp.ok) return [];
-    return (await resp.json()) as SessionMessage[];
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Check if ALL child sessions are done (no running/pending tools).
- */
-export async function areAllChildrenDone(
-  baseUrl: string,
-  children: ChildSession[],
-  fetchFn: typeof fetch = fetch,
-): Promise<boolean> {
-  for (const child of children) {
-    if (!child.id) continue;
-    const messages = await fetchMessages(baseUrl, child.id, fetchFn);
-    // Check if any tool is running/pending
-    const hasRunning = messages.some((msg) =>
-      (msg.parts ?? []).some(
-        (p) => p.type === "tool" && (p.state?.status === "running" || p.state?.status === "pending"),
-      ),
-    );
-    if (hasRunning) return false;
-  }
-  return true;
-}
-
-export interface MonitorResult {
-  completed: boolean;
-  elapsed: number;
-  childCount: number;
-}
-
-/**
- * Monitor a session for completion with idle detection and child monitoring.
- */
-export async function monitorSession(
-  baseUrl: string,
-  sessionId: string,
-  config: FactoryDispatchConfig,
-  log: Logger,
-  fetchFn: typeof fetch = fetch,
-): Promise<MonitorResult> {
-  log(`${timestamp()} Monitoring session (poll=${config.pollInterval}s, timeout=${config.maxWait}s)...`);
-
-  let elapsed = 0;
-  let lastChildCount = 0;
-  let idleCount = 0;
-
-  while (elapsed < config.maxWait) {
-    await sleep(config.pollInterval * 1000);
-    elapsed += config.pollInterval;
-
-    // Count children
-    const children = await fetchChildren(baseUrl, sessionId, fetchFn);
-    const childCount = children.length;
-
-    if (childCount !== lastChildCount) {
-      log(`${timestamp()} Children spawned: ${childCount} (was ${lastChildCount})`);
-      lastChildCount = childCount;
-    }
-
-    // Check session messages
-    const messages = await fetchMessages(baseUrl, sessionId, fetchFn);
-    let doneStatus: "yes" | "no" | "error";
-    try {
-      doneStatus = isSessionDone(messages) ? "yes" : "no";
-    } catch {
-      doneStatus = "error";
-    }
-
-    if (doneStatus === "yes") {
-      idleCount++;
-      if (idleCount < config.idleConfirm) {
-        log(`${timestamp()} [${elapsed}s] Idle check ${idleCount}/${config.idleConfirm}, confirming...`);
-        await sleep(config.pollInterval * 1000);
-        elapsed += config.pollInterval;
-        if (elapsed >= config.maxWait) break;
-        continue;
-      }
-
-      // Confirmed idle — verify all children are done
-      let allChildrenDone = true;
-      if (childCount > 0) {
-        allChildrenDone = await areAllChildrenDone(baseUrl, children, fetchFn);
-      }
-
-      if (allChildrenDone) {
-        log(
-          `${timestamp()} All sessions idle (${idleCount}/${config.idleConfirm} confirmations) — completed in ${elapsed}s`,
-        );
-        return { completed: true, elapsed, childCount: lastChildCount };
-      }
-      // Children still running, reset
-      idleCount = 0;
-    } else {
-      idleCount = 0;
-    }
-
-    if (doneStatus === "error") {
-      log(`${timestamp()} [${elapsed}s] Warning: status check failed, retrying...`);
-    } else {
-      log(`${timestamp()} [${elapsed}s] Parent done: ${doneStatus}, children: ${childCount}, idle: ${idleCount}/${config.idleConfirm}`);
-    }
-  }
-
-  return { completed: false, elapsed, childCount: lastChildCount };
-}
-
-// ── Phase 7: Extract result ──────────────────────────────────────────────
-
-/**
- * Extract the final assistant response text from session messages.
- * First looks for substantial text (>100 chars), then falls back to any text.
- */
-export function extractResult(messages: SessionMessage[]): string | null {
-  // First pass: find last assistant message with substantial text
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.info?.role !== "assistant") continue;
-    for (const part of msg.parts ?? []) {
-      if (part.type === "text" && typeof part.text === "string" && part.text.length > 100) {
-        return part.text;
-      }
-    }
-  }
-
-  // Fallback: any assistant text
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.info?.role !== "assistant") continue;
-    for (const part of msg.parts ?? []) {
-      if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
-        return part.text;
-      }
-    }
-  }
-
-  return null;
-}
-
-// ── Main orchestrator ────────────────────────────────────────────────────
-
-/**
- * Run the full factory dispatch pipeline.
- * This is the main entry point — mirrors the shell script's behavior.
- *
- * Returns the exit code (0-6).
- */
 export async function runDispatch(
   config: FactoryDispatchConfig,
   fetchFn: typeof fetch = fetch,
@@ -801,66 +479,6 @@ export async function runDispatch(
   return ExitCode.SUCCESS;
 }
 
-// ── Phase 10: Post-session punch card audit ──────────────────────────────
-
-/**
- * Run a punch card audit after session completion.
- * Validates the session's punches against the resolved card and writes
- * the result to Dolt's checkpoints table.
- *
- * This is the "governor without kill" — post-hoc enforcement that creates
- * the training signal DSPy needs to learn from workflow deviations.
- */
-export async function runPostSessionAudit(
-  sessionId: string,
-  cardId: string,
-  config: FactoryDispatchConfig,
-  log: Logger,
-): Promise<AuditResult | null> {
-  const validator = new PunchCardValidator({
-    host: config.host === "127.0.0.1" ? config.host : "127.0.0.1",
-    port: config.doltPort,
-    database: process.env.DOLT_DATABASE ?? "beads_repomap-core",
-    user: "root",
-  });
-
-  try {
-    await validator.connect();
-    const result = await validator.validatePunchCard(sessionId, cardId);
-    const audit: AuditResult = {
-      cardId,
-      status: result.status,
-      missing: result.missing.map((m) => `${m.punchType}:${m.punchKeyPattern}`),
-      violations: result.violations.map((v) => `${v.punchType}:${v.punchKeyPattern} (${v.count}x)`),
-    };
-
-    if (result.status === "pass") {
-      log(`${timestamp()} ✅ AUDIT PASS: card=${cardId} session=${sessionId}`);
-    } else {
-      log(`${timestamp()} ❌ AUDIT FAIL: card=${cardId} session=${sessionId}`);
-      if (audit.missing.length > 0) {
-        log(`${timestamp()}   Missing: ${audit.missing.join(", ")}`);
-      }
-      if (audit.violations.length > 0) {
-        log(`${timestamp()}   Violations: ${audit.violations.join(", ")}`);
-      }
-    }
-
-    return audit;
-  } catch (e) {
-    log(`${timestamp()} Warning: post-session audit failed: ${(e as Error).message}`);
-    return null;
-  } finally {
-    await validator.disconnect();
-  }
-}
-
-// ── Prompt file writing (used by thin shell wrapper) ─────────────────────
-
-/**
- * Write a prompt payload to a temporary JSON file.
- * Returns the path to the file.
- */
 export function writePromptFile(payload: PromptPayload, path: string): void {
   writeFileSync(path, JSON.stringify(payload));
 }
