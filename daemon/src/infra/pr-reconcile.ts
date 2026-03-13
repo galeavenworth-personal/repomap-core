@@ -6,10 +6,10 @@
  * branch name, then closes the corresponding Beads issue via `bd close`.
  *
  * Responsibilities:
- *   - Query merged PRs by head branch name using gh CLI
+ *   - Query merged PRs by head branch name using GitHub API
  *   - Close matching Beads issues via bd CLI
  *   - Support --dry-run (report only, no mutations)
- *   - Support --strict (fail on any gh or bd error)
+ *   - Support --strict (fail on any GitHub or bd error)
  *   - Produce structured results per task-id
  *
  * See: repomap-core-76q.7
@@ -69,9 +69,7 @@ export function makeBdRunner(bdPath: string): BdRunner {
 
 // ── Core logic ───────────────────────────────────────────────────────────
 
-/**
- * Check whether GitHub access is available.
- */
+/** Check whether a GitHub client can be initialized. */
 export function isGhAvailable(client?: GitHubClient): boolean {
   if (client) {
     return true;
@@ -83,6 +81,22 @@ export function isGhAvailable(client?: GitHubClient): boolean {
   } catch {
     return false;
   }
+}
+
+function gitHubClientInitMessage(err: unknown, strict: boolean): string {
+  const detail = sanitizeError(err);
+  if (strict) {
+    return `GitHub client initialization failed (set GITHUB_TOKEN or auth via gh): ${detail}`;
+  }
+  return `reconciliation skipped (GitHub client unavailable): ${detail}`;
+}
+
+function repoDiscoveryMessage(err: unknown, strict: boolean): string {
+  const detail = sanitizeError(err);
+  if (strict) {
+    return `repository discovery failed (unable to parse git origin): ${detail}`;
+  }
+  return `reconciliation skipped (repo discovery failed): ${detail}`;
 }
 
 /**
@@ -185,13 +199,13 @@ export async function reconcile(
   let ghClient: GitHubClient;
   try {
     ghClient = client ?? createGitHubClient();
-  } catch {
+  } catch (err) {
     if (opts.strict) {
       return {
         items: taskIds.map((taskId) => ({
           status: "gh_missing" as const,
           taskId,
-          message: "gh CLI not found on PATH (cannot reconcile merged PRs)",
+          message: gitHubClientInitMessage(err, true),
         })),
         success: false,
       };
@@ -200,7 +214,7 @@ export async function reconcile(
       items: taskIds.map((taskId) => ({
         status: "gh_missing" as const,
         taskId,
-        message: "reconciliation skipped (gh missing)",
+        message: gitHubClientInitMessage(err, false),
       })),
       success: true,
     };
@@ -209,13 +223,13 @@ export async function reconcile(
   let repoRef: { owner: string; repo: string };
   try {
     repoRef = discoverRepo(opts.rootDir);
-  } catch {
+  } catch (err) {
     if (opts.strict) {
       return {
         items: taskIds.map((taskId) => ({
           status: "gh_missing" as const,
           taskId,
-          message: "gh CLI not found on PATH (cannot reconcile merged PRs)",
+          message: repoDiscoveryMessage(err, true),
         })),
         success: false,
       };
@@ -224,7 +238,7 @@ export async function reconcile(
       items: taskIds.map((taskId) => ({
         status: "gh_missing" as const,
         taskId,
-        message: "reconciliation skipped (gh missing)",
+        message: repoDiscoveryMessage(err, false),
       })),
       success: true,
     };

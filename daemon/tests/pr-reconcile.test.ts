@@ -42,16 +42,23 @@ function makeOpts(overrides: Partial<ReconcileOptions> = {}): ReconcileOptions {
   };
 }
 
-async function withoutGitHubToken<T>(fn: () => Promise<T>): Promise<T> {
-  const original = process.env.GITHUB_TOKEN;
+async function withoutGitHubCredentials<T>(fn: () => Promise<T>): Promise<T> {
+  const originalToken = process.env.GITHUB_TOKEN;
+  const originalPath = process.env.PATH;
   delete process.env.GITHUB_TOKEN;
+  process.env.PATH = "/nonexistent";
   try {
     return await fn();
   } finally {
-    if (original === undefined) {
+    if (originalToken === undefined) {
       delete process.env.GITHUB_TOKEN;
     } else {
-      process.env.GITHUB_TOKEN = original;
+      process.env.GITHUB_TOKEN = originalToken;
+    }
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
     }
   }
 }
@@ -160,7 +167,7 @@ describe("pr-reconcile", () => {
     });
 
     it("returns false when no token is available", async () => {
-      await withoutGitHubToken(async () => {
+      await withoutGitHubCredentials(async () => {
         expect(isGhAvailable()).toBe(false);
       });
     });
@@ -292,24 +299,28 @@ describe("pr-reconcile", () => {
     it("returns gh_missing for all items when gh is unavailable (lenient)", async () => {
       const opts = makeOpts({ strict: false });
       const bdRun = makeSuccessBdRunner();
-      const result = await withoutGitHubToken(async () => reconcile(["task-a", "task-b"], opts, undefined, bdRun));
+      const result = await withoutGitHubCredentials(async () =>
+        reconcile(["task-a", "task-b"], opts, undefined, bdRun),
+      );
 
       expect(result.success).toBe(true);
       expect(result.items).toHaveLength(2);
       expect(result.items[0].status).toBe("gh_missing");
       expect(result.items[1].status).toBe("gh_missing");
-      expect(result.items[0].message).toContain("gh missing");
+      expect(result.items[0].message).toContain("GitHub client unavailable");
     });
 
     it("returns gh_missing and fails when gh is unavailable (strict)", async () => {
       const opts = makeOpts({ strict: true });
       const bdRun = makeSuccessBdRunner();
-      const result = await withoutGitHubToken(async () => reconcile(["task-a", "task-b"], opts, undefined, bdRun));
+      const result = await withoutGitHubCredentials(async () =>
+        reconcile(["task-a", "task-b"], opts, undefined, bdRun),
+      );
 
       expect(result.success).toBe(false);
       expect(result.items).toHaveLength(2);
       expect(result.items[0].status).toBe("gh_missing");
-      expect(result.items[0].message).toContain("gh CLI not found");
+      expect(result.items[0].message).toContain("GitHub client initialization failed");
     });
 
     it("stops processing on first error in strict mode (gh_error)", async () => {

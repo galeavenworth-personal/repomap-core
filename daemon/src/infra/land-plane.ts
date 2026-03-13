@@ -288,6 +288,12 @@ export function closeBead(
   // Idempotent: always return true (matches `|| true` in shell)
   if (result.exitCode !== 0) {
     log(`bd close exited with ${result.exitCode ?? "signal"} (ignored, idempotent)`);
+    if (result.stderr.trim()) {
+      log(`bd close stderr: ${result.stderr.trim()}`);
+    }
+    if (result.stdout.trim()) {
+      log(`bd close stdout: ${result.stdout.trim()}`);
+    }
   }
 
   return true;

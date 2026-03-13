@@ -7,12 +7,12 @@
  *
  * Options:
  *   --dry-run   Do not mutate Beads; just report what would be closed.
- *   --strict    Fail (exit 2) if gh is missing, gh queries fail, or bd close fails.
+ *   --strict    Fail (exit 2) if GitHub client init/repo discovery/query fails, or bd close fails.
  *   --help, -h  Show usage information.
  *
  * Exit codes:
  *   0  Success (or dry-run)
- *   2  Error (missing args, strict-mode failure, or gh missing in strict mode)
+ *   2  Error (missing args or strict-mode failure)
  *
  * See: repomap-core-76q.7
  */
@@ -47,7 +47,7 @@ async function main(): Promise<number> {
           "Usage: npx tsx daemon/src/infra/pr-reconcile.cli.ts [--dry-run] [--strict] <task-id> [<task-id> ...]",
         );
         console.log("  --dry-run   Report what would be closed without mutating Beads");
-        console.log("  --strict    Fail on any gh or bd error");
+        console.log("  --strict    Fail on any GitHub client/query or bd error");
         return 0;
       case "--":
         dashDash = true;
@@ -85,7 +85,7 @@ async function main(): Promise<number> {
         if (strict) {
           console.error(`ERROR: ${line}`);
         } else {
-          console.error(`${item.taskId}: WARN gh query failed; reconciliation skipped`);
+          console.error(`${item.taskId}: WARN GitHub query failed; reconciliation skipped`);
           console.log(`${item.taskId}: reconciliation skipped (gh error)`);
         }
         break;
@@ -101,8 +101,8 @@ async function main(): Promise<number> {
         if (strict) {
           console.error(`ERROR: ${line}`);
         } else {
-          console.error(`${item.taskId}: WARN gh missing; reconciliation skipped (no-op)`);
-          console.log(`${item.taskId}: reconciliation skipped (gh missing)`);
+          console.error(`${item.taskId}: WARN GitHub client unavailable; reconciliation skipped (no-op)`);
+          console.log(`${item.taskId}: reconciliation skipped (GitHub client unavailable)`);
         }
         break;
       default:

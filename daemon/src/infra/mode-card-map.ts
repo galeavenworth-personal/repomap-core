@@ -27,6 +27,14 @@ export const DEFAULT_MODE_CARD_MAP: ModeCardMap = {
 
 let modeCardMapCache: ModeCardMap | null = null;
 
+function isModeCardMap(value: unknown): value is ModeCardMap {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  return Object.values(value).every((entry) => typeof entry === "string");
+}
+
 export async function loadModeCardMap(
   fallback?: ModeCardMap,
 ): Promise<ModeCardMap> {
@@ -35,8 +43,8 @@ export async function loadModeCardMap(
   try {
     const raw = await readFile(MODE_CARD_MAP_URL, "utf8");
     const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === "object") {
-      modeCardMapCache = parsed as ModeCardMap;
+    if (isModeCardMap(parsed)) {
+      modeCardMapCache = parsed;
       return modeCardMapCache;
     }
   } catch {

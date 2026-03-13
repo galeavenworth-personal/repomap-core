@@ -161,7 +161,11 @@ export function checkPort(host: string, port: number, timeoutMs = 2000): Promise
 }
 
 export async function isPm2AppOnline(_pm2Bin: string, appName: string): Promise<boolean> {
-  return withPm2Connection(() => isAppOnline(appName));
+  try {
+    return await withPm2Connection(() => isAppOnline(appName));
+  } catch {
+    return false;
+  }
 }
 
 export async function preflight(

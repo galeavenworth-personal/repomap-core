@@ -481,20 +481,29 @@ export async function ensurePm2Ecosystem(
     }
   }
 
-  // Wait up to 15s for both to come online
-  for (let i = 0; i < 15; i++) {
-    const ocdOk = await isPm2AppOnline(config.pm2Bin, "oc-daemon");
-    const twOk = await isPm2AppOnline(config.pm2Bin, "temporal-worker");
-    if (ocdOk && twOk) break;
-    await sleep(1000);
-  }
+  const { ocDaemonOnline, temporalWorkerOnline } = await withPm2Connection(async () => {
+    // Wait up to 15s for both to come online using one PM2 connection.
+    for (let i = 0; i < 15; i++) {
+      const ocdOk = await isAppOnline("oc-daemon");
+      const twOk = await isAppOnline("temporal-worker");
+      if (ocdOk && twOk) {
+        return { ocDaemonOnline: true, temporalWorkerOnline: true };
+      }
+      await sleep(1000);
+    }
 
-  if (!(await isPm2AppOnline(config.pm2Bin, "oc-daemon"))) {
+    return {
+      ocDaemonOnline: await isAppOnline("oc-daemon"),
+      temporalWorkerOnline: await isAppOnline("temporal-worker"),
+    };
+  });
+
+  if (!ocDaemonOnline) {
     throw new Error(`oc-daemon failed to start. Check: ${config.pm2Bin} logs oc-daemon`);
   }
   log(`${timestamp()} ✅ oc-daemon online (pm2, auto-restart enabled).`);
 
-  if (!(await isPm2AppOnline(config.pm2Bin, "temporal-worker"))) {
+  if (!temporalWorkerOnline) {
     throw new Error(`Temporal worker failed to start. Check: ${config.pm2Bin} logs temporal-worker`);
   }
   log(`${timestamp()} ✅ Temporal worker online (pm2, auto-restart enabled).`);

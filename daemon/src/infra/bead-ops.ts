@@ -118,11 +118,15 @@ export function closeBeadSync(
   bdPath: string,
   cwd: string,
   beadId: string,
-): { exitCode: number | null } {
+): { exitCode: number | null; stdout: string; stderr: string } {
   const result = spawnSync(bdPath, ["close", beadId], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 30_000,
   });
-  return { exitCode: result.status };
+  return {
+    exitCode: result.status,
+    stdout: result.stdout?.toString() ?? "",
+    stderr: result.stderr?.toString() ?? "",
+  };
 }

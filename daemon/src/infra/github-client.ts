@@ -180,11 +180,35 @@ export class OctokitGitHubClient implements GitHubClient {
   }
 }
 
-export function createGitHubClient(token?: string): GitHubClient {
-  const resolvedToken = token ?? process.env.GITHUB_TOKEN;
-  if (!resolvedToken) {
-    throw new Error("Missing GitHub token: provide token argument or set GITHUB_TOKEN");
+function resolveGitHubToken(explicitToken?: string): string {
+  if (explicitToken) {
+    return explicitToken;
   }
+
+  if (process.env.GITHUB_TOKEN) {
+    return process.env.GITHUB_TOKEN;
+  }
+
+  try {
+    const ghToken = execFileSync("gh", ["auth", "token"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    }).trim();
+    if (ghToken) {
+      return ghToken;
+    }
+  } catch {
+    // Fall through to unified error below.
+  }
+
+  throw new Error(
+    "Missing GitHub credentials: provide a token argument, set GITHUB_TOKEN, or authenticate with 'gh auth login'",
+  );
+}
+
+export function createGitHubClient(token?: string): GitHubClient {
+  const resolvedToken = resolveGitHubToken(token);
 
   return new OctokitGitHubClient(
     new Octokit({
