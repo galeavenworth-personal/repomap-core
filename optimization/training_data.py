@@ -330,30 +330,31 @@ def _load_beads_enrichment(bead_ids: list[str]) -> dict[str, BeadsEnrichment]:
     finally:
         conn.close()
 
-    result: dict[str, BeadsEnrichment] = {}
-    for row in rows:
-        bid = str(row["bead_id"])
-        bead_type = row.get("bead_type")
-        formula_id = row.get("formula_id")
-        parent_bead_id = row.get("parent_bead_id")
-        parent_status = row.get("parent_status")
-        depth = row.get("hierarchy_depth")
+    return {str(row["bead_id"]): _row_to_bead_enrichment(row) for row in rows}
 
-        epic_outcome: str | None = None
-        if parent_status is not None and str(parent_status) != "":
-            epic_outcome = str(parent_status)
 
-        result[bid] = BeadsEnrichment(
-            bead_id=bid,
-            bead_type=str(bead_type) if bead_type else None,
-            hierarchy_depth=int(depth) if depth is not None else None,
-            parent_bead_id=str(parent_bead_id) if parent_bead_id else None,
-            formula_id=(
-                str(formula_id) if formula_id and str(formula_id) != "null" else None
-            ),
-            epic_outcome=epic_outcome,
-        )
-    return result
+def _row_to_bead_enrichment(row: dict[str, Any]) -> BeadsEnrichment:
+    """Convert a single beads query row into a BeadsEnrichment."""
+    bead_type = row.get("bead_type")
+    formula_id = row.get("formula_id")
+    parent_bead_id = row.get("parent_bead_id")
+    parent_status = row.get("parent_status")
+    depth = row.get("hierarchy_depth")
+
+    epic_outcome: str | None = None
+    if parent_status is not None and str(parent_status) != "":
+        epic_outcome = str(parent_status)
+
+    return BeadsEnrichment(
+        bead_id=str(row["bead_id"]),
+        bead_type=str(bead_type) if bead_type else None,
+        hierarchy_depth=int(depth) if depth is not None else None,
+        parent_bead_id=str(parent_bead_id) if parent_bead_id else None,
+        formula_id=(
+            str(formula_id) if formula_id and str(formula_id) != "null" else None
+        ),
+        epic_outcome=epic_outcome,
+    )
 
 
 def _query_child_modes_child_relationships(conn: Any) -> dict[str, str]:
@@ -532,21 +533,19 @@ def _load_forbidden_tool_violations(conn: Any, tables: set[str]) -> dict[str, st
     violations: dict[str, str] = {}
     for task_id, card_id in task_card.items():
         glob_pats = globs_by_card.get(card_id)
-        if not glob_pats:
-            continue
         tools = task_tools.get(task_id)
-        if not tools:
+        if not glob_pats or not tools:
             continue
-        violated: list[str] = []
-        for tool in sorted(tools):
-            for glob_pat in glob_pats:
-                if fnmatch.fnmatchcase(tool, glob_pat):
-                    violated.append(tool)
-                    break
+        violated = _find_violated_tools(sorted(tools), glob_pats)
         if violated:
             violations[task_id] = ",".join(violated)
 
     return violations
+
+
+def _find_violated_tools(tools: list[str], glob_pats: list[str]) -> list[str]:
+    """Return tools that match any of the forbidden glob patterns."""
+    return [t for t in tools if any(fnmatch.fnmatchcase(t, p) for p in glob_pats)]
 
 
 def _load_workflow_ids(conn: Any, tables: set[str]) -> dict[str, str]:

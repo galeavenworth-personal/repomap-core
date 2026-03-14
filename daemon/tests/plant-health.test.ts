@@ -21,7 +21,7 @@
  *   8. Default configuration
  */
 
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it } from "vitest";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,7 +32,6 @@ import {
   type PlantHealthConfig,
   type PlantHealthReport,
   type SectionStatus,
-  type CostZone,
 } from "../src/temporal/plant-health.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -52,7 +51,7 @@ function makeConfig(overrides?: Partial<PlantHealthConfig>): PlantHealthConfig {
     kiloHost: "127.0.0.1",
     kiloPort: 39998, // Intentionally unreachable port for unit tests
     cheapZoneThresholdUsd: 0.42,
-    balloonedThresholdUsd: 1.0,
+    balloonedThresholdUsd: 1,
     gateRunsPath: ".kilocode/gate_runs.jsonl",
     insideTemporal: false,
     ...overrides,
@@ -114,7 +113,7 @@ describe("PlantHealthReport — structure", () => {
       expect(section).toHaveProperty("data");
       expect(section).toHaveProperty("error");
       expect(["ok", "degraded", "unhealthy", "unknown"]).toContain(
-        section.status as SectionStatus,
+        section.status,
       );
     }
   });
@@ -299,7 +298,7 @@ describe("Cost zone classification", () => {
   });
 
   it("uses $1.00 as default ballooned threshold", () => {
-    expect(DEFAULT_PLANT_HEALTH_CONFIG.balloonedThresholdUsd).toBe(1.0);
+    expect(DEFAULT_PLANT_HEALTH_CONFIG.balloonedThresholdUsd).toBe(1);
   });
 });
 
@@ -381,8 +380,8 @@ describe("checkPlantHealth — Temporal activity wrapper", () => {
       doltDatabase: "test_db",
       kiloHost: "127.0.0.1",
       kiloPort: 39998,
-      cheapZoneThresholdUsd: 0.30,
-      balloonedThresholdUsd: 0.80,
+      cheapZoneThresholdUsd: 0.3,
+      balloonedThresholdUsd: 0.8,
     });
 
     expect(report).toBeDefined();
@@ -401,7 +400,7 @@ describe("DEFAULT_PLANT_HEALTH_CONFIG", () => {
     expect(DEFAULT_PLANT_HEALTH_CONFIG.kiloHost).toBe("127.0.0.1");
     expect(DEFAULT_PLANT_HEALTH_CONFIG.kiloPort).toBe(4096);
     expect(DEFAULT_PLANT_HEALTH_CONFIG.cheapZoneThresholdUsd).toBe(0.42);
-    expect(DEFAULT_PLANT_HEALTH_CONFIG.balloonedThresholdUsd).toBe(1.0);
+    expect(DEFAULT_PLANT_HEALTH_CONFIG.balloonedThresholdUsd).toBe(1);
     expect(DEFAULT_PLANT_HEALTH_CONFIG.gateRunsPath).toBe(".kilocode/gate_runs.jsonl");
     expect(DEFAULT_PLANT_HEALTH_CONFIG.insideTemporal).toBe(false);
   });

@@ -70,6 +70,17 @@ export interface CardExitPromptResolution {
   specificity: "formula+depth" | "formula" | "depth" | "generic" | "static" | "none";
 }
 
+function resolveSpecificity(
+  promptId: string,
+): CardExitPromptResolution["specificity"] {
+  const hasFormula = promptId.includes(":formula-");
+  const hasDepth = promptId.includes(":depth-");
+  if (hasFormula && hasDepth) return "formula+depth";
+  if (hasFormula) return "formula";
+  if (hasDepth) return "depth";
+  return "generic";
+}
+
 export async function resolveCardExitPrompt(
   mode: string | undefined,
   cardIdOverride?: string,
@@ -102,15 +113,7 @@ export async function resolveCardExitPrompt(
     try {
       const match = await readCardExitPrompt(candidates);
       if (match) {
-        const hasFormulaSpecificity = match.promptId.includes(":formula-");
-        const hasDepthSpecificity = match.promptId.includes(":depth-");
-        const specificity = hasFormulaSpecificity && hasDepthSpecificity
-          ? "formula+depth"
-          : hasFormulaSpecificity
-            ? "formula"
-            : hasDepthSpecificity
-              ? "depth"
-              : "generic";
+        const specificity = resolveSpecificity(match.promptId);
         console.log(
           `[prompt-resolution] Resolved prompt: ${match.promptId} (specificity: ${specificity})`,
         );

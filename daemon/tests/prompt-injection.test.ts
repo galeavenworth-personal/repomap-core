@@ -127,6 +127,19 @@ describe("cardIdOverride", () => {
   });
 });
 
+async function setupCascadeMocks() {
+  const fs = await import("node:fs/promises");
+  const promptReader = await import("../src/optimization/prompt-reader.js");
+  vi.mocked(promptReader.readCardExitPrompt).mockReset();
+  vi.mocked(fs.readFile).mockImplementation(async (pathLike) => {
+    const path = String(pathLike);
+    return path.includes("mode-card-map.json")
+      ? modeMapJson
+      : modesWithStaticSection;
+  });
+  return { fs, promptReader };
+}
+
 describe("resolution cascade", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -134,16 +147,7 @@ describe("resolution cascade", () => {
   });
 
   it("resolves formula+depth when both params provided and most-specific match exists", async () => {
-    const fs = await import("node:fs/promises");
-    const promptReader = await import("../src/optimization/prompt-reader.js");
-
-    vi.mocked(promptReader.readCardExitPrompt).mockReset();
-    vi.mocked(fs.readFile).mockImplementation(async (pathLike) => {
-      const path = String(pathLike);
-      return path.includes("mode-card-map.json")
-        ? modeMapJson
-        : modesWithStaticSection;
-    });
+    const { promptReader } = await setupCascadeMocks();
     vi.mocked(promptReader.readCardExitPrompt).mockResolvedValue({
       compiledPrompt: "formula+depth prompt",
       promptId: "card-exit:execute-subtask:formula-optimize:depth-2",
@@ -169,16 +173,7 @@ describe("resolution cascade", () => {
   });
 
   it("resolves formula-only when only formulaId provided", async () => {
-    const fs = await import("node:fs/promises");
-    const promptReader = await import("../src/optimization/prompt-reader.js");
-
-    vi.mocked(promptReader.readCardExitPrompt).mockReset();
-    vi.mocked(fs.readFile).mockImplementation(async (pathLike) => {
-      const path = String(pathLike);
-      return path.includes("mode-card-map.json")
-        ? modeMapJson
-        : modesWithStaticSection;
-    });
+    const { promptReader } = await setupCascadeMocks();
     vi.mocked(promptReader.readCardExitPrompt).mockResolvedValue({
       compiledPrompt: "formula prompt",
       promptId: "card-exit:execute-subtask:formula-optimize",
@@ -201,16 +196,7 @@ describe("resolution cascade", () => {
   });
 
   it("resolves depth-only when only depth provided", async () => {
-    const fs = await import("node:fs/promises");
-    const promptReader = await import("../src/optimization/prompt-reader.js");
-
-    vi.mocked(promptReader.readCardExitPrompt).mockReset();
-    vi.mocked(fs.readFile).mockImplementation(async (pathLike) => {
-      const path = String(pathLike);
-      return path.includes("mode-card-map.json")
-        ? modeMapJson
-        : modesWithStaticSection;
-    });
+    const { promptReader } = await setupCascadeMocks();
     vi.mocked(promptReader.readCardExitPrompt).mockResolvedValue({
       compiledPrompt: "depth prompt",
       promptId: "card-exit:execute-subtask:depth-3",
@@ -228,16 +214,7 @@ describe("resolution cascade", () => {
   });
 
   it("falls through cascade to static when no compiled prompts match", async () => {
-    const fs = await import("node:fs/promises");
-    const promptReader = await import("../src/optimization/prompt-reader.js");
-
-    vi.mocked(promptReader.readCardExitPrompt).mockReset();
-    vi.mocked(fs.readFile).mockImplementation(async (pathLike) => {
-      const path = String(pathLike);
-      return path.includes("mode-card-map.json")
-        ? modeMapJson
-        : modesWithStaticSection;
-    });
+    const { promptReader } = await setupCascadeMocks();
     vi.mocked(promptReader.readCardExitPrompt).mockResolvedValue(null);
 
     const mod = await import("../src/optimization/prompt-injection.js");
