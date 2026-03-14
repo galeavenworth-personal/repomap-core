@@ -410,8 +410,9 @@ cd ~/Projects/repomap-core  # or Employee-1
 .kilocode/tools/bd sync
 ```
 
-Beads Dolt data lives at `~/.dolt-data/beads/` (database: `beads_repomap-core`).
-This is separate from the factory Dolt at `~/.kilocode/dolt/factory/`.
+All Dolt data lives under a single data directory at `~/.dolt-data/beads/`.
+This contains both the `beads_repomap-core` database (owned by bd CLI) and the
+`factory` database (sessions, punches, compiled prompts, etc.).
 
 ---
 
@@ -492,8 +493,7 @@ cd ~/Projects-Employee-1/repomap-core
 |---|---|
 | `~/.local/share/kilo/auth.json` | OAuth credentials for kilo serve |
 | `~/.config/kilo/opencode.json` | Model routing config |
-| `~/.kilocode/dolt/factory/` | Dolt data (factory: sessions, punches, compiled prompts) |
-| `~/.dolt-data/beads/` | Dolt data (beads issue tracking) |
+| `~/.dolt-data/beads/` | Dolt data directory (contains both `factory` and `beads_repomap-core` databases) |
 | `~/.temporalio/bin/temporal` | Temporal CLI |
 | `/tmp/temporal-dev.db` | Temporal dev server SQLite storage |
 | `.kilocode/tools/ecosystem.config.cjs` | pm2 app definitions for oc-daemon + temporal-worker |
