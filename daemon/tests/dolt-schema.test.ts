@@ -292,16 +292,14 @@ describe("DoltSchema", () => {
       const conn = await getMockConnection();
       const mockQuery = vi.mocked(conn.query);
 
-      // Reset for full sequence
+      // Reset for full sequence — migration now executes statement-by-statement
       mockQuery.mockReset();
-      // CREATE DATABASE
-      mockQuery.mockResolvedValueOnce([[]]);
-      // SQL migration content
-      mockQuery.mockResolvedValueOnce([[]]);
-      // DOLT_ADD
-      mockQuery.mockResolvedValueOnce([[]]);
-      // DOLT_COMMIT
-      mockQuery.mockResolvedValueOnce([[{ hash: "mig123" }]]);
+      mockQuery.mockImplementation(((sql: string) => {
+        if (typeof sql === "string" && sql.includes("DOLT_COMMIT")) {
+          return Promise.resolve([[{ hash: "mig123" }]]);
+        }
+        return Promise.resolve([[]]);
+      }) as typeof conn.query);
 
       const log = vi.fn();
       const result = await applyMigration(
@@ -323,16 +321,14 @@ describe("DoltSchema", () => {
       const conn = await getMockConnection();
       const mockQuery = vi.mocked(conn.query);
 
-      // Reset for full sequence
+      // Reset for full sequence — migration now executes statement-by-statement
       mockQuery.mockReset();
-      // CREATE DATABASE
-      mockQuery.mockResolvedValueOnce([[]]);
-      // SQL migration content
-      mockQuery.mockResolvedValueOnce([[]]);
-      // DOLT_ADD
-      mockQuery.mockResolvedValueOnce([[]]);
-      // DOLT_COMMIT — nothing to commit
-      mockQuery.mockRejectedValueOnce(new Error("nothing to commit"));
+      mockQuery.mockImplementation(((sql: string) => {
+        if (typeof sql === "string" && sql.includes("DOLT_COMMIT")) {
+          return Promise.reject(new Error("nothing to commit"));
+        }
+        return Promise.resolve([[]]);
+      }) as typeof conn.query);
 
       const log = vi.fn();
       const result = await applyMigration(

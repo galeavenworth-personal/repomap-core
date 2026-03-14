@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import fnmatch
+import logging
+import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -8,6 +10,8 @@ from enum import Enum
 from typing import Any, Literal, cast
 
 import dspy  # type: ignore[import-untyped]
+import pymysql
+from pymysql.cursors import DictCursor
 
 from optimization import dolt_bus
 
@@ -66,6 +70,12 @@ class TaskProfile:
     child_modes: str | None = None
     parent_forbidden_tool_violations: str | None = None
     workflow_id: str | None = None
+    bead_id: str | None = None
+    bead_type: str | None = None
+    hierarchy_depth: int | None = None
+    parent_bead_id: str | None = None
+    formula_id: str | None = None
+    epic_outcome: str | None = None
 
     @property
     def completion_ratio(self) -> float:
@@ -164,6 +174,18 @@ class _CheckpointEnrichment:
     missing_punches_by_task: dict[str, str]
 
 
+@dataclass(frozen=True)
+class BeadsEnrichment:
+    """Per-bead metadata from the beads_repomap-core database."""
+
+    bead_id: str
+    bead_type: str | None = None
+    hierarchy_depth: int | None = None
+    parent_bead_id: str | None = None
+    formula_id: str | None = None
+    epic_outcome: str | None = None
+
+
 def _load_checkpoint_enrichment(conn: Any) -> _CheckpointEnrichment:
     """Load latest checkpoint data per task from the checkpoints table."""
     enrichment = _CheckpointEnrichment(
@@ -230,6 +252,109 @@ def _load_task_enrichment(
                 card_id_by_task[task_id] = str(card_id)
 
     return mode_by_task, card_id_by_task
+
+
+def _load_bead_ids_from_tasks(conn: Any) -> dict[str, str]:
+    """Load task_id -> bead_id mapping from the factory tasks table."""
+    bead_id_by_task: dict[str, str] = {}
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT task_id, bead_id FROM tasks WHERE bead_id IS NOT NULL AND bead_id != ''"
+        )
+        rows = cast(list[dict[str, Any]], cursor.fetchall())
+    for row in rows:
+        bead_id_by_task[str(row["task_id"])] = str(row["bead_id"])
+    return bead_id_by_task
+
+
+_BEADS_ENRICHMENT_SQL = """
+    SELECT
+        i.id AS bead_id,
+        i.issue_type AS bead_type,
+        i.status AS bead_status,
+        JSON_UNQUOTE(JSON_EXTRACT(i.metadata, '$.formula_id')) AS formula_id,
+        d1.depends_on_id AS parent_bead_id,
+        p.status AS parent_status,
+        CASE
+            WHEN d1.depends_on_id IS NULL THEN 1
+            WHEN d2.depends_on_id IS NULL THEN 2
+            ELSE 3
+        END AS hierarchy_depth
+    FROM issues i
+    LEFT JOIN dependencies d1
+        ON d1.issue_id = i.id AND d1.type = 'parent-child'
+    LEFT JOIN issues p
+        ON p.id = d1.depends_on_id
+    LEFT JOIN dependencies d2
+        ON d2.issue_id = d1.depends_on_id AND d2.type = 'parent-child'
+    WHERE i.id IN ({placeholders})
+"""
+
+_logger = logging.getLogger(__name__)
+
+
+def _load_beads_enrichment(bead_ids: list[str]) -> dict[str, BeadsEnrichment]:
+    """Batch-load bead metadata from beads_repomap-core (read-only).
+
+    Opens a dedicated connection to the beads database, runs a single
+    query for all requested bead_ids, and returns enrichment keyed by
+    bead_id. Gracefully returns an empty dict on connection failure.
+    """
+    if not bead_ids:
+        return {}
+
+    try:
+        conn = pymysql.connect(
+            host=os.getenv("BEADS_DOLT_HOST", os.getenv("DOLT_HOST", "127.0.0.1")),
+            port=int(os.getenv("BEADS_DOLT_PORT", os.getenv("DOLT_PORT", "3307"))),
+            user=os.getenv("BEADS_DOLT_USER", "root"),
+            database=os.getenv("BEADS_DOLT_DATABASE", "beads_repomap-core"),
+            cursorclass=DictCursor,
+            autocommit=False,
+            connect_timeout=5,
+            read_timeout=10,
+        )
+    except Exception:
+        _logger.warning("Failed to connect to beads_repomap-core; skipping enrichment")
+        return {}
+
+    try:
+        placeholders = ", ".join(["%s"] * len(bead_ids))
+        sql = _BEADS_ENRICHMENT_SQL.format(placeholders=placeholders)
+        with conn.cursor() as cursor:
+            cursor.execute(sql, bead_ids)
+            rows = cast(list[dict[str, Any]], cursor.fetchall())
+    except Exception:
+        _logger.warning("Beads enrichment query failed; skipping", exc_info=True)
+        return {}
+    finally:
+        conn.close()
+
+    return {str(row["bead_id"]): _row_to_bead_enrichment(row) for row in rows}
+
+
+def _row_to_bead_enrichment(row: dict[str, Any]) -> BeadsEnrichment:
+    """Convert a single beads query row into a BeadsEnrichment."""
+    bead_type = row.get("bead_type")
+    formula_id = row.get("formula_id")
+    parent_bead_id = row.get("parent_bead_id")
+    parent_status = row.get("parent_status")
+    depth = row.get("hierarchy_depth")
+
+    epic_outcome: str | None = None
+    if parent_status is not None and str(parent_status) != "":
+        epic_outcome = str(parent_status)
+
+    return BeadsEnrichment(
+        bead_id=str(row["bead_id"]),
+        bead_type=str(bead_type) if bead_type else None,
+        hierarchy_depth=int(depth) if depth is not None else None,
+        parent_bead_id=str(parent_bead_id) if parent_bead_id else None,
+        formula_id=(
+            str(formula_id) if formula_id and str(formula_id) != "null" else None
+        ),
+        epic_outcome=epic_outcome,
+    )
 
 
 def _query_child_modes_child_relationships(conn: Any) -> dict[str, str]:
@@ -408,21 +533,19 @@ def _load_forbidden_tool_violations(conn: Any, tables: set[str]) -> dict[str, st
     violations: dict[str, str] = {}
     for task_id, card_id in task_card.items():
         glob_pats = globs_by_card.get(card_id)
-        if not glob_pats:
-            continue
         tools = task_tools.get(task_id)
-        if not tools:
+        if not glob_pats or not tools:
             continue
-        violated: list[str] = []
-        for tool in sorted(tools):
-            for glob_pat in glob_pats:
-                if fnmatch.fnmatchcase(tool, glob_pat):
-                    violated.append(tool)
-                    break
+        violated = _find_violated_tools(sorted(tools), glob_pats)
         if violated:
             violations[task_id] = ",".join(violated)
 
     return violations
+
+
+def _find_violated_tools(tools: list[str], glob_pats: list[str]) -> list[str]:
+    """Return tools that match any of the forbidden glob patterns."""
+    return [t for t in tools if any(fnmatch.fnmatchcase(t, p) for p in glob_pats)]
 
 
 def _load_workflow_ids(conn: Any, tables: set[str]) -> dict[str, str]:
@@ -462,9 +585,13 @@ def _row_to_task_profile(
     child_modes_by_task: dict[str, str] | None = None,
     forbidden_violations_by_task: dict[str, str] | None = None,
     workflow_id_by_task: dict[str, str] | None = None,
+    beads_by_task: dict[str, BeadsEnrichment] | None = None,
+    bead_id_by_task: dict[str, str] | None = None,
 ) -> TaskProfile:
     """Convert a single punch-aggregate row into a TaskProfile."""
     task_id = str(row["task_id"])
+    bead = (beads_by_task or {}).get(task_id)
+    factory_bead_id = (bead_id_by_task or {}).get(task_id)
     return TaskProfile(
         task_id=task_id,
         total_punches=_to_int(row.get("total_punches")),
@@ -491,6 +618,12 @@ def _row_to_task_profile(
             task_id
         ),
         workflow_id=(workflow_id_by_task or {}).get(task_id),
+        bead_id=bead.bead_id if bead else factory_bead_id,
+        bead_type=bead.bead_type if bead else None,
+        hierarchy_depth=bead.hierarchy_depth if bead else None,
+        parent_bead_id=bead.parent_bead_id if bead else None,
+        formula_id=bead.formula_id if bead else None,
+        epic_outcome=bead.epic_outcome if bead else None,
     )
 
 
@@ -519,14 +652,24 @@ def extract_task_profiles(limit: int | None = None) -> list[TaskProfile]:
             enrichment = _load_checkpoint_enrichment(conn)
 
         mode_by_task: dict[str, str] = {}
+        bead_id_by_task: dict[str, str] = {}
         if "tasks" in tables:
             mode_by_task, enrichment.card_id_by_task = _load_task_enrichment(
                 conn, enrichment.card_id_by_task
             )
+            bead_id_by_task = _load_bead_ids_from_tasks(conn)
 
         child_modes_by_task = _load_child_modes_enrichment(conn, tables)
         forbidden_violations_by_task = _load_forbidden_tool_violations(conn, tables)
         workflow_id_by_task = _load_workflow_ids(conn, tables)
+
+    unique_bead_ids = list(set(bead_id_by_task.values()))
+    beads_enrichment = _load_beads_enrichment(unique_bead_ids)
+
+    beads_by_task: dict[str, BeadsEnrichment] = {}
+    for task_id, bead_id in bead_id_by_task.items():
+        if bead_id in beads_enrichment:
+            beads_by_task[task_id] = beads_enrichment[bead_id]
 
     return [
         _row_to_task_profile(
@@ -539,6 +682,8 @@ def extract_task_profiles(limit: int | None = None) -> list[TaskProfile]:
             child_modes_by_task,
             forbidden_violations_by_task,
             workflow_id_by_task,
+            beads_by_task,
+            bead_id_by_task,
         )
         for row in rows
     ]
@@ -736,6 +881,11 @@ def build_dspy_example(
         child_modes=profile.child_modes,
         parent_forbidden_tool_violations=profile.parent_forbidden_tool_violations,
         workflow_id=profile.workflow_id,
+        bead_type=profile.bead_type or "unknown",
+        hierarchy_depth=profile.hierarchy_depth or 0,
+        has_parent=profile.parent_bead_id is not None,
+        formula_id=profile.formula_id or "none",
+        epic_outcome=profile.epic_outcome or "unknown",
         outcome_label=labeled.outcome.value,
         diagnosis_category=labeled.diagnosis_category,
         is_kill_recovery=kill_recovery_lookup.get(profile.task_id, False),
@@ -756,6 +906,11 @@ def build_dspy_example(
         "child_modes",
         "parent_forbidden_tool_violations",
         "workflow_id",
+        "bead_type",
+        "hierarchy_depth",
+        "has_parent",
+        "formula_id",
+        "epic_outcome",
     )
 
 

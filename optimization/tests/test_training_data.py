@@ -30,6 +30,12 @@ def _profile(**overrides: object) -> td.TaskProfile:
         child_modes=None,
         parent_forbidden_tool_violations=None,
         workflow_id=None,
+        bead_id=None,
+        bead_type=None,
+        hierarchy_depth=None,
+        parent_bead_id=None,
+        formula_id=None,
+        epic_outcome=None,
     )
     return td.TaskProfile(**{**base.__dict__, **overrides})
 
@@ -135,6 +141,12 @@ def test_task_profile_new_fields_default_none() -> None:
     assert profile.child_modes is None
     assert profile.parent_forbidden_tool_violations is None
     assert profile.workflow_id is None
+    assert profile.bead_id is None
+    assert profile.bead_type is None
+    assert profile.hierarchy_depth is None
+    assert profile.parent_bead_id is None
+    assert profile.formula_id is None
+    assert profile.epic_outcome is None
 
 
 def test_task_profile_new_fields_set() -> None:
@@ -195,6 +207,129 @@ def test_label_profiles_with_new_fields() -> None:
     assert labeled[0].profile.child_modes == "code"
     assert labeled[0].profile.parent_forbidden_tool_violations == "bash"
     assert labeled[0].profile.workflow_id == "pr-review-orchestrate"
+
+
+# ── Bead enrichment field tests ──────────────────────────────────
+
+
+def test_task_profile_bead_fields_set() -> None:
+    """Bead enrichment fields accept values."""
+    profile = _profile(
+        bead_id="repomap-core-abc.1",
+        bead_type="task",
+        hierarchy_depth=2,
+        parent_bead_id="repomap-core-abc",
+        formula_id="formula-deploy-v1",
+        epic_outcome="closed",
+    )
+    assert profile.bead_id == "repomap-core-abc.1"
+    assert profile.bead_type == "task"
+    assert profile.hierarchy_depth == 2
+    assert profile.parent_bead_id == "repomap-core-abc"
+    assert profile.formula_id == "formula-deploy-v1"
+    assert profile.epic_outcome == "closed"
+
+
+def test_build_dspy_example_bead_fields_enriched() -> None:
+    labeled = td.LabeledTaskProfile(
+        profile=_profile(
+            task_id="t-bead-enriched",
+            bead_type="task",
+            hierarchy_depth=2,
+            parent_bead_id="repomap-core-abc",
+            formula_id="formula-deploy-v1",
+            epic_outcome="closed",
+        ),
+        outcome=td.SessionOutcome.SUCCESS,
+        diagnosis_category="scope_creep",
+    )
+    example = td.build_dspy_example(labeled, {})
+    assert example.bead_type == "task"
+    assert example.hierarchy_depth == 2
+    assert example.has_parent is True
+    assert example.formula_id == "formula-deploy-v1"
+    assert example.epic_outcome == "closed"
+
+
+def test_build_dspy_example_bead_fields_in_inputs() -> None:
+    labeled = td.LabeledTaskProfile(
+        profile=_profile(task_id="t-bead-inputs"),
+        outcome=td.SessionOutcome.PARTIAL,
+        diagnosis_category="model_confusion",
+    )
+    example = td.build_dspy_example(labeled, {})
+    input_keys = example.inputs().keys()
+    assert "bead_type" in input_keys
+    assert "hierarchy_depth" in input_keys
+    assert "has_parent" in input_keys
+    assert "formula_id" in input_keys
+    assert "epic_outcome" in input_keys
+
+
+def test_build_dspy_example_bead_defaults_when_none() -> None:
+    labeled = td.LabeledTaskProfile(
+        profile=_profile(task_id="t-bead-defaults"),
+        outcome=td.SessionOutcome.PARTIAL,
+        diagnosis_category="model_confusion",
+    )
+    example = td.build_dspy_example(labeled, {})
+    assert example.bead_type == "unknown"
+    assert example.hierarchy_depth == 0
+    assert example.has_parent is False
+    assert example.formula_id == "none"
+    assert example.epic_outcome == "unknown"
+
+
+def test_beads_enrichment_dataclass() -> None:
+    """BeadsEnrichment dataclass can be constructed with all fields."""
+    enrichment = td.BeadsEnrichment(
+        bead_id="repomap-core-xyz.1",
+        bead_type="subtask",
+        hierarchy_depth=3,
+        parent_bead_id="repomap-core-xyz",
+        formula_id="formula-review",
+        epic_outcome="open",
+    )
+    assert enrichment.bead_id == "repomap-core-xyz.1"
+    assert enrichment.bead_type == "subtask"
+    assert enrichment.hierarchy_depth == 3
+    assert enrichment.parent_bead_id == "repomap-core-xyz"
+    assert enrichment.formula_id == "formula-review"
+    assert enrichment.epic_outcome == "open"
+
+
+def test_beads_enrichment_defaults() -> None:
+    """BeadsEnrichment optional fields default to None."""
+    enrichment = td.BeadsEnrichment(bead_id="repomap-core-min.1")
+    assert enrichment.bead_id == "repomap-core-min.1"
+    assert enrichment.bead_type is None
+    assert enrichment.hierarchy_depth is None
+    assert enrichment.parent_bead_id is None
+    assert enrichment.formula_id is None
+    assert enrichment.epic_outcome is None
+
+
+def test_load_beads_enrichment_empty_input() -> None:
+    """_load_beads_enrichment returns empty dict for empty input."""
+    result = td._load_beads_enrichment([])
+    assert result == {}
+
+
+def test_label_profiles_with_bead_fields() -> None:
+    """Labeling works correctly when bead enrichment fields are populated."""
+    profile = _profile(
+        bead_id="repomap-core-test.1",
+        bead_type="task",
+        hierarchy_depth=2,
+        parent_bead_id="repomap-core-test",
+        card_status="pass",
+    )
+    labeled = td.label_profiles([profile])
+    assert len(labeled) == 1
+    assert labeled[0].outcome == td.SessionOutcome.SUCCESS
+    assert labeled[0].profile.bead_id == "repomap-core-test.1"
+    assert labeled[0].profile.bead_type == "task"
+    assert labeled[0].profile.hierarchy_depth == 2
 
 
 # ── _sql_like_to_glob tests ─────────────────────────────────────

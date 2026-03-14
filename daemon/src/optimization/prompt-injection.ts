@@ -67,24 +67,57 @@ export interface CardExitPromptResolution {
   cardId: string | null;
   prompt: string | null;
   source: "compiled" | "static" | "none";
+  specificity: "formula+depth" | "formula" | "depth" | "generic" | "static" | "none";
+}
+
+function resolveSpecificity(
+  promptId: string,
+): CardExitPromptResolution["specificity"] {
+  const hasFormula = promptId.includes(":formula-");
+  const hasDepth = promptId.includes(":depth-");
+  if (hasFormula && hasDepth) return "formula+depth";
+  if (hasFormula) return "formula";
+  if (hasDepth) return "depth";
+  return "generic";
 }
 
 export async function resolveCardExitPrompt(
   mode: string | undefined,
   cardIdOverride?: string,
+  depth?: number,
+  formulaId?: string,
 ): Promise<CardExitPromptResolution> {
   if (!mode) {
-    return { cardId: null, prompt: null, source: "none" };
+    return { cardId: null, prompt: null, source: "none", specificity: "none" };
   }
 
   const modeMap = await loadModeCardMap();
   const cardId = cardIdOverride || (modeMap[mode] ?? null);
 
   if (cardId) {
+    const candidates: string[] = [];
+    const hasFormula = Boolean(formulaId && formulaId.length > 0);
+    const hasDepth = depth !== undefined;
+
+    if (hasFormula && hasDepth) {
+      candidates.push(`card-exit:${cardId}:formula-${formulaId}:depth-${depth}`);
+    }
+    if (hasFormula) {
+      candidates.push(`card-exit:${cardId}:formula-${formulaId}`);
+    }
+    if (hasDepth) {
+      candidates.push(`card-exit:${cardId}:depth-${depth}`);
+    }
+    candidates.push(`card-exit:${cardId}`);
+
     try {
-      const compiledPrompt = await readCardExitPrompt(cardId);
-      if (compiledPrompt) {
-        return { cardId, prompt: compiledPrompt, source: "compiled" };
+      const match = await readCardExitPrompt(candidates);
+      if (match) {
+        const specificity = resolveSpecificity(match.promptId);
+        console.log(
+          `[prompt-resolution] Resolved prompt: ${match.promptId} (specificity: ${specificity})`,
+        );
+        return { cardId, prompt: match.compiledPrompt, source: "compiled", specificity };
       }
     } catch {
       // Ignore and continue to static fallback.
@@ -94,10 +127,10 @@ export async function resolveCardExitPrompt(
   const modesContent = await loadModesFile();
   const staticPrompt = extractStaticCardExitSection(mode, modesContent);
   if (staticPrompt) {
-    return { cardId, prompt: staticPrompt, source: "static" };
+    return { cardId, prompt: staticPrompt, source: "static", specificity: "static" };
   }
 
-  return { cardId, prompt: null, source: "none" };
+  return { cardId, prompt: null, source: "none", specificity: "none" };
 }
 
 export function injectCardExitPrompt(basePrompt: string, exitPrompt: string | null): string {

@@ -14,6 +14,11 @@ export interface CompiledPromptRow {
   dspy_version: string;
 }
 
+export interface CardExitPromptMatch {
+  compiledPrompt: string;
+  promptId: string;
+}
+
 function createConnection() {
   return mysql.createConnection({
     host: DOLT_HOST,
@@ -55,12 +60,41 @@ export async function listCompiledPrompts(): Promise<CompiledPromptRow[]> {
   }
 }
 
-export async function readCardExitPrompt(cardId: string): Promise<string | null> {
-  const promptId = `card-exit:${cardId}`;
-  const row = await readCompiledPrompt(promptId);
-  if (!row) {
+export async function readCardExitPrompt(
+  candidatePromptIds: string[],
+): Promise<CardExitPromptMatch | null> {
+  if (candidatePromptIds.length === 0) {
     return null;
   }
-  const prompt = String(row.compiled_prompt ?? "").trim();
-  return prompt.length > 0 ? prompt : null;
+
+  const placeholders = candidatePromptIds.map(() => "?").join(", ");
+  const connection = await createConnection();
+  try {
+    const [rows] = await connection.execute(
+      `SELECT prompt_id, compiled_prompt
+       FROM compiled_prompts
+       WHERE prompt_id IN (${placeholders})
+       ORDER BY FIELD(prompt_id, ${placeholders})
+       LIMIT 1`,
+      [...candidatePromptIds, ...candidatePromptIds],
+    );
+
+    const typedRows = rows as Array<{ prompt_id: string; compiled_prompt: string }>;
+    if (typedRows.length === 0) {
+      return null;
+    }
+
+    const row = typedRows[0];
+    const prompt = String(row.compiled_prompt ?? "").trim();
+    if (prompt.length === 0) {
+      return null;
+    }
+
+    return {
+      compiledPrompt: prompt,
+      promptId: String(row.prompt_id),
+    };
+  } finally {
+    await connection.end();
+  }
 }

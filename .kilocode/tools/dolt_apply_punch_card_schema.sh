@@ -28,4 +28,8 @@ if [[ ! -x "$TSX" ]]; then
   exit 1
 fi
 
+# Step 1: Ensure base schema (8 tables with all columns, 1 view, seed data)
+"$TSX" "$REPO_ROOT/daemon/src/infra/dolt-schema.cli.ts" init
+
+# Step 2: Apply incremental migration (punch card upserts, new cards, etc.)
 exec "$TSX" "$REPO_ROOT/daemon/src/infra/dolt-schema.cli.ts" migrate "$SCHEMA_FILE" "$COMMIT_MSG"

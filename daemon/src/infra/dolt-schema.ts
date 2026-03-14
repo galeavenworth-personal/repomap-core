@@ -507,11 +507,29 @@ export async function applyMigration(
     // Ensure database exists
     await ensureDatabase(config);
 
-    // Connect to the database and apply migration.
+    // Connect to the database and apply migration statement-by-statement.
+    // Dolt's mysql wire protocol chokes on large multi-statement batches
+    // (e.g. CTE views, ON DUPLICATE KEY UPDATE blocks) with "unable to get
+    // sub statement".  Splitting on semicolons and executing individually
+    // avoids this parser limitation.
     const conn = await createDatabaseConnection(config);
     try {
-      await conn.query(sql);
-      log("Applied migration SQL");
+      const statements = sql
+        .split(/;\s*$/m)
+        .map((s) =>
+          s
+            .split("\n")
+            .filter((line) => !line.trimStart().startsWith("--"))
+            .join("\n")
+            .trim(),
+        )
+        .filter((s) => s.length > 0);
+      let applied = 0;
+      for (const stmt of statements) {
+        await conn.query(stmt);
+        applied++;
+      }
+      log(`Applied migration SQL (${applied} statements)`);
 
       // Dolt commit
       const commitHash = await idempotentDoltCommit(conn, commitMessage);
