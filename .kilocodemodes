@@ -163,6 +163,22 @@ customModes:
 
       Remember: Your goal is to make code that developers will thank you for code that is a joy to read, understand, and modify. Every refactoring should make the codebase demonstrably better.
 
+      ## Interface Discipline (MANDATORY)
+
+      Before calling ANY external API (Node.js stdlib, npm packages, system CLIs,
+      Python stdlib, pip packages), you MUST look up the correct interface via
+      Context7 documentation:
+        1. Identify which external API you are about to call
+        2. Use `resolve-library-id` → `query-docs` for the specific function/option
+        3. Only then write the code
+
+      This applies to: spawn/exec options, package APIs, CLI flag formats,
+      callback signatures, return types, error handling patterns.
+      Guessing leads to subtle bugs (SIGPIPE, handle leaks, wrong options).
+
+      If the prepare phase provided `api_references` in the subtask, use those
+      library IDs directly — they are pre-verified by the planning layer.
+
       ## Punch Card Exit Conditions
 
       - Punch card: `refactor`
@@ -173,6 +189,7 @@ customModes:
         - `gate_pass:pytest` — Pytest test suite must pass
         - `mcp_call:process_thought` — Sequential thinking required
         - `mcp_call:codebase___retrieval` — Codebase retrieval required
+        - `mcp_call:%context7%` — Verify external API interfaces via documentation
       - Forbidden punches: none defined for this card.
       - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "refactor"`.
       - If the check fails, continue work, mint missing punches, and re-run until PASS.
@@ -211,6 +228,22 @@ customModes:
       - integration → business, foundation
       - interface → all layers
 
+      ## Interface Discipline (MANDATORY)
+
+      Before calling ANY external API (Node.js stdlib, npm packages, system CLIs,
+      Python stdlib, pip packages), you MUST look up the correct interface via
+      Context7 documentation:
+        1. Identify which external API you are about to call
+        2. Use `resolve-library-id` → `query-docs` for the specific function/option
+        3. Only then write the code
+
+      This applies to: spawn/exec options, package APIs, CLI flag formats,
+      callback signatures, return types, error handling patterns.
+      Guessing leads to subtle bugs (SIGPIPE, handle leaks, wrong options).
+
+      If the prepare phase provided `api_references` in the subtask, use those
+      library IDs directly — they are pre-verified by the planning layer.
+
       ## Quality Gates
 
       Before completing any code changes:
@@ -224,6 +257,7 @@ customModes:
       - Punch card: `execute-subtask`
       - Required punches:
         - `mcp_call:%codebase___retrieval%` — Gather context before editing
+        - `mcp_call:%context7%` — Verify external API interfaces via documentation
         - `gate_pass:ruff-format` — Ruff format check must pass
         - `gate_pass:ruff-check` — Ruff lint check must pass
         - `gate_pass:mypy` — Mypy type check must pass
@@ -446,6 +480,12 @@ customModes:
         - files: which files to touch
         - acceptance: how to verify it worked
         - dependencies: which prior subtasks must complete first (if any)
+        - api_references: (optional) list of Context7 library IDs for external APIs
+          this subtask will wire together. The prepare phase SHOULD use
+          `resolve-library-id` → `query-docs` to verify assumptions about
+          external APIs and include the verified library IDs here so the
+          code child can skip the lookup and go straight to `query-docs`.
+          Example: ["/nodejs/node", "/unitech/pm2", "/websites/pm2_keymetrics_io"]
       - execution_mode: "code" or "code-simplifier"
       - risks: anything the orchestrator should watch for
 

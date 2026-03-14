@@ -267,6 +267,7 @@ INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, 
     ('refactor', 'refactor', 'gate_pass',        'pytest',               TRUE,  'Pytest test suite must pass', FALSE),
     ('refactor', 'refactor', 'mcp_call',         'process_thought',      TRUE,  'Sequential thinking required for refactoring', FALSE),
     ('refactor', 'refactor', 'mcp_call',         'codebase___retrieval', TRUE,  'Codebase exploration required', FALSE),
+    ('refactor', 'refactor', 'mcp_call',         '%context7%',           TRUE,  'Must verify external API interfaces via Context7 docs', FALSE),
     ('refactor', 'refactor', 'cost_checkpoint',  '%',                    FALSE, 'Cost tracking (optional)', FALSE);
 
 -- Respond to PR Review card (observational — standalone or child-level)
@@ -393,6 +394,7 @@ INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, 
 -- Execute Subtask card (Tier 3: Specialist — code child — ENFORCED)
 INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description, enforced) VALUES
     ('execute-subtask', 'execute-subtask', 'mcp_call',       '%codebase___retrieval%', TRUE,  FALSE, 'Must gather context before editing', TRUE),
+    ('execute-subtask', 'execute-subtask', 'mcp_call',       '%context7%',            TRUE,  FALSE, 'Must verify external API interfaces via Context7 docs', TRUE),
     ('execute-subtask', 'execute-subtask', 'gate_pass',      'ruff-format',           TRUE,  FALSE, 'Ruff format check must pass', TRUE),
     ('execute-subtask', 'execute-subtask', 'gate_pass',      'ruff-check',            TRUE,  FALSE, 'Ruff lint check must pass', TRUE),
     ('execute-subtask', 'execute-subtask', 'gate_pass',      'mypy',                  TRUE,  FALSE, 'Mypy type check must pass', TRUE),
