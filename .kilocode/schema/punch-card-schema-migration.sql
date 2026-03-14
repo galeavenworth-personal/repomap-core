@@ -15,8 +15,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     INDEX idx_status (status)
 );
 
--- Migration: add bead_id to existing tasks tables (idempotent via IF NOT EXISTS)
-ALTER TABLE tasks ADD COLUMN IF NOT EXISTS bead_id VARCHAR(100) DEFAULT NULL;
+-- Migration: bead_id column is added by initSchema() via dolt-schema.ts TABLE_DDL.
+-- Dolt does not support ALTER TABLE ... ADD COLUMN IF NOT EXISTS.
+-- See: repomap-core-gfb.3 (original), gfb.5 (fix)
 
 CREATE TABLE IF NOT EXISTS punches (
     punch_id    INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
