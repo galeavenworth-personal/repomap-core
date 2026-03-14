@@ -16,7 +16,7 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { findRepoRoot, sleep, timestamp } from "./utils.js";
 
@@ -333,13 +333,16 @@ export async function ensureKilo(
 
   // kilo serve uses OAuth from 'kilo auth login' (stored in ~/.local/share/kilo/auth.json).
   // Do NOT wrap with 'op run' — that's for DSPy compilation, not kilo serve.
-  // Launch via bash nohup — kilo doesn't survive Node.js spawn({detached:true}) alone
-  // because it exits when the parent's process group terminates. bash nohup + disown
-  // is the proven pattern for kilo specifically.
-  execFileSync("bash", ["-c", `nohup kilo serve --port ${config.kiloPort} >> /tmp/kilo-serve.log 2>&1 & disown`], {
-    timeout: 5000,
-    stdio: "ignore",
+  // Launch as a detached child with stdio redirected to a persistent log file.
+  const kiloLogFd = openSync("/tmp/kilo-serve.log", "a");
+  const kiloChild = spawn("kilo", ["serve", "--port", String(config.kiloPort)], {
+    detached: true,
+    stdio: ["ignore", kiloLogFd, kiloLogFd],
   });
+  kiloChild.unref();
+  closeSync(kiloLogFd);
+
+  log(`${timestamp()} kilo serve starting (PID ${kiloChild.pid ?? "?"})...`);
 
   // Wait up to 20s for kilo serve to become healthy
   for (let i = 0; i < 20; i++) {

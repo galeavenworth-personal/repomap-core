@@ -6,10 +6,11 @@
  *   npx tsx daemon/src/infra/stack-manager.cli.ts [command]
  *
  * Commands:
- *   ensure     (default) Ensure full stack is running (starts kilo serve if needed)
+ *   start      (default) Ensure full stack is running (starts kilo serve if needed)
+ *   ensure     Alias for start
  *   check      Check stack health status
  *   stop       Stop managed components
- *   with-kilo  Start full stack, including kilo serve if missing
+ *   with-kilo  Alias for start
  *
  * Exit codes:
  *   0  Success / stack healthy
@@ -26,7 +27,7 @@ import {
   type StackConfig,
 } from "./stack-manager.js";
 
-const command = process.argv[2] ?? "ensure";
+const command = process.argv[2] ?? "start";
 
 async function runEnsureStack(config: StackConfig): Promise<number> {
   const result = await ensureStack(config);

@@ -51,8 +51,10 @@ map_command() {
         --check)    echo "check" ;;
         --stop)     echo "stop" ;;
         --help|-h)
-            echo "Usage: .kilocode/tools/start-stack.sh [--check|--stop|--help]"
+            echo "Usage: .kilocode/tools/start-stack.sh [--ensure|--with-kilo|--check|--stop|--help]"
             echo "  (no args)    Idempotent full stack startup (all 5 components)"
+            echo "  --ensure     Legacy alias for default startup"
+            echo "  --with-kilo  Legacy alias for default startup"
             echo "  --check      Check stack health status"
             echo "  --stop       Stop managed components"
             echo ""
