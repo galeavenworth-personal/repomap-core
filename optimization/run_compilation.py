@@ -371,8 +371,12 @@ def _compile_card_exit_prompts(
         card_failures = failures.get(card_id, [])
 
         try:
-            prompt_text = generate_card_exit_prompt(lm, card_id, card_def, card_failures)
-            if _compile_and_write(f"card-exit:{card_id}", prompt_text, version, dry_run):
+            prompt_text = generate_card_exit_prompt(
+                lm, card_id, card_def, card_failures
+            )
+            if _compile_and_write(
+                f"card-exit:{card_id}", prompt_text, version, dry_run
+            ):
                 count += 1
         except Exception as e:
             print(f"       ❌ card-exit:{card_id} — {e}")
@@ -382,10 +386,22 @@ def _compile_card_exit_prompts(
             continue
 
         count += _compile_depth_specializations(
-            lm, card_id, card_def, card_failures, group, version, dry_run,
+            lm,
+            card_id,
+            card_def,
+            card_failures,
+            group,
+            version,
+            dry_run,
         )
         count += _compile_formula_specializations(
-            lm, card_id, card_def, card_failures, group, version, dry_run,
+            lm,
+            card_id,
+            card_def,
+            card_failures,
+            group,
+            version,
+            dry_run,
         )
     return count
 
@@ -407,7 +423,10 @@ def _compile_depth_specializations(
         prompt_id = f"card-exit:{card_id}:depth-{depth}"
         try:
             prompt_text = generate_card_exit_prompt(
-                lm, card_id, card_def, card_failures,
+                lm,
+                card_id,
+                card_def,
+                card_failures,
                 bead_type=_extract_bead_type(depth_examples),
                 hierarchy_depth=depth,
             )
@@ -435,7 +454,10 @@ def _compile_formula_specializations(
         prompt_id = f"card-exit:{card_id}:formula-{formula}"
         try:
             prompt_text = generate_card_exit_prompt(
-                lm, card_id, card_def, card_failures,
+                lm,
+                card_id,
+                card_def,
+                card_failures,
                 bead_type=_extract_bead_type(formula_examples),
                 formula_id=formula,
             )
@@ -458,7 +480,10 @@ def _compile_fitter_prompts(
         try:
             prompt_text = generate_fitter_prompt(lm, category, training_examples)
             if _compile_and_write(
-                f"fitter-dispatch:{category}", prompt_text, version, dry_run,
+                f"fitter-dispatch:{category}",
+                prompt_text,
+                version,
+                dry_run,
                 module_name="fitter_dispatch",
                 signature_name="FitterRecoverySignature",
             ):
@@ -515,7 +540,12 @@ def run(lm_name: str = DEFAULT_LM, dry_run: bool = False) -> None:
     version = str(dspy.__version__)
     print(f"[3/4] Generating card-exit prompts ({len(card_defs)} cards)...")
     card_exit_count = _compile_card_exit_prompts(
-        lm, card_defs, failures, card_groups, version, dry_run,
+        lm,
+        card_defs,
+        failures,
+        card_groups,
+        version,
+        dry_run,
     )
 
     # ── Step 3: Generate fitter-dispatch prompts via LM ─────────

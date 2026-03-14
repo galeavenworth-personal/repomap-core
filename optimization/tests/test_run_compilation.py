@@ -223,7 +223,9 @@ def test_run_writes_generic_prompt_always(
     mock_connect: MagicMock,
 ) -> None:
     _setup_run_mocks(
-        mock_configure_lm, mock_load_cards, mock_load_failures,
+        mock_configure_lm,
+        mock_load_cards,
+        mock_load_failures,
         failures=["missing gate_pass:pytest"],
     )
     mock_build_training.return_value = [
