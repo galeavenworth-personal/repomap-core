@@ -60,7 +60,7 @@ describe("StackManager", () => {
       expect(config.doltPort).toBe(3307);
       expect(config.temporalPort).toBe(7233);
       expect(config.temporalUiPort).toBe(8233);
-      expect(config.manageKilo).toBe(false);
+      expect(config.manageKilo).toBe(true);
       expect(config.pm2Bin).toContain("pm2");
       expect(config.ecosystemConfig).toContain("ecosystem.config.cjs");
       expect(config.daemonDir).toContain("daemon");

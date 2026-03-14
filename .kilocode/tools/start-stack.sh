@@ -2,11 +2,9 @@
 # Thin bootstrap wrapper for stack manager.
 #
 # Usage:
-#   .kilocode/tools/start-stack.sh           # Start full stack
-#   .kilocode/tools/start-stack.sh --ensure  # Ensure full stack (start kilo too)
+#   .kilocode/tools/start-stack.sh           # Idempotent full stack startup (all 5 components)
 #   .kilocode/tools/start-stack.sh --check   # Check stack health only
 #   .kilocode/tools/start-stack.sh --stop    # Stop managed components
-#   .kilocode/tools/start-stack.sh --with-kilo # Start kilo serve too if missing
 #
 # All complex logic (health checks, start/stop sequences, port checking,
 # pm2 management) lives in daemon/src/infra/stack-manager.ts.
@@ -49,18 +47,14 @@ ensure_deps() {
 map_command() {
     local flag="${1:-}"
     case "${flag}" in
-        "")         echo "start" ;;
-        --ensure)   echo "ensure" ;;
+        ""|--ensure|--with-kilo) echo "start" ;;
         --check)    echo "check" ;;
         --stop)     echo "stop" ;;
-        --with-kilo) echo "with-kilo" ;;
         --help|-h)
-            echo "Usage: .kilocode/tools/start-stack.sh [--ensure|--check|--stop|--with-kilo|--help]"
-            echo "  (no args)    Start full stack (kilo serve must be running)"
-            echo "  --ensure     Ensure full stack is running (start kilo too)"
+            echo "Usage: .kilocode/tools/start-stack.sh [--check|--stop|--help]"
+            echo "  (no args)    Idempotent full stack startup (all 5 components)"
             echo "  --check      Check stack health status"
             echo "  --stop       Stop managed components"
-            echo "  --with-kilo  Start full stack, including kilo serve if missing"
             echo ""
             echo "Logic: daemon/src/infra/stack-manager.ts"
             exit 0

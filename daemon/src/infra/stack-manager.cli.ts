@@ -60,19 +60,10 @@ async function main(): Promise<number> {
     }
 
     case "ensure":
-    case "--ensure": {
-      config.manageKilo = true;
-      return runEnsureStack(config);
-    }
-
-    case "start": {
-      config.manageKilo = false;
-      return runEnsureStack(config);
-    }
-
+    case "--ensure":
+    case "start":
     case "with-kilo":
     case "--with-kilo": {
-      config.manageKilo = true;
       return runEnsureStack(config);
     }
 
@@ -85,10 +76,8 @@ async function main(): Promise<number> {
     case "--help":
     case "-h":
       console.log("Usage: npx tsx daemon/src/infra/stack-manager.cli.ts [command]");
-      console.log("  ensure     (default) Ensure full stack is running (start kilo too)");
-      console.log("  start      Start full stack (kilo serve must be running)");
+      console.log("  start      (default) Idempotent full stack startup (all 5 components)");
       console.log("  check      Check stack health status");
-      console.log("  with-kilo  Start full stack, including kilo serve if missing");
       console.log("  stop       Stop managed components");
       return 0;
 

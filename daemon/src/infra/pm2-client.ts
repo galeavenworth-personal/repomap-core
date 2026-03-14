@@ -2,10 +2,20 @@ import pm2 from "pm2";
 
 export type ProcessDescription = pm2.ProcessDescription;
 
-/** Connect to the PM2 daemon. */
-export function pm2Connect(): Promise<void> {
+/** Connect to the PM2 daemon (with 5s timeout to prevent hangs). */
+export function pm2Connect(timeoutMs = 5000): Promise<void> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        reject(new Error(`pm2.connect() timed out after ${timeoutMs}ms`));
+      }
+    }, timeoutMs);
     pm2.connect((err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (err) {
         reject(err);
         return;
