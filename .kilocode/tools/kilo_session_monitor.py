@@ -59,9 +59,10 @@ def _validate_sql_identifier(value: str, label: str) -> str:
     return value
 
 
-FACTORY_DB = _validate_sql_identifier(
+_FACTORY_DB_RAW = _validate_sql_identifier(
     os.environ.get("DOLT_DATABASE", "factory"), "DOLT_DATABASE"
 )
+FACTORY_DB = f"`{_FACTORY_DB_RAW}`"
 
 
 def _sql_escape_literal(value: str) -> str:
