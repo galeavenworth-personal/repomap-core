@@ -360,7 +360,8 @@ async function writeInitialTask(
     const conn = await createMysqlConnection({
       host: config.host,
       port: config.doltPort,
-      user: "root",
+      user: process.env.DOLT_USER ?? "root",
+      password: process.env.DOLT_PASSWORD ?? "",
       database,
     });
 

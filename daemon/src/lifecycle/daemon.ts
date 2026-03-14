@@ -320,6 +320,15 @@ async function projectSessionEvent(writer: DoltWriter, rawEvent: RawEvent): Prom
     else if (finish === "abort" || finish === "error") status = finish;
     else if (finish) status = finish;
 
+    // Map finish reason to tasks ENUM('running','completed','failed','abandoned')
+    // session.status uses free-text; tasks.status must be one of the ENUM values
+    let taskStatus: string | undefined;
+    if (finish === "end") taskStatus = "completed";
+    else if (finish === "error") taskStatus = "failed";
+    else if (finish === "abort") taskStatus = "abandoned";
+    else if (finish) taskStatus = "abandoned"; // unknown finish reasons default to abandoned
+    // if finish is undefined, leave taskStatus undefined (preserve existing DB value via COALESCE)
+
     await writer.writeSession({
       sessionId,
       taskId: pickString(info, "taskId") ?? sessionId,
@@ -338,7 +347,7 @@ async function projectSessionEvent(writer: DoltWriter, rawEvent: RawEvent): Prom
       taskId: pickString(info, "taskId") ?? sessionId,
       mode: pickString(info, "mode") ?? "unknown",
       model: pickString(info, "modelID") ?? undefined,
-      status,
+      status: taskStatus,
       costUsd: pickNumber(info, "cost") ?? undefined,
       startedAt: createdMs ? new Date(createdMs) : new Date(),
       completedAt: completedMs ? new Date(completedMs) : undefined,
