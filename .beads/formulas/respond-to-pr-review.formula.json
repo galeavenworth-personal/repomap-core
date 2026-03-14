@@ -1,0 +1,27 @@
+{
+  "formula": "respond_to_pr_review",
+  "type": "workflow",
+  "description": "Respond to PR review feedback: build ledger, fix items, acknowledge",
+  "steps": [
+    {
+      "id": "build-ledger",
+      "title": "Build ledger",
+      "labels": ["mode:pr-review", "card:build-pr-ledger", "phase:1"],
+      "description": "Build Comment Ledger for PR {{pr_number}} in {{owner_repo}} including SonarQube quality gate status"
+    },
+    {
+      "id": "fix-items",
+      "title": "Fix items",
+      "depends_on": ["build-ledger"],
+      "labels": ["mode:code", "card:execute-subtask", "phase:2"],
+      "description": "Fix ledger items marked disposition=fix for PR {{pr_number}} in {{owner_repo}} on head {{head_ref_name}}"
+    },
+    {
+      "id": "acknowledge-ledger",
+      "title": "Acknowledge ledger",
+      "depends_on": ["fix-items"],
+      "labels": ["mode:pr-review", "card:acknowledge-pr-ledger", "phase:3"],
+      "description": "Reply to each review comment for PR {{pr_number}} in {{owner_repo}} with fix references and bead {{bead_id}} context"
+    }
+  ]
+}
