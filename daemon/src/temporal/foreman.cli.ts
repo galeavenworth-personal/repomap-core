@@ -37,7 +37,7 @@
  *   TEMPORAL_NAMESPACE   Temporal namespace (default: default)
  *   DOLT_HOST            Dolt server host (default: 127.0.0.1)
  *   DOLT_PORT            Dolt server port (default: 3307)
- *   DOLT_DATABASE        Dolt database name (default: beads_repomap-core)
+ *   DOLT_DATABASE        Dolt database name (default: factory)
  */
 
 import { Client, Connection } from "@temporalio/client";
@@ -345,7 +345,7 @@ async function handleStart(parsed: ParsedArgs): Promise<void> {
 
   const doltHost = process.env.DOLT_HOST ?? "127.0.0.1";
   const doltPort = Number.parseInt(process.env.DOLT_PORT ?? "3307", 10);
-  const doltDatabase = process.env.DOLT_DATABASE ?? "beads_repomap-core";
+  const doltDatabase = process.env.DOLT_DATABASE || "factory";
 
   const wfId = resolveWorkflowId(parsed);
 
@@ -591,7 +591,7 @@ Environment:
   TEMPORAL_NAMESPACE   Temporal namespace (default: default)
   DOLT_HOST            Dolt host (default: 127.0.0.1)
   DOLT_PORT            Dolt port (default: 3307)
-  DOLT_DATABASE        Dolt database (default: beads_repomap-core)`);
+  DOLT_DATABASE        Dolt database (default: factory)`);
 }
 
 // ── Main ──

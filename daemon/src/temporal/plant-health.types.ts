@@ -128,7 +128,7 @@ export interface PlantHealthConfig {
 export const DEFAULT_PLANT_HEALTH_CONFIG: Omit<PlantHealthConfig, "repoPath"> = {
   doltHost: "127.0.0.1",
   doltPort: 3307,
-  doltDatabase: "beads_repomap-core",
+  doltDatabase: "factory",
   kiloHost: "127.0.0.1",
   kiloPort: 4096,
   cheapZoneThresholdUsd: 0.42,

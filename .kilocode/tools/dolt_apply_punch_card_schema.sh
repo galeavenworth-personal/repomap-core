@@ -20,7 +20,7 @@ COMMIT_MSG="${2:-Apply punch card schema migration}"
 
 # Delegate to TypeScript implementation
 export REPO_ROOT
-export DOLT_DATABASE="${DOLT_DATABASE:-beads_repomap-core}"
+export DOLT_DATABASE="${DOLT_DATABASE:-factory}"
 
 TSX="${REPO_ROOT}/daemon/node_modules/.bin/tsx"
 if [[ ! -x "$TSX" ]]; then
