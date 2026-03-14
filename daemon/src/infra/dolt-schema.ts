@@ -49,7 +49,7 @@ export function defaultSchemaConfig(): DoltSchemaConfig {
     port: Number.parseInt(process.env.DOLT_PORT ?? "3307", 10),
     user: "root",
     password: "",
-    database: process.env.DOLT_DATABASE ?? "factory",
+    database: process.env.DOLT_DATABASE || "factory",
     repoRoot,
   };
 }

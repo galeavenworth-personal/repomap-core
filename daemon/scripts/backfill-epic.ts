@@ -31,7 +31,7 @@ import { classifyEvent } from "../src/classifier/index.js";
 const KILO_URL = process.env.KILO_URL ?? "http://127.0.0.1:4096";
 const DOLT_HOST = process.env.DOLT_HOST ?? "127.0.0.1";
 const DOLT_PORT = Number(process.env.DOLT_PORT ?? "3307");
-const DOLT_DB = process.env.DOLT_DATABASE ?? "factory";
+const DOLT_DB = process.env.DOLT_DATABASE || "factory";
 
 // Session IDs: prefer CLI args, fall back to env vars
 const EPIC_PARENT = process.argv[2] ?? process.env.EPIC_PARENT;
