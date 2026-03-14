@@ -2,7 +2,7 @@ import mysql from "mysql2/promise";
 
 const DOLT_HOST = process.env.DOLT_HOST || "127.0.0.1";
 const DOLT_PORT = Number.parseInt(process.env.DOLT_PORT || "3307", 10);
-const DOLT_DATABASE = process.env.DOLT_DATABASE || "punch_cards";
+const DOLT_DATABASE = process.env.DOLT_DATABASE || "factory";
 const DOLT_USER = process.env.DOLT_USER || "root";
 
 export interface CompiledPromptRow {

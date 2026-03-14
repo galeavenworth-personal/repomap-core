@@ -82,7 +82,7 @@ export function defaultCheckConfig(): PunchCardCheckConfig {
   return {
     host: process.env.DOLT_HOST ?? "127.0.0.1",
     port: Number(process.env.DOLT_PORT ?? "3307"),
-    database: process.env.DOLT_DATABASE ?? "beads_repomap-core",
+    database: process.env.DOLT_DATABASE || "factory",
     user: "root",
     password: "",
   };

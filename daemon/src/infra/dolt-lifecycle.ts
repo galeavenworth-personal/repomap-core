@@ -64,7 +64,7 @@ export function defaultConfig(): DoltLifecycleConfig {
     user: "root",
     password: "",
     doltBin,
-    requiredDatabases: ["beads_repomap-core", "punch_cards"],
+    requiredDatabases: ["beads_repomap-core", process.env.DOLT_DATABASE || "factory"],
     beadsDirs: [
       // Both clones
       join(HOME, "Projects/repomap-core/.beads"),

@@ -34,6 +34,7 @@ module.exports = {
         KILO_HOST: process.env.KILO_HOST || "127.0.0.1",
         KILO_PORT: process.env.KILO_PORT || "4096",
         DOLT_PORT: process.env.DOLT_PORT || "3307",
+        DOLT_DATABASE: process.env.DOLT_DATABASE || "factory",
       },
       // Restart on crash with exponential backoff (max 30s)
       autorestart: true,

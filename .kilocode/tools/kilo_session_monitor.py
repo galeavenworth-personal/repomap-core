@@ -33,6 +33,8 @@ This format is not a public API and may change between versions.
 
 import json
 import datetime
+import os
+import re
 import subprocess
 import shutil
 import sys
@@ -47,6 +49,20 @@ KILO_STORAGE = Path.home() / ".config/Code/User/globalStorage/kilocode.kilo-code
 TASKS_DIR = KILO_STORAGE / "tasks"
 DOLT_BIN = shutil.which("dolt")
 DOLT_DATA_DIR = Path.home() / ".dolt-data/beads"
+_SAFE_SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+
+
+def _validate_sql_identifier(value: str, label: str) -> str:
+    """Validate a SQL identifier (database/table name). Fail fast on bad input."""
+    if not _SAFE_SQL_IDENT_RE.match(value):
+        raise ValueError(f"Unsafe SQL identifier for {label}: {value!r}")
+    return value
+
+
+_FACTORY_DB_RAW = _validate_sql_identifier(
+    os.environ.get("DOLT_DATABASE", "factory"), "DOLT_DATABASE"
+)
+FACTORY_DB = f"`{_FACTORY_DB_RAW}`"
 
 
 def _sql_escape_literal(value: str) -> str:
@@ -662,7 +678,7 @@ def get_task_cost(task_id: str) -> TaskCost:
 
 
 def persist_child_relationships(parent_task_id: str, matches: list[ChildMatch]) -> int:
-    """Persist resolved parent->child relationships into punch_cards.child_relationships."""
+    """Persist resolved parent->child relationships into FACTORY_DB.child_relationships."""
     rows_written = 0
     parent_q = _sql_escape_literal(parent_task_id)
 
@@ -673,7 +689,7 @@ def persist_child_relationships(parent_task_id: str, matches: list[ChildMatch]) 
 
         child_q = _sql_escape_literal(child_id)
         query = (
-            "INSERT IGNORE INTO punch_cards.child_relationships "
+            f"INSERT IGNORE INTO {FACTORY_DB}.child_relationships "
             "(parent_task_id, child_task_id, spawned_at) "
             f"VALUES ('{parent_q}', '{child_q}', "
             f"FROM_UNIXTIME({match.spawn.new_task_ts}/1000))"
@@ -700,7 +716,7 @@ def verify_child_punch_card(
     parent_q = _sql_escape_literal(parent_task_id)
     check_query = (
         "SELECT dolt_commit_hash "
-        "FROM punch_cards.checkpoints "
+        f"FROM {FACTORY_DB}.checkpoints "
         f"WHERE task_id = '{child_q}' AND status = 'pass' "
         "ORDER BY validated_at DESC LIMIT 1"
     )
@@ -717,14 +733,14 @@ def verify_child_punch_card(
 
     if checkpoint_hash is None:
         update_query = (
-            "UPDATE punch_cards.child_relationships "
+            f"UPDATE {FACTORY_DB}.child_relationships "
             "SET child_card_valid = TRUE, child_checkpoint_hash = NULL "
             f"WHERE parent_task_id = '{parent_q}' AND child_task_id = '{child_q}'"
         )
     else:
         hash_q = _sql_escape_literal(checkpoint_hash)
         update_query = (
-            "UPDATE punch_cards.child_relationships "
+            f"UPDATE {FACTORY_DB}.child_relationships "
             f"SET child_card_valid = TRUE, child_checkpoint_hash = '{hash_q}' "
             f"WHERE parent_task_id = '{parent_q}' AND child_task_id = '{child_q}'"
         )
@@ -795,7 +811,7 @@ def cmd_verify_delegation(task_id: str | None = None) -> None:
     parent_q = _sql_escape_literal(task_id)
     query = (
         "SELECT child_task_id "
-        "FROM punch_cards.child_relationships "
+        f"FROM {FACTORY_DB}.child_relationships "
         f"WHERE parent_task_id = '{parent_q}' "
         "ORDER BY spawned_at"
     )

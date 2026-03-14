@@ -7,6 +7,7 @@ import datetime
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -24,6 +25,20 @@ GATE_RUNS_JSONL = Path(".kilocode/gate_runs.jsonl")
 BATCH_SIZE = 1000
 KILO_SERVE_BASE_URL = "http://127.0.0.1:4096"
 KILO_SERVE_TIMEOUT = 5  # seconds
+_SAFE_SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+
+
+def _validate_sql_identifier(value: str, label: str) -> str:
+    """Validate a SQL identifier (database/table name). Fail fast on bad input."""
+    if not _SAFE_SQL_IDENT_RE.match(value):
+        raise ValueError(f"Unsafe SQL identifier for {label}: {value!r}")
+    return value
+
+
+_FACTORY_DB_RAW = _validate_sql_identifier(
+    os.environ.get("DOLT_DATABASE", "factory"), "DOLT_DATABASE"
+)
+FACTORY_DB = f"`{_FACTORY_DB_RAW}`"
 
 
 def _sql_escape_literal(value: str) -> str:
@@ -432,7 +447,7 @@ def _insert_punches(
     task_q = _sql_escape_literal(task_id)
 
     before_out = dolt_sql(
-        f"SELECT COUNT(*) FROM punch_cards.punches WHERE task_id = '{task_q}'"
+        f"SELECT COUNT(*) FROM {FACTORY_DB}.punches WHERE task_id = '{task_q}'"
     )
     before_count = 0
     if before_out:
@@ -459,7 +474,7 @@ def _insert_punches(
     for i in range(0, len(value_parts), BATCH_SIZE):
         batch = value_parts[i : i + BATCH_SIZE]
         insert_query = (
-            "INSERT IGNORE INTO punch_cards.punches "
+            f"INSERT IGNORE INTO {FACTORY_DB}.punches "
             "(task_id, punch_type, punch_key, observed_at, source_hash) VALUES "
             + ", ".join(batch)
         )
@@ -468,7 +483,7 @@ def _insert_punches(
             return 0
 
     after_out = dolt_sql(
-        f"SELECT COUNT(*) FROM punch_cards.punches WHERE task_id = '{task_q}'"
+        f"SELECT COUNT(*) FROM {FACTORY_DB}.punches WHERE task_id = '{task_q}'"
     )
     after_count = 0
     if after_out:
@@ -498,7 +513,7 @@ def _fetch_card_requirements(card_id: str) -> list[dict[str, object]]:
     card_q = _sql_escape_literal(card_id)
     query = (
         "SELECT punch_type, punch_key_pattern, required, forbidden, description "
-        "FROM punch_cards.punch_cards "
+        f"FROM {FACTORY_DB}.punch_cards "
         f"WHERE card_id = '{card_q}'"
     )
     out = dolt_sql(query)
@@ -538,7 +553,7 @@ def _count_matching_punches(
     pattern_q = _sql_escape_literal(punch_key_pattern)
     query = (
         "SELECT COUNT(*) "
-        "FROM punch_cards.punches "
+        f"FROM {FACTORY_DB}.punches "
         f"WHERE task_id = '{task_q}' AND punch_type = '{type_q}' "
         f"AND punch_key LIKE '{pattern_q}'"
     )
@@ -649,7 +664,7 @@ def _insert_checkpoint(
         violations_clause = "NULL"
 
     insert_query = (
-        "INSERT INTO punch_cards.checkpoints "
+        f"INSERT INTO {FACTORY_DB}.checkpoints "
         "(task_id, card_id, status, validated_at, missing_punches, violations) "
         "VALUES "
         f"('{task_q}', '{card_q}', '{status_q}', '{validated_q}', "
@@ -662,7 +677,7 @@ def _insert_checkpoint(
     # Re-query by unique constraint — LAST_INSERT_ID() is session-scoped
     # and each dolt_sql() call spawns a new process.
     id_query = (
-        "SELECT checkpoint_id FROM punch_cards.checkpoints "
+        f"SELECT checkpoint_id FROM {FACTORY_DB}.checkpoints "
         f"WHERE task_id = '{task_q}' AND card_id = '{card_q}' "
         f"AND validated_at = '{validated_q}' "
         "ORDER BY checkpoint_id DESC LIMIT 1"
@@ -702,7 +717,7 @@ def _update_checkpoint_commit_hash(checkpoint_id: int, commit_hash: str) -> bool
     """Update checkpoint row with Dolt commit hash and report success."""
     commit_q = _sql_escape_literal(commit_hash)
     query = (
-        "UPDATE punch_cards.checkpoints "
+        f"UPDATE {FACTORY_DB}.checkpoints "
         f"SET dolt_commit_hash = '{commit_q}' "
         f"WHERE checkpoint_id = {checkpoint_id}"
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,7 +14,10 @@ from pymysql.cursors import DictCursor
 
 HOST = os.getenv("DOLT_HOST", "127.0.0.1")
 PORT = int(os.getenv("DOLT_PORT", "3307"))
-DATABASE = os.getenv("DOLT_DATABASE", "punch_cards")
+_SAFE_SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+DATABASE = os.environ.get("DOLT_DATABASE", "factory")
+if not _SAFE_SQL_IDENT_RE.match(DATABASE):
+    raise ValueError(f"Unsafe DOLT_DATABASE identifier: {DATABASE!r}")
 USER = os.getenv("DOLT_USER", "root")
 
 

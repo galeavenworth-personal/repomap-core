@@ -28,7 +28,7 @@ const KILO_PORT = Number.parseInt(process.env.KILO_PORT ?? "4096", 10);
 const BASE_URL = `http://${KILO_HOST}:${KILO_PORT}`;
 const DOLT_HOST = process.env.DOLT_HOST ?? "127.0.0.1";
 const DOLT_PORT = Number.parseInt(process.env.DOLT_PORT ?? "3307", 10);
-const DOLT_DB = process.env.DOLT_DATABASE ?? "plant";
+const DOLT_DB = process.env.DOLT_DATABASE ?? "factory";
 const SKIP = !process.env.KILO_LIVE;
 
 // How long to wait for a session to complete (per agent)

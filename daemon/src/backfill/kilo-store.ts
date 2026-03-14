@@ -227,7 +227,7 @@ export async function runBackfill(taskStoreArg?: string): Promise<Counters> {
   const writer = createDoltWriter({
     host: process.env.DOLT_HOST || "127.0.0.1",
     port: Number.parseInt(process.env.DOLT_PORT || "3307", 10),
-    database: process.env.DOLT_DATABASE || "punch_cards",
+    database: process.env.DOLT_DATABASE || "factory",
     user: process.env.DOLT_USER || "root",
     password: process.env.DOLT_PASSWORD || undefined,
   });

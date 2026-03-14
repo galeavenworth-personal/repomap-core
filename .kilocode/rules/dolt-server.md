@@ -44,7 +44,9 @@ That's it. The script is idempotent — it checks if the server is already runni
 
 The Dolt server hosts **two** logical databases:
 
-1. **`beads_repomap-core`** — External dependency owned by the `bd` CLI. This rule file covers starting it.
-2. **Factory DB** (currently `punch_cards`, migrating to `factory` per repomap-core-65s) — sessions, punches, compiled prompts, etc. Started by `.kilocode/tools/start-stack.sh`.
+1. **`beads_repomap-core`** — External dependency owned by the `bd` CLI. Hands-off: do not modify its schema or data directly. This rule file covers starting it.
+2. **`factory`** — Internal factory database. Consolidates the former `punch_cards` and `plant` databases into a single canonical name. Stores: sessions, punches, messages, tool_calls, punch_cards, checkpoints, compiled_prompts. Started by `.kilocode/tools/start-stack.sh`.
+
+The `DOLT_DATABASE` environment variable controls which database the daemon and DSPy code connect to. It defaults to `factory`.
 
 Do NOT conflate these. `bd` commands use database 1. The daemon and DSPy use database 2.

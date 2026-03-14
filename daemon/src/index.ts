@@ -23,7 +23,7 @@ const daemon = createDaemon({
   kiloHost: process.env.KILO_HOST || "127.0.0.1",
   doltPort: parseInt(process.env.DOLT_PORT || "3307", 10),
   doltHost: process.env.DOLT_HOST || "127.0.0.1",
-  doltDatabase: process.env.DOLT_DATABASE || "plant",
+  doltDatabase: process.env.DOLT_DATABASE || "factory",
   doltUser: process.env.DOLT_USER || "root",
   doltPassword: process.env.DOLT_PASSWORD || undefined,
 });

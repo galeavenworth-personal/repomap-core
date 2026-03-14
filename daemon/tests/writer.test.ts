@@ -29,20 +29,20 @@ describe("createDoltWriter", () => {
   });
 
   it("connect() calls mysql.createConnection with correct config", async () => {
-    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "plant", user: "root" });
+    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "factory", user: "root" });
 
     await writer.connect();
 
     expect(createConnectionMock).toHaveBeenCalledWith({
       host: "127.0.0.1",
       port: 3307,
-      database: "plant",
+      database: "factory",
       user: "root",
     });
   });
 
   it("writePunch() calls connection.execute with correct SQL and params", async () => {
-    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "plant" });
+    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "factory" });
     const observedAt = new Date("2026-02-21T00:00:00.000Z");
 
     await writer.connect();
@@ -75,7 +75,7 @@ describe("createDoltWriter", () => {
   });
 
   it("writePunch() throws if called before connect", async () => {
-    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "plant" });
+    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "factory" });
 
     await expect(
       writer.writePunch({
@@ -89,7 +89,7 @@ describe("createDoltWriter", () => {
   });
 
   it("disconnect() calls end() and writePunch() throws after disconnect", async () => {
-    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "plant" });
+    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "factory" });
 
     await writer.connect();
     await writer.disconnect();
@@ -108,7 +108,7 @@ describe("createDoltWriter", () => {
   });
 
   it("writeSession() upserts session row", async () => {
-    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "plant" });
+    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "factory" });
 
     await writer.connect();
     await writer.writeSession({
@@ -133,7 +133,7 @@ describe("createDoltWriter", () => {
   });
 
   it("writeMessage() deduplicates by (session_id, ts, role)", async () => {
-    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "plant" });
+    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "factory" });
 
     await writer.connect();
     await writer.writeMessage({
@@ -151,7 +151,7 @@ describe("createDoltWriter", () => {
   });
 
   it("writeToolCall() deduplicates by (session_id, ts, tool_name)", async () => {
-    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "plant" });
+    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "factory" });
 
     await writer.connect();
     await writer.writeToolCall({
@@ -182,7 +182,7 @@ describe("createDoltWriter", () => {
   });
 
   it("syncChildRelsFromPunches() inserts child relations and returns inserted count", async () => {
-    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "plant" });
+    const writer = createDoltWriter({ host: "127.0.0.1", port: 3307, database: "factory" });
     queryMock.mockResolvedValue([
       [
         { task_id: "parent-1", punch_key: "child-1" },
