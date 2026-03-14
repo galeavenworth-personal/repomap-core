@@ -57,6 +57,18 @@ export interface DoltWriter {
     completedAt?: Date;
     outcome?: string;
   }): Promise<void>;
+  writeTask(task: {
+    taskId: string;
+    parentTaskId?: string;
+    mode: string;
+    model?: string;
+    status?: string;
+    costUsd?: number;
+    startedAt: Date;
+    completedAt?: Date;
+    punchCardId?: string;
+    beadId?: string;
+  }): Promise<void>;
   writeMessage(message: {
     sessionId: string;
     role: string;
@@ -308,6 +320,37 @@ export function createDoltWriter(config: DoltConfig): DoltWriter {
           session.startedAt ?? null,
           session.completedAt ?? null,
           session.outcome ?? null,
+        ]
+      );
+    },
+
+    async writeTask(task) {
+      if (!connection) throw new Error("Not connected to Dolt");
+      await connection.execute(
+        `INSERT INTO tasks (
+          task_id, parent_task_id, mode, model, status, cost_usd,
+          started_at, completed_at, punch_card_id, bead_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          parent_task_id = COALESCE(VALUES(parent_task_id), parent_task_id),
+          mode = COALESCE(VALUES(mode), mode),
+          model = COALESCE(VALUES(model), model),
+          status = COALESCE(VALUES(status), status),
+          cost_usd = COALESCE(VALUES(cost_usd), cost_usd),
+          completed_at = COALESCE(VALUES(completed_at), completed_at),
+          punch_card_id = COALESCE(VALUES(punch_card_id), punch_card_id),
+          bead_id = COALESCE(VALUES(bead_id), bead_id)`,
+        [
+          task.taskId,
+          task.parentTaskId ?? null,
+          task.mode,
+          task.model ?? null,
+          task.status ?? null,
+          task.costUsd ?? null,
+          task.startedAt,
+          task.completedAt ?? null,
+          task.punchCardId ?? null,
+          task.beadId ?? null,
         ]
       );
     },

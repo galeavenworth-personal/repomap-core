@@ -124,6 +124,7 @@ const TABLE_DDL: string[] = [
     started_at     DATETIME     NOT NULL,
     completed_at   DATETIME     DEFAULT NULL,
     punch_card_id  VARCHAR(50)  DEFAULT NULL,
+    bead_id        VARCHAR(100) DEFAULT NULL,
 
     INDEX idx_parent (parent_task_id),
     INDEX idx_status (status)

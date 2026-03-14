@@ -13,6 +13,7 @@
  *   -w, --wait SECONDS     Max wait for completion (default: 600)
  *   -q, --quiet            Suppress progress output
  *   --card CARD_ID         Override punch card ID (bypasses mode-card-map)
+ *   --bead-id BEAD_ID      Optional bead ID to thread into payload metadata
  *   --poll SECONDS         Poll interval (default: 10)
  *   --no-monitor           Fire and forget — print session ID and exit
  *   --json                 Output final result as JSON instead of text
@@ -41,6 +42,7 @@ Options:
   -w, --wait SECONDS     Max wait for completion (default: 600)
   -q, --quiet            Suppress progress output
   --card CARD_ID         Override punch card ID (bypasses mode-card-map)
+  --bead-id BEAD_ID      Optional bead ID to thread into payload metadata
   --poll SECONDS         Poll interval (default: 10)
   --no-monitor           Fire and forget — print session ID and exit
   --json                 Output final result as JSON instead of text
@@ -100,6 +102,10 @@ function parseArgs(argv: string[]): ReturnType<typeof defaultConfig> {
       case "--card":
         if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
         config.cardId = args[++i];
+        break;
+      case "--bead-id":
+        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
+        config.beadId = args[++i];
         break;
       case "--no-monitor":
         config.noMonitor = true;

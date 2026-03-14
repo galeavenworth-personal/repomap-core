@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     INDEX idx_status (status)
 );
 
+-- Migration: add bead_id to existing tasks tables (idempotent via IF NOT EXISTS)
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS bead_id VARCHAR(100) DEFAULT NULL;
+
 CREATE TABLE IF NOT EXISTS punches (
     punch_id    INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
     task_id     VARCHAR(50)  NOT NULL,
