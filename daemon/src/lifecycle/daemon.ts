@@ -309,6 +309,7 @@ async function projectSessionEvent(writer: DoltWriter, rawEvent: RawEvent): Prom
 
     const tokens = asRecord(info.tokens);
     const timeObj = asRecord(info.time);
+    const createdMs = pickNumber(timeObj, "created");
     const completedMs = pickNumber(timeObj, "completed");
     const finish = pickString(info, "finish");
 
@@ -332,6 +333,17 @@ async function projectSessionEvent(writer: DoltWriter, rawEvent: RawEvent): Prom
       completedAt: completedMs ? new Date(completedMs) : undefined,
       outcome: finish,
     });
+
+    await writer.writeTask({
+      taskId: pickString(info, "taskId") ?? sessionId,
+      mode: pickString(info, "mode") ?? "unknown",
+      model: pickString(info, "modelID") ?? undefined,
+      status,
+      costUsd: pickNumber(info, "cost") ?? undefined,
+      startedAt: createdMs ? new Date(createdMs) : new Date(),
+      completedAt: completedMs ? new Date(completedMs) : undefined,
+    });
+
     return;
   }
 }

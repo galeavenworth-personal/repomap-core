@@ -26,6 +26,7 @@ const {
   const disconnectMock = vi.fn();
   const writePunchMock = vi.fn();
   const writeSessionMock = vi.fn();
+  const writeTaskMock = vi.fn();
   const writeMessageMock = vi.fn();
   const writeToolCallMock = vi.fn();
   const writeCheckpointMock = vi.fn();
@@ -45,6 +46,7 @@ const {
     connect: connectMock,
     writePunch: writePunchMock,
     writeSession: writeSessionMock,
+    writeTask: writeTaskMock,
     writeMessage: writeMessageMock,
     writeToolCall: writeToolCallMock,
     writeCheckpoint: writeCheckpointMock,

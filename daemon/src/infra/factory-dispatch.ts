@@ -10,6 +10,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
+import { createConnection as createMysqlConnection } from "mysql2/promise";
 import { findRepoRoot, timestamp } from "./utils.js";
 import { withPm2Connection, isAppOnline } from "./pm2-client.js";
 import {
@@ -42,6 +43,7 @@ export interface FactoryDispatchConfig {
   temporalPort: number;
   pm2Bin: string;
   cardId: string;
+  beadId: string;
 }
 
 export function defaultConfig(): FactoryDispatchConfig {
@@ -62,6 +64,7 @@ export function defaultConfig(): FactoryDispatchConfig {
     temporalPort: Number(process.env.TEMPORAL_PORT ?? "7233"),
     pm2Bin: `${repoRoot}/daemon/node_modules/.bin/pm2`,
     cardId: "",
+    beadId: "",
   };
 }
 
@@ -74,6 +77,7 @@ export interface PromptPart {
 export interface PromptPayload {
   agent?: string;
   parts: PromptPart[];
+  bead_id?: string;
   [key: string]: unknown;
 }
 
@@ -345,6 +349,43 @@ async function resolveSessionId(
   }
 }
 
+async function writeInitialTask(
+  config: FactoryDispatchConfig,
+  sessionId: string,
+  log: Logger,
+): Promise<void> {
+  const database = process.env.DOLT_DATABASE ?? "factory";
+
+  try {
+    const conn = await createMysqlConnection({
+      host: config.host,
+      port: config.doltPort,
+      user: "root",
+      database,
+    });
+
+    try {
+      await conn.execute(
+        `INSERT INTO tasks (task_id, mode, started_at, punch_card_id, bead_id)
+         VALUES (?, ?, NOW(), ?, ?)
+         ON DUPLICATE KEY UPDATE
+           punch_card_id = COALESCE(VALUES(punch_card_id), punch_card_id),
+           bead_id = COALESCE(VALUES(bead_id), bead_id)`,
+        [sessionId, config.mode, config.cardId || null, config.beadId || null],
+      );
+
+      log(
+        `${timestamp()} Task row created: ${sessionId}` +
+          (config.beadId ? ` (bead: ${config.beadId})` : ""),
+      );
+    } finally {
+      await conn.end();
+    }
+  } catch (e) {
+    log(`${timestamp()} Warning: failed to create task row: ${(e as Error).message}`);
+  }
+}
+
 async function maybeInjectCardPrompt(
   payload: PromptPayload,
   config: FactoryDispatchConfig,
@@ -452,8 +493,16 @@ export async function runDispatch(
   log(`${timestamp()} Session created: ${sessionId}`);
   log(`${timestamp()} Title: ${title}`);
 
+  // Create initial task row in Dolt (captures bead_id at dispatch time)
+  await writeInitialTask(config, sessionId, log);
+
   // Inject SESSION_ID into prompt
   injectSessionId(payload, sessionId);
+
+  // Inject bead_id into payload metadata
+  if (config.beadId) {
+    payload.bead_id = config.beadId;
+  }
 
   // Phase 3b: Inject card exit prompt
   await maybeInjectCardPrompt(payload, config, log);
