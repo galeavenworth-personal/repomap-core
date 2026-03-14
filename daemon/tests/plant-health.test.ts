@@ -397,7 +397,7 @@ describe("DEFAULT_PLANT_HEALTH_CONFIG", () => {
   it("has expected defaults", () => {
     expect(DEFAULT_PLANT_HEALTH_CONFIG.doltHost).toBe("127.0.0.1");
     expect(DEFAULT_PLANT_HEALTH_CONFIG.doltPort).toBe(3307);
-    expect(DEFAULT_PLANT_HEALTH_CONFIG.doltDatabase).toBe("beads_repomap-core");
+    expect(DEFAULT_PLANT_HEALTH_CONFIG.doltDatabase).toBe("factory");
     expect(DEFAULT_PLANT_HEALTH_CONFIG.kiloHost).toBe("127.0.0.1");
     expect(DEFAULT_PLANT_HEALTH_CONFIG.kiloPort).toBe(4096);
     expect(DEFAULT_PLANT_HEALTH_CONFIG.cheapZoneThresholdUsd).toBe(0.42);

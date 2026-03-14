@@ -181,6 +181,7 @@ def test_generate_card_exit_prompt_with_specialization() -> None:
     assert isinstance(output, str)
 
 
+@patch("optimization.run_compilation._connect")
 @patch("optimization.run_compilation.dolt_bus.write_compiled_prompt")
 @patch("optimization.run_compilation.build_training_set")
 @patch("optimization.run_compilation.load_checkpoint_failures")
@@ -192,6 +193,7 @@ def test_run_writes_generic_prompt_always(
     mock_load_failures: MagicMock,
     mock_build_training: MagicMock,
     mock_write_prompt: MagicMock,
+    mock_connect: MagicMock,
 ) -> None:
     mock_configure_lm.return_value = DummyLM(_DUMMY_RESPONSES)
     mock_load_cards.return_value = _base_card_definitions()
@@ -212,6 +214,7 @@ def test_run_writes_generic_prompt_always(
     )
 
 
+@patch("optimization.run_compilation._connect")
 @patch("optimization.run_compilation.dolt_bus.write_compiled_prompt")
 @patch("optimization.run_compilation.build_training_set")
 @patch("optimization.run_compilation.load_checkpoint_failures")
@@ -223,6 +226,7 @@ def test_run_writes_depth_specialization_above_threshold(
     mock_load_failures: MagicMock,
     mock_build_training: MagicMock,
     mock_write_prompt: MagicMock,
+    mock_connect: MagicMock,
 ) -> None:
     mock_configure_lm.return_value = DummyLM(_DUMMY_RESPONSES)
     mock_load_cards.return_value = _base_card_definitions()
@@ -240,6 +244,7 @@ def test_run_writes_depth_specialization_above_threshold(
     assert "card-exit:execute-subtask:depth-2" in prompt_ids
 
 
+@patch("optimization.run_compilation._connect")
 @patch("optimization.run_compilation.dolt_bus.write_compiled_prompt")
 @patch("optimization.run_compilation.build_training_set")
 @patch("optimization.run_compilation.load_checkpoint_failures")
@@ -251,6 +256,7 @@ def test_run_skips_depth_specialization_below_threshold(
     mock_load_failures: MagicMock,
     mock_build_training: MagicMock,
     mock_write_prompt: MagicMock,
+    mock_connect: MagicMock,
 ) -> None:
     mock_configure_lm.return_value = DummyLM(_DUMMY_RESPONSES)
     mock_load_cards.return_value = _base_card_definitions()
@@ -266,6 +272,7 @@ def test_run_skips_depth_specialization_below_threshold(
     assert "card-exit:execute-subtask:depth-2" not in prompt_ids
 
 
+@patch("optimization.run_compilation._connect")
 @patch("optimization.run_compilation.dolt_bus.write_compiled_prompt")
 @patch("optimization.run_compilation.build_training_set")
 @patch("optimization.run_compilation.load_checkpoint_failures")
@@ -277,6 +284,7 @@ def test_run_writes_formula_specialization_above_threshold(
     mock_load_failures: MagicMock,
     mock_build_training: MagicMock,
     mock_write_prompt: MagicMock,
+    mock_connect: MagicMock,
 ) -> None:
     mock_configure_lm.return_value = DummyLM(_DUMMY_RESPONSES)
     mock_load_cards.return_value = _base_card_definitions()
@@ -293,6 +301,7 @@ def test_run_writes_formula_specialization_above_threshold(
     assert "card-exit:execute-subtask:formula-pr-review" in prompt_ids
 
 
+@patch("optimization.run_compilation._connect")
 @patch("optimization.run_compilation.dolt_bus.write_compiled_prompt")
 @patch("optimization.run_compilation.build_training_set")
 @patch("optimization.run_compilation.load_checkpoint_failures")
@@ -304,6 +313,7 @@ def test_run_skips_formula_specialization_below_threshold(
     mock_load_failures: MagicMock,
     mock_build_training: MagicMock,
     mock_write_prompt: MagicMock,
+    mock_connect: MagicMock,
 ) -> None:
     mock_configure_lm.return_value = DummyLM(_DUMMY_RESPONSES)
     mock_load_cards.return_value = _base_card_definitions()
