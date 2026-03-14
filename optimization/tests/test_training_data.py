@@ -230,6 +230,56 @@ def test_task_profile_bead_fields_set() -> None:
     assert profile.epic_outcome == "closed"
 
 
+def test_build_dspy_example_bead_fields_enriched() -> None:
+    labeled = td.LabeledTaskProfile(
+        profile=_profile(
+            task_id="t-bead-enriched",
+            bead_type="task",
+            hierarchy_depth=2,
+            parent_bead_id="repomap-core-abc",
+            formula_id="formula-deploy-v1",
+            epic_outcome="closed",
+        ),
+        outcome=td.SessionOutcome.SUCCESS,
+        diagnosis_category="scope_creep",
+    )
+    example = td.build_dspy_example(labeled, {})
+    assert example.bead_type == "task"
+    assert example.hierarchy_depth == 2
+    assert example.has_parent is True
+    assert example.formula_id == "formula-deploy-v1"
+    assert example.epic_outcome == "closed"
+
+
+def test_build_dspy_example_bead_fields_in_inputs() -> None:
+    labeled = td.LabeledTaskProfile(
+        profile=_profile(task_id="t-bead-inputs"),
+        outcome=td.SessionOutcome.PARTIAL,
+        diagnosis_category="model_confusion",
+    )
+    example = td.build_dspy_example(labeled, {})
+    input_keys = example.inputs().keys()
+    assert "bead_type" in input_keys
+    assert "hierarchy_depth" in input_keys
+    assert "has_parent" in input_keys
+    assert "formula_id" in input_keys
+    assert "epic_outcome" in input_keys
+
+
+def test_build_dspy_example_bead_defaults_when_none() -> None:
+    labeled = td.LabeledTaskProfile(
+        profile=_profile(task_id="t-bead-defaults"),
+        outcome=td.SessionOutcome.PARTIAL,
+        diagnosis_category="model_confusion",
+    )
+    example = td.build_dspy_example(labeled, {})
+    assert example.bead_type == "unknown"
+    assert example.hierarchy_depth == 0
+    assert example.has_parent is False
+    assert example.formula_id == "none"
+    assert example.epic_outcome == "unknown"
+
+
 def test_beads_enrichment_dataclass() -> None:
     """BeadsEnrichment dataclass can be constructed with all fields."""
     enrichment = td.BeadsEnrichment(

@@ -876,6 +876,11 @@ def build_dspy_example(
         child_modes=profile.child_modes,
         parent_forbidden_tool_violations=profile.parent_forbidden_tool_violations,
         workflow_id=profile.workflow_id,
+        bead_type=profile.bead_type or "unknown",
+        hierarchy_depth=profile.hierarchy_depth or 0,
+        has_parent=profile.parent_bead_id is not None,
+        formula_id=profile.formula_id or "none",
+        epic_outcome=profile.epic_outcome or "unknown",
         outcome_label=labeled.outcome.value,
         diagnosis_category=labeled.diagnosis_category,
         is_kill_recovery=kill_recovery_lookup.get(profile.task_id, False),
@@ -896,6 +901,11 @@ def build_dspy_example(
         "child_modes",
         "parent_forbidden_tool_violations",
         "workflow_id",
+        "bead_type",
+        "hierarchy_depth",
+        "has_parent",
+        "formula_id",
+        "epic_outcome",
     )
 
 

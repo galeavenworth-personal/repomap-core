@@ -183,6 +183,15 @@ class CardExitCompileSignature(dspy.Signature):  # type: ignore[misc]
     historical_failures: str = dspy.InputField(
         desc="Prior missing/violated punch patterns"
     )
+    bead_type: str | None = dspy.InputField(
+        desc="Type of beads issue (epic, task, subtask)", default=None
+    )
+    hierarchy_depth: int | None = dspy.InputField(
+        desc="Depth in hierarchy (1=epic, 2=task, 3=subtask)", default=None
+    )
+    formula_id: str | None = dspy.InputField(
+        desc="Formula that spawned this work, if any", default=None
+    )
     exit_condition_prompt: str = dspy.OutputField(
         desc="Prompt text describing when the agent may exit, referencing card requirements"
     )
@@ -200,6 +209,15 @@ class FitterRecoverySignature(dspy.Signature):  # type: ignore[misc]
     )
     session_summary: str = dspy.InputField(desc="Summary of the stuck/failing session")
     tool_activity: str = dspy.InputField(desc="Recent tool calls from the session")
+    bead_type: str | None = dspy.InputField(
+        desc="Type of beads issue (epic, task, subtask)", default=None
+    )
+    hierarchy_depth: int | None = dspy.InputField(
+        desc="Depth in hierarchy (1=epic, 2=task, 3=subtask)", default=None
+    )
+    formula_id: str | None = dspy.InputField(
+        desc="Formula that spawned this work, if any", default=None
+    )
     recovery_prompt: str = dspy.OutputField(
         desc="A targeted recovery prompt that addresses the specific diagnosis"
     )
