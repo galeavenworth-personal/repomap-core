@@ -6,6 +6,11 @@ set -euo pipefail
 DOLT_DATA_DIR="${HOME}/.dolt-data/beads"
 DOLT_DATABASE="${DOLT_DATABASE:-factory}"
 
+if [[ ! "${DOLT_DATABASE}" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]; then
+  echo "ERROR: Unsafe DOLT_DATABASE identifier: '${DOLT_DATABASE}'" >&2
+  exit 3
+fi
+
 if ! command -v dolt >/dev/null 2>&1; then
   echo "ERROR: dolt not found in PATH (which dolt failed)" >&2
   exit 2

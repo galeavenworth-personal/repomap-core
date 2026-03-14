@@ -34,6 +34,7 @@ This format is not a public API and may change between versions.
 import json
 import datetime
 import os
+import re
 import subprocess
 import shutil
 import sys
@@ -48,7 +49,19 @@ KILO_STORAGE = Path.home() / ".config/Code/User/globalStorage/kilocode.kilo-code
 TASKS_DIR = KILO_STORAGE / "tasks"
 DOLT_BIN = shutil.which("dolt")
 DOLT_DATA_DIR = Path.home() / ".dolt-data/beads"
-FACTORY_DB = os.environ.get("DOLT_DATABASE", "factory")
+_SAFE_SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+
+
+def _validate_sql_identifier(value: str, label: str) -> str:
+    """Validate a SQL identifier (database/table name). Fail fast on bad input."""
+    if not _SAFE_SQL_IDENT_RE.match(value):
+        raise ValueError(f"Unsafe SQL identifier for {label}: {value!r}")
+    return value
+
+
+FACTORY_DB = _validate_sql_identifier(
+    os.environ.get("DOLT_DATABASE", "factory"), "DOLT_DATABASE"
+)
 
 
 def _sql_escape_literal(value: str) -> str:

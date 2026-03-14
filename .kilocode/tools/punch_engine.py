@@ -25,7 +25,19 @@ GATE_RUNS_JSONL = Path(".kilocode/gate_runs.jsonl")
 BATCH_SIZE = 1000
 KILO_SERVE_BASE_URL = "http://127.0.0.1:4096"
 KILO_SERVE_TIMEOUT = 5  # seconds
-FACTORY_DB = os.environ.get("DOLT_DATABASE", "factory")
+_SAFE_SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+
+
+def _validate_sql_identifier(value: str, label: str) -> str:
+    """Validate a SQL identifier (database/table name). Fail fast on bad input."""
+    if not _SAFE_SQL_IDENT_RE.match(value):
+        raise ValueError(f"Unsafe SQL identifier for {label}: {value!r}")
+    return value
+
+
+FACTORY_DB = _validate_sql_identifier(
+    os.environ.get("DOLT_DATABASE", "factory"), "DOLT_DATABASE"
+)
 
 
 def _sql_escape_literal(value: str) -> str:

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -40,7 +41,10 @@ from optimization.training_data import build_training_set
 
 DOLT_HOST = "127.0.0.1"
 DOLT_PORT = 3307
+_SAFE_SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 DOLT_DATABASE = os.environ.get("DOLT_DATABASE", "factory")
+if not _SAFE_SQL_IDENT_RE.match(DOLT_DATABASE):
+    raise ValueError(f"Unsafe DOLT_DATABASE identifier: {DOLT_DATABASE!r}")
 
 
 def _connect():
