@@ -4,7 +4,7 @@ run_compilation.py — End-to-end DSPy compilation runner
 Closes the self-learning loop by:
   1. Reading punch card definitions + checkpoint failures from Dolt
   2. Building enriched training examples for card-exit compilation
-  3. Generating card-exit prompts (one per punch card) via direct dspy.Predict() calls
+  3. Generating card-exit prompts (generic + depth/formula specializations) via direct dspy.Predict() calls
   4. Generating fitter-dispatch prompts (5 diagnosis categories) via direct dspy.Predict() calls
   5. Writing all compiled prompts to Dolt (compiled_prompts table)
 
@@ -32,6 +32,7 @@ import os
 import re
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
 
 import dspy  # type: ignore[import-untyped]
 import pymysql
@@ -111,6 +112,52 @@ def format_card_requirements(card_def: dict) -> str:
 
 
 DEFAULT_LM = "openrouter/openai/gpt-4o-mini"
+MIN_EXAMPLES_FOR_SPECIALIZATION = 3
+
+
+@dataclass
+class CardExampleGroup:
+    """Training examples grouped for card-exit prompt specialization."""
+
+    card_id: str
+    all_examples: list[dspy.Example]
+    by_depth: dict[int, list[dspy.Example]]
+    by_formula: dict[str, list[dspy.Example]]
+
+
+def group_examples_by_card(
+    training_examples: list[dspy.Example],
+) -> dict[str, CardExampleGroup]:
+    """Group examples by card_id with depth and formula subgroups."""
+    groups: dict[str, CardExampleGroup] = {}
+
+    for example in training_examples:
+        card_id = getattr(example, "card_id", None)
+        if not card_id:
+            continue
+
+        if card_id not in groups:
+            groups[card_id] = CardExampleGroup(
+                card_id=card_id,
+                all_examples=[],
+                by_depth=defaultdict(list),
+                by_formula=defaultdict(list),
+            )
+
+        group = groups[card_id]
+        group.all_examples.append(example)
+
+        depth = getattr(example, "hierarchy_depth", 0)
+        if isinstance(depth, int) and depth > 0:
+            group.by_depth[depth].append(example)
+
+        formula_id = getattr(example, "formula_id", "none")
+        if isinstance(formula_id, str):
+            formula = formula_id.strip()
+            if formula and formula.lower() != "none":
+                group.by_formula[formula].append(example)
+
+    return groups
 
 
 def configure_lm(lm_name: str) -> dspy.LM:
@@ -145,6 +192,10 @@ def generate_card_exit_prompt(
     card_id: str,
     card_def: dict,
     failures: list[str],
+    *,
+    bead_type: str | None = None,
+    hierarchy_depth: int | None = None,
+    formula_id: str | None = None,
 ) -> str:
     """Use the LM directly to generate a high-quality card-exit prompt."""
     requirements = format_card_requirements(card_def)
@@ -153,13 +204,21 @@ def generate_card_exit_prompt(
     predictor = dspy.Predict(
         CardExitCompileSignature,  # type: ignore[arg-type]
     )
+    predictor_kwargs: dict[str, object] = {
+        "task_description": f"Execute a task governed by the {card_id} punch card.",
+        "card_id": card_id,
+        "card_requirements": requirements,
+        "historical_failures": hist_text,
+    }
+    if bead_type is not None:
+        predictor_kwargs["bead_type"] = bead_type
+    if hierarchy_depth is not None:
+        predictor_kwargs["hierarchy_depth"] = hierarchy_depth
+    if formula_id is not None:
+        predictor_kwargs["formula_id"] = formula_id
+
     with dspy.context(lm=lm):
-        result = predictor(
-            task_description=f"Execute a task governed by the {card_id} punch card.",
-            card_id=card_id,
-            card_requirements=requirements,
-            historical_failures=hist_text,
-        )
+        result = predictor(**predictor_kwargs)
 
     exit_prompt = str(getattr(result, "exit_condition_prompt", "")).strip()
     self_check = str(getattr(result, "self_check_instruction", "")).strip()
@@ -286,6 +345,7 @@ def run(lm_name: str = DEFAULT_LM, dry_run: bool = False) -> None:
     print("[2/4] Building training set from Dolt telemetry...")
     training_examples = build_training_set(limit=200)
     print(f"       {len(training_examples)} training examples")
+    card_groups = group_examples_by_card(training_examples)
 
     # ── Step 2: Generate card-exit prompts via LM ───────────────
     print(f"[3/4] Generating card-exit prompts ({len(card_defs)} cards)...")
@@ -295,6 +355,8 @@ def run(lm_name: str = DEFAULT_LM, dry_run: bool = False) -> None:
     for card_id in sorted(card_defs):
         card_def = card_defs[card_id]
         card_failures = failures.get(card_id, [])
+
+        # Always compile generic card prompt for backward compatibility.
         try:
             prompt_text = generate_card_exit_prompt(
                 lm, card_id, card_def, card_failures
@@ -311,6 +373,76 @@ def run(lm_name: str = DEFAULT_LM, dry_run: bool = False) -> None:
             print(f"       ✅ card-exit:{card_id} ({len(prompt_text)} chars)")
         except Exception as e:
             print(f"       ❌ card-exit:{card_id} — {e}")
+
+        group = card_groups.get(card_id)
+        if not group:
+            continue
+
+        for depth, depth_examples in sorted(group.by_depth.items()):
+            if len(depth_examples) < MIN_EXAMPLES_FOR_SPECIALIZATION:
+                continue
+            bead_type = None
+            if depth_examples:
+                raw_bead_type = getattr(depth_examples[0], "bead_type", None)
+                if isinstance(raw_bead_type, str):
+                    normalized_bead_type = raw_bead_type.strip()
+                    if normalized_bead_type and normalized_bead_type != "unknown":
+                        bead_type = normalized_bead_type
+            prompt_id = f"card-exit:{card_id}:depth-{depth}"
+            try:
+                prompt_text = generate_card_exit_prompt(
+                    lm,
+                    card_id,
+                    card_def,
+                    card_failures,
+                    bead_type=bead_type,
+                    hierarchy_depth=depth,
+                )
+                if not dry_run:
+                    dolt_bus.write_compiled_prompt(
+                        prompt_id=prompt_id,
+                        module_name="card_exit",
+                        signature_name="CardExitCompileSignature",
+                        compiled_prompt=prompt_text,
+                        dspy_version=version,
+                    )
+                card_exit_count += 1
+                print(f"       ✅ {prompt_id} ({len(prompt_text)} chars)")
+            except Exception as e:
+                print(f"       ❌ {prompt_id} — {e}")
+
+        for formula, formula_examples in sorted(group.by_formula.items()):
+            if len(formula_examples) < MIN_EXAMPLES_FOR_SPECIALIZATION:
+                continue
+            bead_type = None
+            if formula_examples:
+                raw_bead_type = getattr(formula_examples[0], "bead_type", None)
+                if isinstance(raw_bead_type, str):
+                    normalized_bead_type = raw_bead_type.strip()
+                    if normalized_bead_type and normalized_bead_type != "unknown":
+                        bead_type = normalized_bead_type
+            prompt_id = f"card-exit:{card_id}:formula-{formula}"
+            try:
+                prompt_text = generate_card_exit_prompt(
+                    lm,
+                    card_id,
+                    card_def,
+                    card_failures,
+                    bead_type=bead_type,
+                    formula_id=formula,
+                )
+                if not dry_run:
+                    dolt_bus.write_compiled_prompt(
+                        prompt_id=prompt_id,
+                        module_name="card_exit",
+                        signature_name="CardExitCompileSignature",
+                        compiled_prompt=prompt_text,
+                        dspy_version=version,
+                    )
+                card_exit_count += 1
+                print(f"       ✅ {prompt_id} ({len(prompt_text)} chars)")
+            except Exception as e:
+                print(f"       ❌ {prompt_id} — {e}")
 
     # ── Step 3: Generate fitter-dispatch prompts via LM ─────────
     print(
@@ -346,15 +478,18 @@ def run(lm_name: str = DEFAULT_LM, dry_run: bool = False) -> None:
         conn = _connect()
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM compiled_prompts")
-        total = cur.fetchone()[0]
+        total_row = cur.fetchone()
+        total = total_row[0] if total_row is not None else 0
         cur.execute(
             "SELECT COUNT(*) FROM compiled_prompts WHERE prompt_id LIKE 'card-exit:%'"
         )
-        ce = cur.fetchone()[0]
+        ce_row = cur.fetchone()
+        ce = ce_row[0] if ce_row is not None else 0
         cur.execute(
             "SELECT COUNT(*) FROM compiled_prompts WHERE prompt_id LIKE 'fitter-dispatch:%'"
         )
-        fd = cur.fetchone()[0]
+        fd_row = cur.fetchone()
+        fd = fd_row[0] if fd_row is not None else 0
         conn.close()
         print(
             f"  Dolt compiled_prompts:   {total} total ({ce} card-exit, {fd} fitter-dispatch)"
