@@ -82,10 +82,21 @@ def _connection(ensure_schema: bool = False) -> Generator[Any, None, None]:
                 cursor.execute(CREATE_DIAGNOSIS_TABLE_SQL)
                 cursor.execute(
                     """
-                    ALTER TABLE compiled_prompts
-                    MODIFY COLUMN prompt_id VARCHAR(200) NOT NULL
+                    SELECT CHARACTER_MAXIMUM_LENGTH
+                    FROM information_schema.columns
+                    WHERE table_schema = DATABASE()
+                      AND table_name = 'compiled_prompts'
+                      AND column_name = 'prompt_id'
                     """
                 )
+                row = cursor.fetchone()
+                if row and row["CHARACTER_MAXIMUM_LENGTH"] < 200:
+                    cursor.execute(
+                        """
+                        ALTER TABLE compiled_prompts
+                        MODIFY COLUMN prompt_id VARCHAR(200) NOT NULL
+                        """
+                    )
             conn.commit()
         yield conn
     finally:

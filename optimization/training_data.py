@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -304,12 +305,14 @@ def _load_beads_enrichment(bead_ids: list[str]) -> dict[str, BeadsEnrichment]:
 
     try:
         conn = pymysql.connect(
-            host="127.0.0.1",
-            port=3307,
-            user="root",
-            database="beads_repomap-core",
+            host=os.getenv("BEADS_DOLT_HOST", os.getenv("DOLT_HOST", "127.0.0.1")),
+            port=int(os.getenv("BEADS_DOLT_PORT", os.getenv("DOLT_PORT", "3307"))),
+            user=os.getenv("BEADS_DOLT_USER", "root"),
+            database=os.getenv("BEADS_DOLT_DATABASE", "beads_repomap-core"),
             cursorclass=DictCursor,
             autocommit=False,
+            connect_timeout=5,
+            read_timeout=10,
         )
     except Exception:
         _logger.warning("Failed to connect to beads_repomap-core; skipping enrichment")
@@ -584,10 +587,12 @@ def _row_to_task_profile(
     forbidden_violations_by_task: dict[str, str] | None = None,
     workflow_id_by_task: dict[str, str] | None = None,
     beads_by_task: dict[str, BeadsEnrichment] | None = None,
+    bead_id_by_task: dict[str, str] | None = None,
 ) -> TaskProfile:
     """Convert a single punch-aggregate row into a TaskProfile."""
     task_id = str(row["task_id"])
     bead = (beads_by_task or {}).get(task_id)
+    factory_bead_id = (bead_id_by_task or {}).get(task_id)
     return TaskProfile(
         task_id=task_id,
         total_punches=_to_int(row.get("total_punches")),
@@ -614,7 +619,7 @@ def _row_to_task_profile(
             task_id
         ),
         workflow_id=(workflow_id_by_task or {}).get(task_id),
-        bead_id=bead.bead_id if bead else None,
+        bead_id=bead.bead_id if bead else factory_bead_id,
         bead_type=bead.bead_type if bead else None,
         hierarchy_depth=bead.hierarchy_depth if bead else None,
         parent_bead_id=bead.parent_bead_id if bead else None,
@@ -679,6 +684,7 @@ def extract_task_profiles(limit: int | None = None) -> list[TaskProfile]:
             forbidden_violations_by_task,
             workflow_id_by_task,
             beads_by_task,
+            bead_id_by_task,
         )
         for row in rows
     ]
