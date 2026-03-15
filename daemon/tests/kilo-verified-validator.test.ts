@@ -231,4 +231,51 @@ describe("validateFromKiloLog", () => {
     const result = await validateFromKiloLog("ses-legacy", client, DOLT_CONFIG, "execute-subtask");
     expect(result.status).toBe("pass");
   });
+
+  it("matches legacy numeric type '6' for child_spawn punches", async () => {
+    executeMock.mockResolvedValueOnce([
+      [
+        makeRequirementRow({
+          punch_type: "6",
+          punch_key_pattern: "%orchestrator%",
+          description: "legacy child_spawn requirement",
+        }),
+      ],
+    ]);
+
+    const client = makeClient([
+      makeToolMessage([
+        makeToolPart("task", { input: { subagent_type: "process-orchestrator" } }),
+      ]),
+    ]);
+
+    const result = await validateFromKiloLog("ses-legacy-child", client, DOLT_CONFIG, "plant-orchestrate");
+    expect(result.status).toBe("pass");
+    expect(result.missing).toEqual([]);
+  });
+
+  it("matches legacy numeric type '6' for child_spawn via state.input replay path", async () => {
+    executeMock.mockResolvedValueOnce([
+      [
+        makeRequirementRow({
+          punch_type: "6",
+          punch_key_pattern: "%orchestrator%",
+          description: "legacy child_spawn requirement (replay)",
+        }),
+      ],
+    ]);
+
+    const client = makeClient([
+      makeToolMessage([
+        makeToolPart("task", {
+          input: null,
+          state: { status: "completed", input: { subagent_type: "process-orchestrator" } },
+        }),
+      ]),
+    ]);
+
+    const result = await validateFromKiloLog("ses-legacy-child-replay", client, DOLT_CONFIG, "plant-orchestrate");
+    expect(result.status).toBe("pass");
+    expect(result.missing).toEqual([]);
+  });
 });

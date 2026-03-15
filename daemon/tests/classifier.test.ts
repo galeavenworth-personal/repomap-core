@@ -119,7 +119,7 @@ describe("classifyEvent", () => {
     expect(result?.punchKey).toBe("edit_file");
   });
 
-  it("maps task tool calls to child_spawn using subagent_type", () => {
+  it("maps task tool calls to child_spawn using subagent_type from input (real-time SSE path)", () => {
     const result = classifyEvent(
       makeEvent("message.part.updated", {
         part: {
@@ -134,6 +134,55 @@ describe("classifyEvent", () => {
 
     expect(result?.punchType).toBe("child_spawn");
     expect(result?.punchKey).toBe("process-orchestrator");
+  });
+
+  it("maps task tool calls to child_spawn using subagent_type from state.input (replay path)", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-child-replay",
+          tool: "task",
+          state: { status: "completed", input: { subagent_type: "architect" } },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("child_spawn");
+    expect(result?.punchKey).toBe("architect");
+  });
+
+  it("falls back to unknown_child when subagent_type is absent in both input and state.input", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-child-unknown",
+          tool: "task",
+          state: { status: "completed" },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("child_spawn");
+    expect(result?.punchKey).toBe("unknown_child");
+  });
+
+  it("prefers input.subagent_type over state.input.subagent_type when both are present", () => {
+    const result = classifyEvent(
+      makeEvent("message.part.updated", {
+        part: {
+          type: "tool",
+          sessionID: "daemon-child-both",
+          tool: "task",
+          input: { subagent_type: "code" },
+          state: { status: "completed", input: { subagent_type: "architect" } },
+        },
+      })
+    );
+
+    expect(result?.punchType).toBe("child_spawn");
+    expect(result?.punchKey).toBe("code");
   });
 
   it("maps bash gate commands to gate_pass", () => {

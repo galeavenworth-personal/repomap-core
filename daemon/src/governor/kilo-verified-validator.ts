@@ -94,6 +94,8 @@ function punchTypeAliases(punchType: string): string[] {
   const aliases = [punchType];
   if (punchType === "mcp_call") aliases.push("3");
   if (punchType === "gate_pass") aliases.push("4");
+  if (punchType === "child_spawn") aliases.push("6");
+  if (punchType === "child_complete") aliases.push("7");
   if (punchType === "step_complete") aliases.push("9");
   return aliases;
 }
