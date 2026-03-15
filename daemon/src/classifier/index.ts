@@ -98,11 +98,18 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function extractBashCommand(part: Record<string, unknown>): string | null {
+  // Real-time SSE event shape: part.input.command
   const input = part.input;
   if (typeof input === "string") return input;
   const inputRecord = asRecord(input);
   if (typeof inputRecord.command === "string") return inputRecord.command;
   if (typeof inputRecord.cmd === "string") return inputRecord.cmd;
+
+  // session.messages replay shape: part.state.input.command
+  const state = asRecord(part.state);
+  const stateInput = asRecord(state.input);
+  if (typeof stateInput.command === "string") return stateInput.command;
+  if (typeof stateInput.cmd === "string") return stateInput.cmd;
   return null;
 }
 

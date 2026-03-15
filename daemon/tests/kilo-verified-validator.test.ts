@@ -91,6 +91,72 @@ describe("validateFromKiloLog", () => {
     expect(result.violations).toEqual([]);
   });
 
+  it("derives gate_pass from session.messages replay shape (state.input.command)", async () => {
+    executeMock.mockResolvedValueOnce([
+      [
+        makeRequirementRow({
+          punch_type: "gate_pass",
+          punch_key_pattern: "ruff-format",
+          description: "ruff format",
+        }),
+      ],
+    ]);
+
+    const client = makeClient([
+      {
+        parts: [
+          {
+            type: "tool",
+            tool: "bash",
+            input: null,
+            state: { status: "completed", input: { command: "ruff format --check ." } },
+          },
+          {
+            type: "step-finish",
+          },
+        ],
+      },
+    ]);
+
+    const result = await validateFromKiloLog("ses-replay-shape", client, DOLT_CONFIG, "execute-subtask");
+
+    expect(result.status).toBe("pass");
+    expect(result.missing).toEqual([]);
+  });
+
+  it("does not derive task_exit when session has no step-finish parts", async () => {
+    executeMock.mockResolvedValueOnce([
+      [
+        makeRequirementRow({
+          punch_type: "step_complete",
+          punch_key_pattern: "task_exit",
+          description: "must complete",
+        }),
+      ],
+    ]);
+
+    const client = makeClient([
+      {
+        parts: [
+          {
+            type: "tool",
+            tool: "readFile",
+            state: { status: "completed" },
+          },
+        ],
+      },
+    ]);
+
+    const result = await validateFromKiloLog("ses-abandoned", client, DOLT_CONFIG, "execute-subtask");
+
+    expect(result.status).toBe("fail");
+    expect(result.missing).toHaveLength(1);
+    expect(result.missing[0]).toMatchObject({
+      punchType: "step_complete",
+      punchKeyPattern: "task_exit",
+    });
+  });
+
   it("fails when a required punch is missing", async () => {
     executeMock.mockResolvedValueOnce([[makeRequirementRow({ punch_key_pattern: "edit_file%" })]]);
 

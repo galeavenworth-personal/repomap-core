@@ -233,7 +233,7 @@ export async function runCatchUp(
     const sinceMs = options?.sinceMs ?? oneDayAgoMs;
     const recentSessions = (sessions as unknown as Session[]).filter((s) => {
       const updatedMs = resolveUpdatedMs(s);
-      return typeof updatedMs === "number" && updatedMs > sinceMs;
+      return typeof updatedMs === "number" && updatedMs >= sinceMs;
     });
 
     const catchUpMode = options?.sinceMs

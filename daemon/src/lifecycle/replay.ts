@@ -129,6 +129,65 @@ async function resolveSessionRecord(
   return undefined;
 }
 
+async function replayMessagePart(
+  sessionId: string,
+  partRecord: Record<string, unknown>,
+  messageRole: string,
+  writer: DoltWriter | undefined,
+  dryRun: boolean,
+  verbose: boolean,
+  log: (message: string) => void,
+): Promise<{ punch: Punch | null; rowsWritten: number }> {
+  let rowsWritten = 0;
+
+  const punch = classifyEvent({
+    type: "message.part.updated",
+    properties: { part: { ...partRecord, sessionID: sessionId } },
+  });
+
+  if (punch) {
+    if (verbose) {
+      log(`[replay] ${sessionId} ${punch.punchType}/${punch.punchKey} ${punch.sourceHash}`);
+    }
+    if (writer && !dryRun) {
+      await writer.writePunch(punch);
+      rowsWritten += 1;
+    }
+  }
+
+  const partType = pickString(partRecord, "type");
+  if (partType === "text" && writer && !dryRun) {
+    const text = pickString(partRecord, "text", "content") ?? "";
+    await writer.writeMessage({
+      sessionId,
+      role: pickString(partRecord, "role") ?? messageRole,
+      contentType: "text",
+      contentPreview: text.slice(0, 512),
+      ts: pickTimestamp(partRecord),
+      cost: pickNumber(partRecord, "cost") ?? punch?.cost,
+      tokensIn: pickNumber(asRecord(partRecord.tokens), "input") ?? punch?.tokensInput,
+      tokensOut: pickNumber(asRecord(partRecord.tokens), "output") ?? punch?.tokensOutput,
+    });
+    rowsWritten += 1;
+  } else if (partType === "tool" && writer && !dryRun) {
+    const state = asRecord(partRecord.state);
+    const toolName = pickString(partRecord, "tool") ?? punch?.punchKey ?? "unknown_tool";
+    await writer.writeToolCall({
+      sessionId,
+      toolName,
+      argsSummary: summarizeArgs(partRecord.input),
+      status: pickString(state, "status"),
+      error: pickString(state, "error"),
+      durationMs: pickNumber(partRecord, "durationMs"),
+      cost: pickNumber(partRecord, "cost") ?? punch?.cost,
+      ts: pickTimestamp(partRecord),
+    });
+    rowsWritten += 1;
+  }
+
+  return { punch, rowsWritten };
+}
+
 export async function replaySessionFromLog(
   sessionId: string,
   client: SessionMessagesClient,
@@ -176,55 +235,19 @@ export async function replaySessionFromLog(
 
     for (const part of parts) {
       const partRecord = asRecord(part);
-      const punch = classifyEvent({
-        type: "message.part.updated",
-        properties: { part: { ...partRecord, sessionID: sessionId } },
-      });
-
-      if (punch) {
-        derivedPunches.push(punch);
-        if (verbose) {
-          log(`[replay] ${sessionId} ${punch.punchType}/${punch.punchKey} ${punch.sourceHash}`);
-        }
-        if (writer && !dryRun) {
-          await writer.writePunch(punch);
-          rowsWritten += 1;
-        }
+      const result = await replayMessagePart(
+        sessionId,
+        partRecord,
+        messageRole,
+        writer,
+        dryRun,
+        verbose,
+        log,
+      );
+      if (result.punch) {
+        derivedPunches.push(result.punch);
       }
-
-      const partType = pickString(partRecord, "type");
-      if (partType === "text") {
-        const text = pickString(partRecord, "text", "content") ?? "";
-        if (writer && !dryRun) {
-          await writer.writeMessage({
-            sessionId,
-            role: pickString(partRecord, "role") ?? messageRole,
-            contentType: "text",
-            contentPreview: text.slice(0, 512),
-            ts: pickTimestamp(partRecord),
-            cost: pickNumber(partRecord, "cost") ?? punch?.cost,
-            tokensIn: pickNumber(asRecord(partRecord.tokens), "input") ?? punch?.tokensInput,
-            tokensOut: pickNumber(asRecord(partRecord.tokens), "output") ?? punch?.tokensOutput,
-          });
-          rowsWritten += 1;
-        }
-      } else if (partType === "tool") {
-        const state = asRecord(partRecord.state);
-        const toolName = pickString(partRecord, "tool") ?? punch?.punchKey ?? "unknown_tool";
-        if (writer && !dryRun) {
-          await writer.writeToolCall({
-            sessionId,
-            toolName,
-            argsSummary: summarizeArgs(partRecord.input),
-            status: pickString(state, "status"),
-            error: pickString(state, "error"),
-            durationMs: pickNumber(partRecord, "durationMs"),
-            cost: pickNumber(partRecord, "cost") ?? punch?.cost,
-            ts: pickTimestamp(partRecord),
-          });
-          rowsWritten += 1;
-        }
-      }
+      rowsWritten += result.rowsWritten;
     }
   }
 

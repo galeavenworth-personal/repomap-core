@@ -537,6 +537,7 @@ export function createDaemon(config: DaemonConfig): Daemon {
               console.warn(
                 `[oc-daemon] No SSE events received for ${INACTIVITY_TIMEOUT_MS}ms while connected; forcing reconnect.`
               );
+              await iterator.return?.(undefined);
               break;
             }
 

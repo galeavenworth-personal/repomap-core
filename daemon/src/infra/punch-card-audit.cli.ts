@@ -180,7 +180,7 @@ function formatAuditResult(result: AuditResult): string {
     return lines.join("\n");
   }
 
-  lines.push(`Punch card audit (${result.tasks.length} tasks, engine=mysql2)`);
+  lines.push(`Punch card audit (${result.tasks.length} tasks, engine=kilo-verified)`);
 
   for (const task of result.tasks) {
     switch (task.status) {

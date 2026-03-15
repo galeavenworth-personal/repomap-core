@@ -35,12 +35,21 @@ function asString(value: unknown): string | null {
 }
 
 function extractBashCommand(part: Record<string, unknown>): string | null {
+  // Real-time SSE event shape: part.input.command
   const input = part.input;
   if (typeof input === "string") {
     return input;
   }
   const inputRecord = asRecord(input);
-  return asString(inputRecord.command) ?? asString(inputRecord.cmd);
+  const directCommand = asString(inputRecord.command) ?? asString(inputRecord.cmd);
+  if (directCommand) {
+    return directCommand;
+  }
+
+  // session.messages replay shape: part.state.input.command
+  const state = asRecord(part.state);
+  const stateInput = asRecord(state.input);
+  return asString(stateInput.command) ?? asString(stateInput.cmd);
 }
 
 function classifyGateFromCommand(command: string, status: string): DerivedPunch | null {
@@ -133,6 +142,62 @@ async function fetchCardRequirements(
   }));
 }
 
+function derivePartPunches(
+  sessionId: string,
+  part: Record<string, unknown>,
+): DerivedPunch[] {
+  const partPunches: DerivedPunch[] = [];
+
+  const punch = classifyEvent({
+    type: "message.part.updated",
+    properties: {
+      part: {
+        ...part,
+        sessionID: sessionId,
+      },
+    },
+  });
+
+  if (punch) {
+    partPunches.push({ punchType: punch.punchType, punchKey: punch.punchKey });
+
+    const toolName = typeof part.tool === "string" ? part.tool : "";
+    if (punch.punchType === "mcp_call" && toolName.startsWith("context7_")) {
+      const suffix = toolName.slice("context7_".length);
+      partPunches.push({
+        punchType: "mcp_call",
+        punchKey: `context7:${suffix}`,
+      });
+    }
+  }
+
+  if (typeof part.tool === "string" && part.tool.toLowerCase() === "bash") {
+    const state = asRecord(part.state);
+    const status = asString(state.status);
+    const command = extractBashCommand(part);
+    if (command && (status === "completed" || status === "error")) {
+      const gatePunch = classifyGateFromCommand(command, status);
+      if (gatePunch) {
+        partPunches.push(gatePunch);
+      }
+    }
+  }
+
+  return partPunches;
+}
+
+function hasSessionCompletionEvidence(messages: unknown[]): boolean {
+  return messages.some((msgUnknown) => {
+    const msg = asRecord(msgUnknown);
+    const rawParts = msg.parts;
+    const msgParts = Array.isArray(rawParts) ? rawParts : [];
+    return msgParts.some((p) => {
+      const pr = asRecord(p);
+      return pr.type === "step-finish";
+    });
+  });
+}
+
 function derivePunches(sessionId: string, messages: unknown[]): DerivedPunch[] {
   const punches: DerivedPunch[] = [];
 
@@ -143,44 +208,11 @@ function derivePunches(sessionId: string, messages: unknown[]): DerivedPunch[] {
 
     for (const partUnknown of parts) {
       const part = asRecord(partUnknown);
-      const punch = classifyEvent({
-        type: "message.part.updated",
-        properties: {
-          part: {
-            ...part,
-            sessionID: sessionId,
-          },
-        },
-      });
-
-      if (punch) {
-        punches.push({ punchType: punch.punchType, punchKey: punch.punchKey });
-
-        const toolName = typeof part.tool === "string" ? part.tool : "";
-        if (punch.punchType === "mcp_call" && toolName.startsWith("context7_")) {
-          const suffix = toolName.slice("context7_".length);
-          punches.push({
-            punchType: "mcp_call",
-            punchKey: `context7:${suffix}`,
-          });
-        }
-      }
-
-      if (typeof part.tool === "string" && part.tool.toLowerCase() === "bash") {
-        const state = asRecord(part.state);
-        const status = asString(state.status);
-        const command = extractBashCommand(part);
-        if (command && (status === "completed" || status === "error")) {
-          const gatePunch = classifyGateFromCommand(command, status);
-          if (gatePunch) {
-            punches.push(gatePunch);
-          }
-        }
-      }
+      punches.push(...derivePartPunches(sessionId, part));
     }
   }
 
-  if (messages.length > 0) {
+  if (hasSessionCompletionEvidence(messages)) {
     punches.push({
       punchType: "step_complete",
       punchKey: "task_exit",
@@ -188,6 +220,49 @@ function derivePunches(sessionId: string, messages: unknown[]): DerivedPunch[] {
   }
 
   return punches;
+}
+
+interface RequirementEvaluation {
+  missing: KiloVerifiedValidationResult["missing"];
+  violations: KiloVerifiedValidationResult["violations"];
+}
+
+function evaluateRequirements(
+  requirements: PunchCardRequirement[],
+  punches: DerivedPunch[],
+): RequirementEvaluation {
+  const missing: KiloVerifiedValidationResult["missing"] = [];
+  const violations: KiloVerifiedValidationResult["violations"] = [];
+
+  for (const requirement of requirements) {
+    if (!requirement.required && !requirement.forbidden) {
+      continue;
+    }
+
+    const count = punches.filter((punch) => matchesRequirement(punch, requirement)).length;
+
+    if (requirement.forbidden) {
+      if (count > 0) {
+        violations.push({
+          punchType: requirement.punchType,
+          punchKeyPattern: requirement.punchKeyPattern,
+          count,
+          description: requirement.description,
+        });
+      }
+      continue;
+    }
+
+    if (requirement.required && count <= 0) {
+      missing.push({
+        punchType: requirement.punchType,
+        punchKeyPattern: requirement.punchKeyPattern,
+        description: requirement.description,
+      });
+    }
+  }
+
+  return { missing, violations };
 }
 
 export async function validateFromKiloLog(
@@ -222,36 +297,7 @@ export async function validateFromKiloLog(
       throw new Error(`no requirements found for card '${cardId}'`);
     }
 
-    const missing: KiloVerifiedValidationResult["missing"] = [];
-    const violations: KiloVerifiedValidationResult["violations"] = [];
-
-    for (const requirement of requirements) {
-      if (!requirement.required && !requirement.forbidden) {
-        continue;
-      }
-
-      const count = punches.filter((punch) => matchesRequirement(punch, requirement)).length;
-
-      if (requirement.forbidden) {
-        if (count > 0) {
-          violations.push({
-            punchType: requirement.punchType,
-            punchKeyPattern: requirement.punchKeyPattern,
-            count,
-            description: requirement.description,
-          });
-        }
-        continue;
-      }
-
-      if (requirement.required && count <= 0) {
-        missing.push({
-          punchType: requirement.punchType,
-          punchKeyPattern: requirement.punchKeyPattern,
-          description: requirement.description,
-        });
-      }
-    }
+    const { missing, violations } = evaluateRequirements(requirements, punches);
 
     return {
       status: missing.length === 0 && violations.length === 0 ? "pass" : "fail",
