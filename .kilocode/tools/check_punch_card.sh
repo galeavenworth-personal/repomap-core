@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Thin wrapper — delegates to TypeScript CLI via tsx.
+# The CLI now uses the kilo-verified validator (event-log replay + classifier).
 # See: daemon/src/infra/punch-card-check.cli.ts
 #
 # Usage: check_punch_card.sh [--parent-session UUID] [--enforced-only] <session_id> <card_id>

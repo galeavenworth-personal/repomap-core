@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Punch card engine for task verification."""
+"""Punch card engine for read-only validation and reporting.
+
+As part of lzn.2, model-side write operations (`mint`, `check`) were removed.
+The daemon projector is the sole writer to Dolt materialized views.
+"""
 
 import argparse
 import csv
 import datetime
-import hashlib
 import io
 import json
 import os
@@ -21,8 +24,6 @@ KILO_STORAGE = Path.home() / ".config/Code/User/globalStorage/kilocode.kilo-code
 TASKS_DIR = KILO_STORAGE / "tasks"
 DOLT_BIN = shutil.which("dolt")
 DOLT_DATA_DIR = Path.home() / ".dolt-data/beads"
-GATE_RUNS_JSONL = Path(".kilocode/gate_runs.jsonl")
-BATCH_SIZE = 1000
 KILO_SERVE_BASE_URL = "http://127.0.0.1:4096"
 KILO_SERVE_TIMEOUT = 5  # seconds
 _SAFE_SQL_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
@@ -212,300 +213,6 @@ def resolve_task_id(
         file=sys.stderr,
     )
     sys.exit(1)
-
-
-def load_ui_messages(task_id: str) -> list[dict]:
-    """Load ui_messages.json for a given task."""
-    path = TASKS_DIR / task_id / "ui_messages.json"
-    try:
-        path.resolve().relative_to(TASKS_DIR.resolve())
-    except ValueError:
-        print(f"WARNING: task_id traversal blocked: {task_id}", file=sys.stderr)
-        return []
-    if not path.exists():
-        task_dir = TASKS_DIR / task_id
-        if not task_dir.exists():
-            print(
-                f"WARNING: task directory not found: {task_dir} — "
-                "is this a valid Kilo Code task UUID? "
-                "(hint: use 'auto' as task_id for auto-discovery)",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"WARNING: ui_messages.json not found in {task_dir}",
-                file=sys.stderr,
-            )
-        return []
-    try:
-        return json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
-        print(
-            f"WARNING: corrupt ui_messages.json for task {task_id}: {exc}",
-            file=sys.stderr,
-        )
-        return []
-
-
-def _observed_at_from_ts(ts_ms: int | float) -> tuple[str, str]:
-    """Build ISO + SQL datetime strings from millisecond epoch timestamp."""
-    dt = datetime.datetime.fromtimestamp(ts_ms / 1000, tz=datetime.timezone.utc)
-    observed_iso = dt.isoformat()
-    observed_sql = dt.strftime("%Y-%m-%d %H:%M:%S")
-    return observed_iso, observed_sql
-
-
-def _build_source_hash(
-    task_id: str,
-    punch_type: str,
-    punch_key: str,
-    observed_at_iso: str,
-) -> str:
-    """Compute deterministic source hash for punch deduplication."""
-    raw = f"{task_id}:{punch_type}:{punch_key}:{observed_at_iso}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _to_int_timestamp(value: object) -> int | None:
-    """Normalize timestamp-like values to int milliseconds when possible."""
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    return None
-
-
-def _parse_json_text(text: object) -> dict | None:
-    """Parse message text JSON safely and return dict payload if present."""
-    if not isinstance(text, str):
-        return None
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    return data
-
-
-def _normalize_tool_name(name: str) -> str:
-    """Convert camelCase tool names to snake_case for punch-card matching.
-
-    Kilo Code UI emits camelCase (editFile, applyDiff, writeToFile, readFile,
-    newTask).  Punch cards use snake_case patterns (edit_file%, apply_diff%,
-    write_to_file%).
-    """
-    # Insert underscore before uppercase letters, then lowercase
-    s1 = re.sub(r"([A-Z])", r"_\1", name)
-    return s1.lower().lstrip("_")
-
-
-def _emit_punch(
-    punches: list[tuple[str, str, str, str]],
-    task_id: str,
-    punch_type: str,
-    punch_key: str,
-    ts_ms: int,
-) -> None:
-    """Append one normalized punch tuple for later SQL insert batching."""
-    observed_iso, observed_sql = _observed_at_from_ts(ts_ms)
-    source_hash = _build_source_hash(task_id, punch_type, punch_key, observed_iso)
-    punches.append((punch_type, punch_key, observed_sql, source_hash))
-
-
-def _extract_ui_punches(
-    task_id: str, ui_messages: list[dict]
-) -> list[tuple[str, str, str, str]]:
-    """Extract punch tuples from ui_messages according to event mapping rules."""
-    punches: list[tuple[str, str, str, str]] = []
-
-    for msg in ui_messages:
-        ts_ms = _to_int_timestamp(msg.get("ts"))
-        if ts_ms is None:
-            continue
-
-        ask = msg.get("ask")
-        say = msg.get("say")
-
-        if ask == "tool":
-            data = _parse_json_text(msg.get("text"))
-            if not data:
-                continue
-
-            tool_name = data.get("tool")
-            if tool_name == "newTask":
-                mode = data.get("mode")
-                if isinstance(mode, str) and mode:
-                    _emit_punch(
-                        punches,
-                        task_id,
-                        "child_spawn",
-                        _normalize_tool_name(mode),
-                        ts_ms,
-                    )
-                continue
-
-            if isinstance(tool_name, str) and tool_name:
-                _emit_punch(
-                    punches,
-                    task_id,
-                    "tool_call",
-                    _normalize_tool_name(tool_name),
-                    ts_ms,
-                )
-            continue
-
-        if ask == "command":
-            text = str(msg.get("text", ""))
-            cmd_text = text[:197] + "..." if len(text) > 200 else text
-            _emit_punch(punches, task_id, "command_exec", cmd_text, ts_ms)
-            continue
-
-        if ask == "use_mcp_server":
-            data = _parse_json_text(msg.get("text"))
-            if not data:
-                continue
-            server = data.get("serverName")
-            tool = data.get("toolName")
-            if isinstance(server, str) and isinstance(tool, str):
-                _emit_punch(punches, task_id, "mcp_call", f"{server}:{tool}", ts_ms)
-            continue
-
-        if say == "completion_result":
-            _emit_punch(punches, task_id, "step_complete", "task_exit", ts_ms)
-            continue
-
-        if say == "subtask_result":
-            _emit_punch(punches, task_id, "child_complete", "child_return", ts_ms)
-            continue
-
-    return punches
-
-
-def _extract_gate_punches(
-    task_id: str, bead_id: str | None
-) -> list[tuple[str, str, str, str]]:
-    """Extract gate pass/fail punches from gate_runs JSONL matching bead_id."""
-    punches: list[tuple[str, str, str, str]] = []
-    if bead_id is None:
-        return punches
-    if not GATE_RUNS_JSONL.exists():
-        return punches
-
-    try:
-        lines = GATE_RUNS_JSONL.read_text().splitlines()
-    except OSError as exc:
-        print(f"WARNING: cannot read {GATE_RUNS_JSONL}: {exc}", file=sys.stderr)
-        return punches
-
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(rec, dict):
-            continue
-        if rec.get("bead_id") != bead_id:
-            continue
-
-        gate_id = rec.get("gate_id")
-        if not isinstance(gate_id, str) or not gate_id:
-            continue
-
-        run_ts = rec.get("run_timestamp")
-        ts_ms = _to_int_timestamp(run_ts)
-        if ts_ms is None and isinstance(run_ts, str):
-            try:
-                dt = datetime.datetime.fromisoformat(run_ts.replace("Z", "+00:00"))
-                ts_ms = int(dt.timestamp() * 1000)
-            except ValueError:
-                pass
-        if ts_ms is None:
-            continue
-
-        exit_code = rec.get("exit_code")
-        if not isinstance(exit_code, int):
-            continue
-
-        punch_type = "gate_pass" if exit_code == 0 else "gate_fail"
-        _emit_punch(punches, task_id, punch_type, gate_id, ts_ms)
-
-    return punches
-
-
-def _insert_punches(
-    task_id: str,
-    punches: list[tuple[str, str, str, str]],
-) -> int:
-    """Insert punches using INSERT IGNORE batch SQL and return inserted count."""
-    if not punches:
-        return 0
-
-    task_q = _sql_escape_literal(task_id)
-
-    before_out = dolt_sql(
-        f"SELECT COUNT(*) FROM {FACTORY_DB}.punches WHERE task_id = '{task_q}'"
-    )
-    before_count = 0
-    if before_out:
-        rows = _parse_csv_rows(before_out)
-        if len(rows) >= 2 and rows[1]:
-            try:
-                before_count = int(rows[1][0])
-            except ValueError:
-                pass
-
-    value_parts: list[str] = []
-    for punch_type, punch_key, observed_at, source_hash in punches:
-        punch_type_q = _sql_escape_literal(punch_type)
-        punch_key_q = _sql_escape_literal(punch_key)
-        observed_at_q = _sql_escape_literal(observed_at)
-        source_hash_q = _sql_escape_literal(source_hash)
-        value_parts.append(
-            "("
-            f"'{task_q}', '{punch_type_q}', '{punch_key_q}', "
-            f"'{observed_at_q}', '{source_hash_q}'"
-            ")"
-        )
-
-    for i in range(0, len(value_parts), BATCH_SIZE):
-        batch = value_parts[i : i + BATCH_SIZE]
-        insert_query = (
-            f"INSERT IGNORE INTO {FACTORY_DB}.punches "
-            "(task_id, punch_type, punch_key, observed_at, source_hash) VALUES "
-            + ", ".join(batch)
-        )
-        out = dolt_sql(insert_query)
-        if out is None:
-            return 0
-
-    after_out = dolt_sql(
-        f"SELECT COUNT(*) FROM {FACTORY_DB}.punches WHERE task_id = '{task_q}'"
-    )
-    after_count = 0
-    if after_out:
-        rows = _parse_csv_rows(after_out)
-        if len(rows) >= 2 and rows[1]:
-            try:
-                after_count = int(rows[1][0])
-            except ValueError:
-                pass
-
-    return after_count - before_count
-
-
-def cmd_mint(task_id: str, bead_id: str | None = None) -> int:
-    """Mint punches from task ui_messages.json and optional gate_runs.jsonl."""
-    ui_messages = load_ui_messages(task_id)
-    ui_punches = _extract_ui_punches(task_id, ui_messages)
-    gate_punches = _extract_gate_punches(task_id, bead_id)
-    all_punches = ui_punches + gate_punches
-    inserted_count = _insert_punches(task_id, all_punches)
-    print(f"Minted punches: {inserted_count}")
-    return inserted_count
 
 
 def _fetch_card_requirements(card_id: str) -> list[dict[str, object]]:
@@ -798,18 +505,6 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         )
 
-    mint_p = sub.add_parser("mint", help="Mint punches from task events")
-    mint_p.add_argument(
-        "task_id",
-        help="Kilo Code task UUID, or 'auto' to discover the current task",
-    )
-    mint_p.add_argument(
-        "--bead-id",
-        default=None,
-        help="Beads issue ID for gate_runs.jsonl matching",
-    )
-    _add_session_args(mint_p)
-
     eval_p = sub.add_parser("evaluate", help="Evaluate a punch card for a task")
     eval_p.add_argument(
         "task_id",
@@ -833,7 +528,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    """CLI entry point for mint/evaluate/checkpoint commands."""
+    """CLI entry point for evaluate/checkpoint commands."""
     parser = build_parser()
     args = parser.parse_args()
 
@@ -844,10 +539,7 @@ def main() -> int:
         child_index=args.child_index,
     )
 
-    if args.command == "mint":
-        cmd_mint(task_id, bead_id=args.bead_id)
-        return 0
-    elif args.command == "evaluate":
+    if args.command == "evaluate":
         status, _missing, _violations = cmd_evaluate(task_id, args.card_id)
         return 0 if status == "pass" else 1
     elif args.command == "checkpoint":

@@ -24,7 +24,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import mysql from "mysql2/promise";
 
-import { PunchCardValidator } from "../src/governor/punch-card-validator.js";
+import {
+  checkPunchCard,
+  defaultCheckConfig,
+} from "../src/infra/punch-card-check.cli.js";
 import {
   type AuditResult,
   type FactoryDispatchConfig,
@@ -325,25 +328,15 @@ describe.skipIf(SKIP)(
           const r = results.get(scenario.name);
           if (!r?.audit) continue;
 
-          // Independently validate using PunchCardValidator
-          const validator = new PunchCardValidator({
-            host: DOLT_HOST,
-            port: DOLT_PORT,
-            database: DOLT_DB,
-            user: "root",
+          const independent = await checkPunchCard(defaultCheckConfig(), {
+            sessionId: r.sessionId,
+            cardId: scenario.cardId,
           });
 
-          try {
-            await validator.connect();
-            const independent = await validator.validatePunchCard(r.sessionId, scenario.cardId);
-
-            expect(
-              independent.status,
-              `${scenario.name}: independent validation should match audit`,
-            ).toBe(r.audit.status);
-          } finally {
-            await validator.disconnect();
-          }
+          expect(
+            independent.passed ? "pass" : "fail",
+            `${scenario.name}: independent validation should match audit`,
+          ).toBe(r.audit.status);
         }
       });
     });

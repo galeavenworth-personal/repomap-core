@@ -1,6 +1,4 @@
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
+import { asRecord } from "../../src/infra/record-utils.js";
 
 function hasNonTerminalStepFinish(part: Record<string, unknown>): boolean {
   if (part.type !== "step-finish") return false;

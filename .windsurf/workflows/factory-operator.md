@@ -20,6 +20,18 @@ venv for all Python execution, including running tests on Projects/ code.
 
 ---
 
+## 0. Chain of Custody (Mandatory)
+
+All factory status claims must follow `.kilocode/rules/chain-of-custody.md`.
+
+- Treat `kilo serve` SSE (`GET /event`) as ground truth event log.
+- Classify trust level for every status claim (`verified`, `projected`, `untrusted`).
+- Include provenance in every validation result: `sourceSessionId`, `messageCount`,
+  `derivationPath`, `trustLevel`.
+- Reject status claims without provenance as untrusted.
+
+---
+
 ## 1. Prerequisites (one-time per machine)
 
 ```bash

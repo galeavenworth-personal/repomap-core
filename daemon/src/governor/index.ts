@@ -32,12 +32,6 @@ export {
   type SessionResponse,
 } from "./fitter-dispatch.js";
 export {
-  PunchCardValidator,
-} from "./punch-card-validator.js";
-export {
-  SubtaskVerifier,
-} from "./subtask-verifier.js";
-export {
   BaseDoltClient,
   toNumber,
   parseEnvFloat,
@@ -76,12 +70,14 @@ export {
   type FitterDispatchInput,
   type FitterResult,
   type PunchCardRequirement,
-  type ValidationResult,
-  type ToolAdherenceResult,
-  type SubtaskValidation,
   type AuditSeverity,
   type AuditAnomalyType,
   type AuditFinding,
   type SessionAuditConfig,
   type SessionAuditReport,
 } from "./types.js";
+export {
+  type ValidationTrustLevel,
+  type ValidationChainOfCustody,
+  type KiloVerifiedValidationResult,
+} from "./validation-types.js";
