@@ -5,6 +5,7 @@ artifacts. It normalizes heterogeneous artifact formats into uniform
 in-memory collections and supports location mapping for falsifiability.
 
 Primary entry points:
+- :class:`query.service.QueryService` — agent-friendly facade (recommended)
 - :class:`query.artifact_store.ArtifactStore` — normalize artifacts into collections
 - :class:`query.query_engine.QueryEngine` — execute typed filter queries
 - :class:`query.query_engine.StructuredQuery` — typed filter AST for queries
@@ -22,6 +23,7 @@ from query.query_engine import (
     StructuredQuery,
     validate_query,
 )
+from query.service import QueryService
 
 __all__ = [
     "AndFilter",
@@ -33,6 +35,7 @@ __all__ = [
     "OrFilter",
     "QueryEngine",
     "QueryResult",
+    "QueryService",
     "StructuredQuery",
     "validate_query",
 ]
