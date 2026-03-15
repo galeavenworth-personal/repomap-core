@@ -387,15 +387,72 @@ async function writeInitialTask(
   }
 }
 
+/**
+ * Derive hierarchy depth from a bead ID convention: dots indicate nesting.
+ * "repomap-core-1ax" → 1, "repomap-core-1ax.3" → 2, "repomap-core-mol-d9jz.2" → 2
+ */
+function beadDepth(beadId: string): number {
+  const base = beadId.replace(/^repomap-core-/, "");
+  const dotCount = (base.match(/\./g) ?? []).length;
+  return dotCount + 1;
+}
+
+/**
+ * Look up formula_id from beads DB metadata for a given bead.
+ * Returns { formulaId, depth } or nulls on any failure.
+ */
+async function lookupBeadContext(
+  beadId: string,
+  doltHost: string,
+  doltPort: number,
+): Promise<{ formulaId: string | undefined; depth: number }> {
+  const depth = beadDepth(beadId);
+  try {
+    const conn = await createMysqlConnection({
+      host: doltHost,
+      port: doltPort,
+      user: process.env.DOLT_USER ?? "root",
+      password: process.env.DOLT_PASSWORD ?? "",
+      database: "beads_repomap-core",
+      connectTimeout: 2000,
+    });
+    try {
+      const [rows] = await conn.execute(
+        "SELECT JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.formula_id')) AS formula_id FROM issues WHERE id = ?",
+        [beadId],
+      );
+      const row = (rows as Array<{ formula_id: string | null }>)[0];
+      const formulaId = row?.formula_id && row.formula_id !== "null" ? row.formula_id : undefined;
+      return { formulaId, depth };
+    } finally {
+      await conn.end();
+    }
+  } catch {
+    return { formulaId: undefined, depth };
+  }
+}
+
 async function maybeInjectCardPrompt(
   payload: PromptPayload,
   config: FactoryDispatchConfig,
   log: Logger,
 ): Promise<void> {
   try {
-    const cardResolution = config.cardId
-      ? await resolveCardExitPrompt(config.mode, config.cardId)
-      : await resolveCardExitPrompt(config.mode);
+    let depth: number | undefined;
+    let formulaId: string | undefined;
+
+    if (config.beadId) {
+      const ctx = await lookupBeadContext(config.beadId, config.host, config.doltPort);
+      depth = ctx.depth;
+      formulaId = ctx.formulaId;
+    }
+
+    const cardResolution = await resolveCardExitPrompt(
+      config.mode,
+      config.cardId || undefined,
+      depth,
+      formulaId,
+    );
     if (cardResolution.prompt) {
       for (const part of payload.parts) {
         if (part.type === "text" && typeof part.text === "string") {
