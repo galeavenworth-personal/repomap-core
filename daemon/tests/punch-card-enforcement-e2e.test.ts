@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import mysql from "mysql2/promise";
 
-import { PunchCardValidator } from "../src/governor/punch-card-validator.js";
+import { validateFromKiloLog } from "../src/governor/kilo-verified-validator.js";
 import { isSessionTerminal } from "./helpers/session-completion.js";
 
 const KILO_HOST = process.env.KILO_HOST ?? "127.0.0.1";
@@ -119,27 +119,36 @@ describe.skipIf(SKIP)("Punch card enforcement loop", () => {
   });
 
   it("fails validation when forbidden orchestrator punch exists", async () => {
-    const validator = new PunchCardValidator({
-      host: DOLT_HOST,
-      port: DOLT_PORT,
-      database: DOLT_DB,
-      user: "root",
-    });
-
     const taskId = `neg-${Date.now()}`;
-    await conn.execute(
-      `INSERT INTO punches (task_id, punch_type, punch_key, observed_at, source_hash)
-       VALUES (?, 'tool_call', 'edit_file', NOW(), SHA2(CONCAT(?, '-forbidden'), 256))`,
-      [taskId, taskId]
+    const kiloClient = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              parts: [
+                {
+                  type: "tool",
+                  tool: "edit_file",
+                  state: { status: "completed" },
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    };
+    const result = await validateFromKiloLog(
+      taskId,
+      kiloClient,
+      {
+        host: DOLT_HOST,
+        port: DOLT_PORT,
+        database: DOLT_DB,
+        user: "root",
+      },
+      "plant-orchestrate",
     );
-
-    try {
-      await validator.connect();
-      const result = await validator.validatePunchCard(taskId, "plant-orchestrate");
-      expect(result.status).toBe("fail");
-      expect(result.violations.some((v) => v.punchType === "tool_call" && v.punchKeyPattern === "edit_file%")).toBe(true);
-    } finally {
-      await validator.disconnect();
-    }
+    expect(result.status).toBe("fail");
+    expect(result.violations.some((v) => v.punchType === "tool_call" && v.punchKeyPattern === "edit_file%")).toBe(true);
   });
 });

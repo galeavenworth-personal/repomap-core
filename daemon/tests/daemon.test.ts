@@ -8,10 +8,7 @@ const {
   writeMessageMock,
   writeToolCallMock,
   writeCheckpointMock,
-  validatorConnectMock,
-  validatorValidateMock,
-  validatorDisconnectMock,
-  PunchCardValidatorMock,
+  validateFromKiloLogMock,
   syncChildRelsFromPunchesMock,
   writeChildRelationMock,
   createDoltWriterMock,
@@ -30,16 +27,7 @@ const {
   const writeMessageMock = vi.fn();
   const writeToolCallMock = vi.fn();
   const writeCheckpointMock = vi.fn();
-  const validatorConnectMock = vi.fn();
-  const validatorValidateMock = vi.fn();
-  const validatorDisconnectMock = vi.fn();
-  const PunchCardValidatorMock = vi.fn(function MockPunchCardValidator() {
-    return {
-      connect: validatorConnectMock,
-      validatePunchCard: validatorValidateMock,
-      disconnect: validatorDisconnectMock,
-    };
-  });
+  const validateFromKiloLogMock = vi.fn();
   const syncChildRelsFromPunchesMock = vi.fn();
   const writeChildRelationMock = vi.fn();
   const createDoltWriterMock = vi.fn(() => ({
@@ -75,10 +63,7 @@ const {
     writeMessageMock,
     writeToolCallMock,
     writeCheckpointMock,
-    validatorConnectMock,
-    validatorValidateMock,
-    validatorDisconnectMock,
-    PunchCardValidatorMock,
+    validateFromKiloLogMock,
     syncChildRelsFromPunchesMock,
     writeChildRelationMock,
     createDoltWriterMock,
@@ -99,8 +84,8 @@ vi.mock("../src/classifier/index.js", () => ({
   classifyEvent: classifyEventMock,
 }));
 
-vi.mock("../src/governor/punch-card-validator.js", () => ({
-  PunchCardValidator: PunchCardValidatorMock,
+vi.mock("../src/governor/kilo-verified-validator.js", () => ({
+  validateFromKiloLog: validateFromKiloLogMock,
 }));
 
 vi.mock("@opencode-ai/sdk/client", () => ({
@@ -130,15 +115,17 @@ describe("createDaemon", () => {
     writeMessageMock.mockResolvedValue(undefined);
     writeToolCallMock.mockResolvedValue(undefined);
     writeCheckpointMock.mockResolvedValue(undefined);
-    validatorConnectMock.mockResolvedValue(undefined);
-    validatorValidateMock.mockResolvedValue({
+    validateFromKiloLogMock.mockResolvedValue({
       status: "pass",
       cardId: "plant-orchestrate",
-      taskId: "session-checkpoint",
+      sessionId: "session-checkpoint",
+      sourceSessionId: "session-checkpoint",
+      messageCount: 0,
+      derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+      trustLevel: "verified",
       missing: [],
       violations: [],
     });
-    validatorDisconnectMock.mockResolvedValue(undefined);
     syncChildRelsFromPunchesMock.mockResolvedValue(0);
     writeChildRelationMock.mockResolvedValue(undefined);
     sessionListMock.mockResolvedValue({ data: [] });
@@ -367,8 +354,17 @@ describe("createDaemon", () => {
 
     await daemon.start();
 
-    expect(PunchCardValidatorMock).toHaveBeenCalled();
-    expect(validatorValidateMock).toHaveBeenCalledWith("session-checkpoint", "plant-orchestrate");
+    expect(validateFromKiloLogMock).toHaveBeenCalledWith(
+      "session-checkpoint",
+      expect.any(Object),
+      expect.objectContaining({
+        host: "127.0.0.1",
+        port: 3307,
+        database: "factory",
+      }),
+      "plant-orchestrate",
+      expect.objectContaining({ sourceSessionId: "session-checkpoint" }),
+    );
     expect(writeCheckpointMock).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: "session-checkpoint",

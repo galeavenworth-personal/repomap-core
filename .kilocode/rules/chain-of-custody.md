@@ -33,7 +33,6 @@ This rule closes that gap permanently.
 Derived directly from the kilo serve API:
 - `client.session.messages(sessionId)` — replay the event log for a session
 - `client.event.subscribe()` — real-time SSE stream
-- `client.session.list()` — session metadata from kilo
 
 **Example:**
 ```
@@ -93,13 +92,30 @@ cost data:
 ### Validator Output (kilo-verified-validator.ts)
 
 Every validation result MUST include:
-- `sessionId` — which session was validated
+- `sessionId` — the task/session under validation
+- `sourceSessionId` — the source session the validator replayed
 - `messageCount` — how many messages were replayed from the log
-- `derivedPunchCount` — how many punches the classifier found
-- `source: "kilo-session-messages"` — the derivation path
+- `derivationPath` — exact derivation flow (for example, `kilo-sse:/event -> session.messages -> classifier -> validation`)
+- `trustLevel` — `verified` | `projected` | `untrusted`
 
 This metadata IS the chain of custody. Without it, a PASS/FAIL is
 meaningless.
+
+## DSPy Prompt Constraint (Compilable)
+
+This rule must be representable in card-exit prompts as a strict machine-checkable
+constraint.
+
+```text
+Constraint ID: chain_of_custody_required
+Applies to: any claim about session state, punch card compliance, cost, health, or agent behavior
+Rule: Output MUST include {sourceSessionId, messageCount, derivationPath, trustLevel}
+Pass condition: trustLevel in {verified, projected} AND derivationPath traces to kilo SSE /event
+Fail condition: missing provenance fields OR trustLevel == untrusted
+```
+
+DSPy compilation should reinforce this exact structure so provenance is learned,
+scored, and retained over time.
 
 ## Scope
 

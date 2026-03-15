@@ -2,7 +2,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { createHash } from "node:crypto";
 
 import { classifyEvent, type RawEvent } from "../classifier/index.js";
-import { PunchCardValidator } from "../governor/punch-card-validator.js";
+import { validateFromKiloLog } from "../governor/kilo-verified-validator.js";
 import { DEFAULT_MODE_CARD_MAP, loadModeCardMap } from "../infra/mode-card-map.js";
 import { sortKeysDeep } from "../infra/utils.js";
 import { createDoltWriter, type DoltWriter } from "../writer/index.js";
@@ -24,6 +24,32 @@ export interface Daemon {
 }
 
 type OcClient = ReturnType<typeof createOpencodeClient>;
+
+const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+
+interface InactivityTimeoutResult {
+  timedOut: true;
+}
+
+function isInactivityTimeoutResult(value: unknown): value is InactivityTimeoutResult {
+  return !!value && typeof value === "object" && "timedOut" in value;
+}
+
+async function readEventWithInactivityTimeout(
+  iterator: AsyncIterator<unknown>,
+  inactivityTimeoutMs: number
+): Promise<IteratorResult<unknown> | InactivityTimeoutResult> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<InactivityTimeoutResult>((resolve) => {
+    timeoutHandle = setTimeout(() => resolve({ timedOut: true }), inactivityTimeoutMs);
+  });
+
+  try {
+    return await Promise.race([iterator.next(), timeoutPromise]);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -176,6 +202,7 @@ async function fetchSessionMode(config: DaemonConfig, taskId: string): Promise<s
 }
 
 async function validateSessionCheckpoint(
+  client: OcClient,
   writer: DoltWriter,
   config: DaemonConfig,
   taskId: string,
@@ -194,17 +221,22 @@ async function validateSessionCheckpoint(
     return;
   }
 
-  const validator = new PunchCardValidator({
-    host: config.doltHost,
-    port: config.doltPort,
-    database: config.doltDatabase,
-    user: config.doltUser,
-    password: config.doltPassword,
-  });
-
   try {
-    await validator.connect();
-    const result = await validator.validatePunchCard(taskId, cardId);
+    const result = await validateFromKiloLog(
+      taskId,
+      client,
+      {
+        host: config.doltHost,
+        port: config.doltPort,
+        database: config.doltDatabase,
+        user: config.doltUser,
+        password: config.doltPassword,
+      },
+      cardId,
+      {
+        sourceSessionId: taskId,
+      },
+    );
     const details = {
       missing: result.missing.map((m) => `${m.punchType}:${m.punchKeyPattern}`),
       violations: result.violations.map((v) => `${v.punchType}:${v.punchKeyPattern} (${v.count}x)`),
@@ -227,8 +259,6 @@ async function validateSessionCheckpoint(
     }
   } catch (error) {
     console.error(`[oc-daemon] Checkpoint validation failed for ${taskId}:`, error);
-  } finally {
-    await validator.disconnect();
   }
 }
 
@@ -363,7 +393,7 @@ async function processEvent(
   writer: DoltWriter,
   config: DaemonConfig,
   event: unknown
-): Promise<void> {
+): Promise<number> {
   const rawEvent = event as RawEvent;
   const observedAt = new Date();
   const rawEventWriter = writer as DoltWriter & {
@@ -389,7 +419,7 @@ async function processEvent(
   await projectSessionEvent(writer, rawEvent);
 
   const punch = classifyEvent(rawEvent);
-  if (!punch) return;
+  if (!punch) return observedAt.getTime();
 
   await writer.writePunch(punch);
   const properties = asRecord(rawEvent.properties);
@@ -434,8 +464,10 @@ async function processEvent(
     // For session.updated events (legacy), mode was on the session info
     const info = asRecord(properties.info);
     const mode = pickString(info, "mode");
-    await validateSessionCheckpoint(writer, config, punch.taskId, mode);
+    await validateSessionCheckpoint(client, writer, config, punch.taskId, mode);
   }
+
+  return observedAt.getTime();
 }
 
 /** Return true if the error is an expected AbortError during shutdown. */
@@ -475,6 +507,18 @@ export function createDaemon(config: DaemonConfig): Daemon {
 
       let backoffMs = 1000;
       const maxBackoffMs = 30000;
+      let lastSeenEventMs: number | undefined;
+
+      const runReconnectCatchUp = async () => {
+        if (typeof lastSeenEventMs !== "number") {
+          console.log("[oc-daemon] Reconnect catch-up skipped (no prior event timestamp).");
+          return;
+        }
+        const gapMs = Math.max(0, Date.now() - lastSeenEventMs);
+        console.log(`[oc-daemon] Reconnect gap duration: ${gapMs}ms.`);
+        const caughtUpSessions = await runCatchUp(client, writer, { sinceMs: lastSeenEventMs });
+        console.log(`[oc-daemon] Reconnect catch-up complete (${caughtUpSessions} sessions).`);
+      };
 
       while (!abortController.signal.aborted) {
         try {
@@ -485,8 +529,19 @@ export function createDaemon(config: DaemonConfig): Daemon {
 
           backoffMs = 1000;
 
-          for await (const event of stream) {
-            await processEvent(client, writer, config, event);
+          const iterator = stream[Symbol.asyncIterator]();
+          while (!abortController.signal.aborted) {
+            const nextResult = await readEventWithInactivityTimeout(iterator, INACTIVITY_TIMEOUT_MS);
+
+            if (isInactivityTimeoutResult(nextResult)) {
+              console.warn(
+                `[oc-daemon] No SSE events received for ${INACTIVITY_TIMEOUT_MS}ms while connected; forcing reconnect.`
+              );
+              break;
+            }
+
+            if (nextResult.done) break;
+            lastSeenEventMs = await processEvent(client, writer, config, nextResult.value);
           }
           console.log("[oc-daemon] SSE stream ended. Reconnecting...");
         } catch (error: unknown) {
@@ -495,6 +550,7 @@ export function createDaemon(config: DaemonConfig): Daemon {
         }
 
         if (!abortController.signal.aborted) {
+          await runReconnectCatchUp();
           console.log(`[oc-daemon] Waiting ${backoffMs}ms before reconnecting...`);
           await new Promise((resolve) => setTimeout(resolve, backoffMs));
           backoffMs = Math.min(backoffMs * 2, maxBackoffMs);

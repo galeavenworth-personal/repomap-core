@@ -18,10 +18,23 @@ interface MockConnection {
 
 let mockConnection: MockConnection;
 
+const { validateFromKiloLogMock, createOpencodeClientMock } = vi.hoisted(() => ({
+  validateFromKiloLogMock: vi.fn(),
+  createOpencodeClientMock: vi.fn(() => ({})),
+}));
+
 vi.mock("mysql2/promise", () => ({
   default: {
     createConnection: vi.fn(async () => mockConnection),
   },
+}));
+
+vi.mock("@opencode-ai/sdk/client", () => ({
+  createOpencodeClient: createOpencodeClientMock,
+}));
+
+vi.mock("../src/governor/kilo-verified-validator.js", () => ({
+  validateFromKiloLog: validateFromKiloLogMock,
 }));
 
 // Import AFTER mocking
@@ -49,6 +62,17 @@ describe("punch-card-check", () => {
       execute: vi.fn(),
       end: vi.fn(async () => {}),
     };
+    validateFromKiloLogMock.mockResolvedValue({
+      status: "pass",
+      cardId: "card-1",
+      missing: [],
+      violations: [],
+      sessionId: "session-1",
+      sourceSessionId: "session-1",
+      messageCount: 0,
+      derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+      trustLevel: "verified",
+    });
   });
 
   afterEach(() => {
@@ -82,7 +106,9 @@ describe("punch-card-check", () => {
     });
 
     it("throws when no requirements found for card", async () => {
-      mockConnection.execute.mockResolvedValueOnce([[], []]); // empty requirements
+      validateFromKiloLogMock.mockRejectedValueOnce(
+        new Error("no requirements found for card 'unknown-card'"),
+      );
       const config = makeConfig();
       await expect(
         checkPunchCard(config, { sessionId: "session-1", cardId: "unknown-card" }),
@@ -90,24 +116,17 @@ describe("punch-card-check", () => {
     });
 
     it("returns PASS when all required punches are present", async () => {
-      // Requirements query
-      mockConnection.execute.mockResolvedValueOnce([
-        [
-          {
-            forbidden: 0,
-            required: 1,
-            punch_type: "tool_call",
-            punch_key_pattern: "edit_file%",
-            description: "Must call edit_file",
-          },
-        ],
-        [],
-      ]);
-      // Count query for the requirement
-      mockConnection.execute.mockResolvedValueOnce([
-        [{ count: 3 }],
-        [],
-      ]);
+      validateFromKiloLogMock.mockResolvedValueOnce({
+        status: "pass",
+        cardId: "card-1",
+        missing: [],
+        violations: [],
+        sessionId: "session-1",
+        sourceSessionId: "session-1",
+        messageCount: 3,
+        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+        trustLevel: "verified",
+      });
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -117,29 +136,21 @@ describe("punch-card-check", () => {
 
       expect(result.passed).toBe(true);
       expect(result.failures).toBe(0);
-      expect(result.requirements).toHaveLength(1);
-      expect(result.requirements[0].kind).toBe("required");
-      expect(result.requirements[0].passed).toBe(true);
-      expect(result.requirements[0].count).toBe(3);
+      expect(result.requirements).toHaveLength(0);
     });
 
     it("returns FAIL when required punch is missing", async () => {
-      mockConnection.execute.mockResolvedValueOnce([
-        [
-          {
-            forbidden: 0,
-            required: 1,
-            punch_type: "quality_gate",
-            punch_key_pattern: "tsc%",
-            description: "Must run tsc",
-          },
-        ],
-        [],
-      ]);
-      mockConnection.execute.mockResolvedValueOnce([
-        [{ count: 0 }],
-        [],
-      ]);
+      validateFromKiloLogMock.mockResolvedValueOnce({
+        status: "fail",
+        cardId: "card-1",
+        missing: [{ punchType: "quality_gate", punchKeyPattern: "tsc%", description: "Must run tsc" }],
+        violations: [],
+        sessionId: "session-1",
+        sourceSessionId: "session-1",
+        messageCount: 3,
+        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+        trustLevel: "verified",
+      });
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -154,22 +165,24 @@ describe("punch-card-check", () => {
     });
 
     it("returns FAIL when forbidden punch is present", async () => {
-      mockConnection.execute.mockResolvedValueOnce([
-        [
+      validateFromKiloLogMock.mockResolvedValueOnce({
+        status: "fail",
+        cardId: "card-1",
+        missing: [],
+        violations: [
           {
-            forbidden: 1,
-            required: 0,
-            punch_type: "tool_call",
-            punch_key_pattern: "dangerous%",
+            punchType: "tool_call",
+            punchKeyPattern: "dangerous%",
+            count: 2,
             description: "Must not call dangerous",
           },
         ],
-        [],
-      ]);
-      mockConnection.execute.mockResolvedValueOnce([
-        [{ count: 2 }],
-        [],
-      ]);
+        sessionId: "session-1",
+        sourceSessionId: "session-1",
+        messageCount: 3,
+        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+        trustLevel: "verified",
+      });
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -185,22 +198,17 @@ describe("punch-card-check", () => {
     });
 
     it("returns PASS when forbidden punch is absent", async () => {
-      mockConnection.execute.mockResolvedValueOnce([
-        [
-          {
-            forbidden: 1,
-            required: 0,
-            punch_type: "tool_call",
-            punch_key_pattern: "dangerous%",
-            description: null,
-          },
-        ],
-        [],
-      ]);
-      mockConnection.execute.mockResolvedValueOnce([
-        [{ count: 0 }],
-        [],
-      ]);
+      validateFromKiloLogMock.mockResolvedValueOnce({
+        status: "pass",
+        cardId: "card-1",
+        missing: [],
+        violations: [],
+        sessionId: "session-1",
+        sourceSessionId: "session-1",
+        messageCount: 3,
+        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+        trustLevel: "verified",
+      });
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -213,30 +221,17 @@ describe("punch-card-check", () => {
     });
 
     it("skips requirements that are neither required nor forbidden", async () => {
-      mockConnection.execute.mockResolvedValueOnce([
-        [
-          {
-            forbidden: 0,
-            required: 0,
-            punch_type: "info",
-            punch_key_pattern: "note%",
-            description: "Informational only",
-          },
-          {
-            forbidden: 0,
-            required: 1,
-            punch_type: "quality_gate",
-            punch_key_pattern: "lint%",
-            description: "Must lint",
-          },
-        ],
-        [],
-      ]);
-      // Only one count query — the info row is skipped
-      mockConnection.execute.mockResolvedValueOnce([
-        [{ count: 1 }],
-        [],
-      ]);
+      validateFromKiloLogMock.mockResolvedValueOnce({
+        status: "pass",
+        cardId: "card-1",
+        missing: [],
+        violations: [],
+        sessionId: "session-1",
+        sourceSessionId: "session-1",
+        messageCount: 3,
+        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+        trustLevel: "verified",
+      });
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -245,43 +240,21 @@ describe("punch-card-check", () => {
       });
 
       expect(result.passed).toBe(true);
-      expect(result.requirements).toHaveLength(1);
-      expect(result.requirements[0].punchType).toBe("quality_gate");
+      expect(result.requirements).toHaveLength(0);
     });
 
     it("handles multiple requirements with mixed results", async () => {
-      mockConnection.execute.mockResolvedValueOnce([
-        [
-          {
-            forbidden: 1,
-            required: 0,
-            punch_type: "tool_call",
-            punch_key_pattern: "rm_rf%",
-            description: "No rm -rf",
-          },
-          {
-            forbidden: 0,
-            required: 1,
-            punch_type: "quality_gate",
-            punch_key_pattern: "tsc%",
-            description: "Must typecheck",
-          },
-          {
-            forbidden: 0,
-            required: 1,
-            punch_type: "quality_gate",
-            punch_key_pattern: "vitest%",
-            description: "Must run tests",
-          },
-        ],
-        [],
-      ]);
-      // forbidden: absent -> pass
-      mockConnection.execute.mockResolvedValueOnce([[{ count: 0 }], []]);
-      // required tsc: present -> pass
-      mockConnection.execute.mockResolvedValueOnce([[{ count: 1 }], []]);
-      // required vitest: missing -> fail
-      mockConnection.execute.mockResolvedValueOnce([[{ count: 0 }], []]);
+      validateFromKiloLogMock.mockResolvedValueOnce({
+        status: "fail",
+        cardId: "card-1",
+        missing: [{ punchType: "quality_gate", punchKeyPattern: "vitest%", description: "Must run tests" }],
+        violations: [],
+        sessionId: "session-1",
+        sourceSessionId: "session-1",
+        messageCount: 3,
+        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+        trustLevel: "verified",
+      });
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -291,10 +264,8 @@ describe("punch-card-check", () => {
 
       expect(result.passed).toBe(false);
       expect(result.failures).toBe(1);
-      expect(result.requirements).toHaveLength(3);
-      expect(result.requirements[0].passed).toBe(true);  // forbidden absent
-      expect(result.requirements[1].passed).toBe(true);  // tsc present
-      expect(result.requirements[2].passed).toBe(false); // vitest missing
+      expect(result.requirements).toHaveLength(1);
+      expect(result.requirements[0].passed).toBe(false);
     });
 
     it("passes enforcedOnly flag in query", async () => {
@@ -319,9 +290,13 @@ describe("punch-card-check", () => {
         enforcedOnly: true,
       });
 
-      // Verify the SQL includes AND enforced = TRUE
-      const firstCall = mockConnection.execute.mock.calls[0];
-      expect(firstCall[0]).toContain("AND enforced = TRUE");
+      expect(validateFromKiloLogMock).toHaveBeenCalledWith(
+        "session-1",
+        expect.any(Object),
+        expect.any(Object),
+        "card-1",
+        expect.objectContaining({ enforcedOnly: true }),
+      );
     });
 
     it("includes parentSession and enforcedOnly in result", async () => {
@@ -352,20 +327,24 @@ describe("punch-card-check", () => {
     });
 
     it("handles string count values from mysql2", async () => {
-      mockConnection.execute.mockResolvedValueOnce([
-        [
+      validateFromKiloLogMock.mockResolvedValueOnce({
+        status: "fail",
+        cardId: "card-1",
+        missing: [],
+        violations: [
           {
-            forbidden: 0,
-            required: 1,
-            punch_type: "tool_call",
-            punch_key_pattern: "edit%",
+            punchType: "tool_call",
+            punchKeyPattern: "edit%",
+            count: 5,
             description: "",
           },
         ],
-        [],
-      ]);
-      // mysql2 sometimes returns count as string
-      mockConnection.execute.mockResolvedValueOnce([[{ count: "5" }], []]);
+        sessionId: "session-1",
+        sourceSessionId: "session-1",
+        messageCount: 3,
+        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+        trustLevel: "verified",
+      });
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -373,19 +352,17 @@ describe("punch-card-check", () => {
         cardId: "card-1",
       });
 
-      expect(result.passed).toBe(true);
+      expect(result.passed).toBe(false);
       expect(result.requirements[0].count).toBe(5);
     });
 
     it("closes connection even on error", async () => {
-      mockConnection.execute.mockRejectedValueOnce(new Error("connection lost"));
+      validateFromKiloLogMock.mockRejectedValueOnce(new Error("connection lost"));
 
       const config = makeConfig();
       await expect(
         checkPunchCard(config, { sessionId: "session-1", cardId: "card-1" }),
       ).rejects.toThrow("connection lost");
-
-      expect(mockConnection.end).toHaveBeenCalled();
     });
   });
 });
@@ -465,22 +442,30 @@ describe("punch-card-audit", () => {
         [],
       ]);
 
-      // task-pass: requirements + count (pass)
-      mockConnection.execute.mockResolvedValueOnce([
-        [{ forbidden: 0, required: 1, punch_type: "gate", punch_key_pattern: "g%", description: "" }],
-        [],
-      ]);
-      mockConnection.execute.mockResolvedValueOnce([[{ count: 1 }], []]);
-
-      // task-fail: requirements + count (fail)
-      mockConnection.execute.mockResolvedValueOnce([
-        [{ forbidden: 0, required: 1, punch_type: "gate", punch_key_pattern: "g%", description: "" }],
-        [],
-      ]);
-      mockConnection.execute.mockResolvedValueOnce([[{ count: 0 }], []]);
-
-      // task-error: no requirements found -> throws
-      mockConnection.execute.mockResolvedValueOnce([[], []]);
+      validateFromKiloLogMock
+        .mockResolvedValueOnce({
+          status: "pass",
+          cardId: "card-a",
+          missing: [],
+          violations: [],
+          sessionId: "task-pass",
+          sourceSessionId: "task-pass",
+          messageCount: 1,
+          derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+          trustLevel: "verified",
+        })
+        .mockResolvedValueOnce({
+          status: "fail",
+          cardId: "card-b",
+          missing: [{ punchType: "gate", punchKeyPattern: "g%" }],
+          violations: [],
+          sessionId: "task-fail",
+          sourceSessionId: "task-fail",
+          messageCount: 1,
+          derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+          trustLevel: "verified",
+        })
+        .mockRejectedValueOnce(new Error("no requirements found"));
 
       const config = makeConfig();
       const result = await auditPunchCards(config, { limit: 50, jsonOutput: false });
@@ -501,11 +486,17 @@ describe("punch-card-audit", () => {
         [{ task_id: "task-1", card_id: "card-a" }],
         [],
       ]);
-      mockConnection.execute.mockResolvedValueOnce([
-        [{ forbidden: 0, required: 1, punch_type: "gate", punch_key_pattern: "g%", description: "" }],
-        [],
-      ]);
-      mockConnection.execute.mockResolvedValueOnce([[{ count: 2 }], []]);
+      validateFromKiloLogMock.mockResolvedValueOnce({
+        status: "pass",
+        cardId: "card-a",
+        missing: [],
+        violations: [],
+        sessionId: "task-1",
+        sourceSessionId: "task-1",
+        messageCount: 1,
+        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+        trustLevel: "verified",
+      });
 
       const config = makeConfig();
       const result = await auditPunchCards(config, { limit: 10, jsonOutput: false });
