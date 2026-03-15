@@ -85,3 +85,8 @@ export {
   type SessionAuditConfig,
   type SessionAuditReport,
 } from "./types.js";
+export {
+  type ValidationTrustLevel,
+  type ValidationChainOfCustody,
+  type KiloVerifiedValidationResult,
+} from "./validation-types.js";
