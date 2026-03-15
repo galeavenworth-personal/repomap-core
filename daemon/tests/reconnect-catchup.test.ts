@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runCatchUp } from "../src/lifecycle/catchup.js";
+import * as catchupModule from "../src/lifecycle/catchup.js";
 
 const {
   connectMock,
   disconnectMock,
   createDoltWriterMock,
-  subscribeMock,
+  createEventSourceMock,
   sessionListMock,
   sessionMessagesMock,
   sessionChildrenMock,
@@ -29,12 +29,11 @@ const {
     syncChildRelsFromPunches: vi.fn().mockResolvedValue(0),
   }));
 
-  const subscribeMock = vi.fn();
+  const createEventSourceMock = vi.fn();
   const sessionListMock = vi.fn();
   const sessionMessagesMock = vi.fn();
   const sessionChildrenMock = vi.fn();
   const createOpencodeClientMock = vi.fn(() => ({
-    event: { subscribe: subscribeMock },
     session: {
       list: sessionListMock,
       messages: sessionMessagesMock,
@@ -48,7 +47,7 @@ const {
     connectMock,
     disconnectMock,
     createDoltWriterMock,
-    subscribeMock,
+    createEventSourceMock,
     sessionListMock,
     sessionMessagesMock,
     sessionChildrenMock,
@@ -69,40 +68,21 @@ vi.mock("../src/classifier/index.js", () => ({
   classifyEvent: classifyEventMock,
 }));
 
+vi.mock("eventsource-client", () => ({
+  createEventSource: createEventSourceMock,
+}));
+
 import { createDaemon } from "../src/lifecycle/daemon.js";
 
-function stalledStream(): AsyncIterable<unknown> {
+function eventSourceFromEvents(
+  events: Array<{ data: { type: string; properties: Record<string, unknown> }; event?: string; id?: string }>
+) {
   return {
-    [Symbol.asyncIterator]() {
-      return {
-        next: () => new Promise<IteratorResult<unknown>>(() => undefined),
-      };
-    },
-  };
-}
-
-function singleEventThenDelayedEndStream(
-  event: { type: string; properties: Record<string, unknown> },
-  endDelayMs: number
-): AsyncIterable<unknown> {
-  let step = 0;
-  return {
-    [Symbol.asyncIterator]() {
-      return {
-        next: () => {
-          if (step === 0) {
-            step += 1;
-            return Promise.resolve({ done: false, value: event });
-          }
-          if (step === 1) {
-            step += 1;
-            return new Promise<IteratorResult<unknown>>((resolve) => {
-              setTimeout(() => resolve({ done: true, value: undefined }), endDelayMs);
-            });
-          }
-          return Promise.resolve({ done: true, value: undefined });
-        },
-      };
+    close: vi.fn(),
+    async *[Symbol.asyncIterator]() {
+      for (const event of events) {
+        yield event;
+      }
     },
   };
 }
@@ -137,7 +117,7 @@ describe("runCatchUp sinceMs", () => {
       syncChildRelsFromPunches: vi.fn().mockResolvedValue(0),
     };
 
-    const processed = await runCatchUp(client as never, writer as never, { sinceMs });
+    const processed = await catchupModule.runCatchUp(client as never, writer as never, { sinceMs });
 
     expect(processed).toBe(2);
     expect(sessionMessages).toHaveBeenCalledTimes(2);
@@ -167,12 +147,19 @@ describe("daemon reconnect hardening", () => {
     vi.restoreAllMocks();
   });
 
-  it("forces reconnect when stream is silent for 5 minutes", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("runs reconnect catch-up when stream reconnects", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    subscribeMock
-      .mockResolvedValueOnce({ stream: stalledStream() })
-      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+    createEventSourceMock.mockImplementation((options: { onConnect?: () => void; onDisconnect?: () => void }) => {
+      options.onConnect?.();
+      options.onDisconnect?.();
+      options.onConnect?.();
+      return eventSourceFromEvents([
+        {
+          data: { type: "file.edited", properties: {} },
+        },
+      ]);
+    });
 
     const daemon = createDaemon({
       kiloHost: "127.0.0.1",
@@ -183,27 +170,50 @@ describe("daemon reconnect hardening", () => {
       doltUser: "root",
     });
 
-    const startPromise = daemon.start();
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1_000);
-    await startPromise;
+    await daemon.start();
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      "[oc-daemon] No SSE events received for 300000ms while connected; forcing reconnect."
-    );
-    expect(subscribeMock).toHaveBeenCalledTimes(2);
+    expect(logSpy).toHaveBeenCalledWith("[oc-daemon] Reconnect catch-up skipped (no prior event timestamp).");
+    expect(createEventSourceMock).toHaveBeenCalledTimes(1);
   });
 
   it("logs reconnect gap duration from last seen event", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    subscribeMock
-      .mockResolvedValueOnce({
-        stream: singleEventThenDelayedEndStream(
-          { type: "file.edited", properties: {} },
-          2_500
-        ),
-      })
-      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+    createEventSourceMock.mockImplementation((options: { onConnect?: () => void; onDisconnect?: () => void }) => {
+      options.onConnect?.();
+      return {
+        close: vi.fn(),
+        [Symbol.asyncIterator]() {
+          let step = 0;
+          return {
+            next: () => {
+              if (step === 0) {
+                step += 1;
+                return Promise.resolve({
+                  done: false,
+                  value: { data: { type: "file.edited", properties: {} } },
+                });
+              }
+              if (step === 1) {
+                step += 1;
+                return new Promise((resolve) => {
+                  setTimeout(() => {
+                    options.onDisconnect?.();
+                    options.onConnect?.();
+                    resolve({ done: true, value: undefined });
+                  }, 2_500);
+                });
+              }
+              return Promise.resolve({ done: true, value: undefined });
+            },
+          } as AsyncIterator<{
+            data: { type: string; properties: Record<string, unknown> };
+            event?: string;
+            id?: string;
+          }>;
+        },
+      };
+    });
 
     const daemon = createDaemon({
       kiloHost: "127.0.0.1",

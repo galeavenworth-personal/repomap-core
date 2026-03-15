@@ -1,4 +1,5 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
+import { createEventSource } from "eventsource-client";
 import { createHash } from "node:crypto";
 
 import { classifyEvent, type RawEvent } from "../classifier/index.js";
@@ -24,32 +25,6 @@ export interface Daemon {
 }
 
 type OcClient = ReturnType<typeof createOpencodeClient>;
-
-const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
-
-interface InactivityTimeoutResult {
-  timedOut: true;
-}
-
-function isInactivityTimeoutResult(value: unknown): value is InactivityTimeoutResult {
-  return !!value && typeof value === "object" && "timedOut" in value;
-}
-
-async function readEventWithInactivityTimeout(
-  iterator: AsyncIterator<unknown>,
-  inactivityTimeoutMs: number
-): Promise<IteratorResult<unknown> | InactivityTimeoutResult> {
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<InactivityTimeoutResult>((resolve) => {
-    timeoutHandle = setTimeout(() => resolve({ timedOut: true }), inactivityTimeoutMs);
-  });
-
-  try {
-    return await Promise.race([iterator.next(), timeoutPromise]);
-  } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-  }
-}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -505,9 +480,9 @@ export function createDaemon(config: DaemonConfig): Daemon {
 
       await runCatchUp(client, writer);
 
-      let backoffMs = 1000;
-      const maxBackoffMs = 30000;
       let lastSeenEventMs: number | undefined;
+      let hasConnected = false;
+      let disconnectedSinceLastConnect = false;
 
       const runReconnectCatchUp = async () => {
         if (typeof lastSeenEventMs !== "number") {
@@ -520,43 +495,44 @@ export function createDaemon(config: DaemonConfig): Daemon {
         console.log(`[oc-daemon] Reconnect catch-up complete (${caughtUpSessions} sessions).`);
       };
 
-      while (!abortController.signal.aborted) {
-        try {
-          console.log("[oc-daemon] Subscribing to SSE event stream...");
-          const { stream } = await client.event.subscribe({
+      console.log("[oc-daemon] Subscribing to SSE event stream...");
+
+      const eventSource = createEventSource({
+        url: `http://${config.kiloHost}:${config.kiloPort}/event`,
+        fetch: (url, init) =>
+          fetch(url, {
+            ...init,
             signal: abortController.signal,
-          });
-
-          backoffMs = 1000;
-
-          const iterator = stream[Symbol.asyncIterator]();
-          while (!abortController.signal.aborted) {
-            const nextResult = await readEventWithInactivityTimeout(iterator, INACTIVITY_TIMEOUT_MS);
-
-            if (isInactivityTimeoutResult(nextResult)) {
-              console.warn(
-                `[oc-daemon] No SSE events received for ${INACTIVITY_TIMEOUT_MS}ms while connected; forcing reconnect.`
-              );
-              await iterator.return?.(undefined);
-              break;
-            }
-
-            if (nextResult.done) break;
-            lastSeenEventMs = await processEvent(client, writer, config, nextResult.value);
+          }),
+        onConnect: () => {
+          if (disconnectedSinceLastConnect) {
+            disconnectedSinceLastConnect = false;
+            void runReconnectCatchUp().catch((error: unknown) => {
+              console.error("[oc-daemon] Reconnect catch-up failed:", error);
+            });
           }
-          console.log("[oc-daemon] SSE stream ended. Reconnecting...");
-        } catch (error: unknown) {
-          if (isAbortError(error) || abortController.signal.aborted) break;
+          hasConnected = true;
+        },
+        onDisconnect: () => {
+          if (!abortController.signal.aborted && hasConnected) {
+            disconnectedSinceLastConnect = true;
+          }
+        },
+      });
+
+      try {
+        for await (const event of eventSource) {
+          if (abortController.signal.aborted) break;
+          lastSeenEventMs = await processEvent(client, writer, config, event.data);
+        }
+      } catch (error: unknown) {
+        if (!isAbortError(error) && !abortController.signal.aborted) {
           console.error("[oc-daemon] SSE stream error:", error);
         }
-
-        if (!abortController.signal.aborted) {
-          await runReconnectCatchUp();
-          console.log(`[oc-daemon] Waiting ${backoffMs}ms before reconnecting...`);
-          await new Promise((resolve) => setTimeout(resolve, backoffMs));
-          backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
-        }
+      } finally {
+        eventSource.close();
       }
+
       console.log("[oc-daemon] Event loop exited.");
     },
 
