@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { asRecord, summarizeArgs } from "../infra/record-utils.js";
+import { asNumber, asRecord, asString, summarizeArgs, toTimestamp } from "../infra/record-utils.js";
 import { createDoltWriter } from "../writer/index.js";
 
 interface SessionAccumulator {
@@ -26,23 +26,6 @@ function expandHome(inputPath: string): string {
     return path.join(homedir(), inputPath.slice(2));
   }
   return inputPath;
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function toTimestamp(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = new Date(value).getTime();
-    if (!Number.isNaN(parsed)) return parsed;
-  }
-  return Date.now();
 }
 
 async function readJsonIfExists(filePath: string): Promise<unknown[] | null> {

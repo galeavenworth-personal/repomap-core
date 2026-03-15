@@ -1,7 +1,7 @@
 import mysql, { type Connection } from "mysql2/promise";
 
 import { classifyEvent } from "../classifier/index.js";
-import { asRecord } from "../infra/record-utils.js";
+import { asRecord, asStringOrNull } from "../infra/record-utils.js";
 import type { DoltConfig } from "../writer/index.js";
 import type { PunchCardRequirement } from "./types.js";
 import type { KiloVerifiedValidationResult } from "./validation-types.js";
@@ -31,10 +31,6 @@ interface DerivedPunch {
   punchKey: string;
 }
 
-function asString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
 function extractBashCommand(part: Record<string, unknown>): string | null {
   // Real-time SSE event shape: part.input.command
   const input = part.input;
@@ -42,7 +38,7 @@ function extractBashCommand(part: Record<string, unknown>): string | null {
     return input;
   }
   const inputRecord = asRecord(input);
-  const directCommand = asString(inputRecord.command) ?? asString(inputRecord.cmd);
+  const directCommand = asStringOrNull(inputRecord.command) ?? asStringOrNull(inputRecord.cmd);
   if (directCommand) {
     return directCommand;
   }
@@ -50,7 +46,7 @@ function extractBashCommand(part: Record<string, unknown>): string | null {
   // session.messages replay shape: part.state.input.command
   const state = asRecord(part.state);
   const stateInput = asRecord(state.input);
-  return asString(stateInput.command) ?? asString(stateInput.cmd);
+  return asStringOrNull(stateInput.command) ?? asStringOrNull(stateInput.cmd);
 }
 
 function classifyGateFromCommand(command: string, status: string): DerivedPunch | null {
@@ -170,7 +166,7 @@ function derivePartPunches(
 
   if (typeof part.tool === "string" && part.tool.toLowerCase() === "bash") {
     const state = asRecord(part.state);
-    const status = asString(state.status);
+    const status = asStringOrNull(state.status);
     const command = extractBashCommand(part);
     if (command && (status === "completed" || status === "error")) {
       const gatePunch = classifyGateFromCommand(command, status);
