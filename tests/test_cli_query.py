@@ -8,87 +8,7 @@ from pathlib import Path
 import pytest
 
 from cli import main
-from contract.artifacts import (
-    DEPS_EDGELIST,
-    DEPS_SUMMARY_JSON,
-    INTEGRATIONS_STATIC_JSONL,
-    SYMBOLS_JSONL,
-)
-
-
-def _write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
-    lines = [json.dumps(record, sort_keys=True) for record in records]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def _build_minimal_artifacts(artifacts_dir: Path) -> None:
-    """Build a minimal set of artifacts for query testing."""
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-    symbols_records = [
-        {
-            "kind": "function",
-            "name": "build_map",
-            "path": "src/pkg/map.py",
-            "start_line": 10,
-            "end_line": 22,
-            "start_col": 0,
-            "qualified_name": "pkg.map.build_map",
-            "symbol_id": "sym:src/pkg/map.py::pkg.map.build_map@L10:C0",
-            "symbol_key": "symkey:src/pkg/map.py::pkg.map.build_map::function",
-        },
-        {
-            "kind": "class",
-            "name": "RepoScanner",
-            "path": "src/pkg/scanner.py",
-            "start_line": 4,
-            "end_line": 40,
-            "start_col": 0,
-            "qualified_name": "pkg.scanner.RepoScanner",
-            "symbol_id": "sym:src/pkg/scanner.py::pkg.scanner.RepoScanner@L4:C0",
-            "symbol_key": "symkey:src/pkg/scanner.py::pkg.scanner.RepoScanner::class",
-        },
-    ]
-    _write_jsonl(artifacts_dir / SYMBOLS_JSONL, symbols_records)
-
-    deps_lines = [
-        "pkg.map -> pkg.scanner",
-        "pkg.scanner -> pathlib",
-        "pkg.scanner -> json",
-    ]
-    (artifacts_dir / DEPS_EDGELIST).write_text(
-        "\n".join(deps_lines) + "\n", encoding="utf-8"
-    )
-
-    integration_records = [
-        {
-            "path": "src/pkg/http_client.py",
-            "line": 7,
-            "tag": "http",
-            "evidence": "requests.get(url)",
-        },
-    ]
-    _write_jsonl(artifacts_dir / INTEGRATIONS_STATIC_JSONL, integration_records)
-
-    deps_summary = {
-        "fan_in": {"pkg.scanner": 2, "pkg.map": 1},
-        "fan_out": {"pkg.scanner": 2, "pkg.map": 1},
-        "cycles": [],
-        "layer_violations": [],
-        "node_count": 3,
-        "edge_count": 3,
-        "top_modules": ["pkg.scanner", "pkg.map"],
-    }
-    (artifacts_dir / DEPS_SUMMARY_JSON).write_text(
-        json.dumps(deps_summary, sort_keys=True), encoding="utf-8"
-    )
-
-
-@pytest.fixture()
-def artifacts_dir(tmp_path: Path) -> Path:
-    path = tmp_path / ".repomap"
-    _build_minimal_artifacts(path)
-    return path
+from conftest import build_minimal_artifacts
 
 
 def _write_query_file(tmp_path: Path, query: object) -> Path:
@@ -98,6 +18,34 @@ def _write_query_file(tmp_path: Path, query: object) -> Path:
     return query_file
 
 
+_SYMBOLS_FUNCTION_QUERY: dict[str, object] = {
+    "collection": "symbols",
+    "filter": {"type": "field", "field": "kind", "op": "eq", "value": "function"},
+    "assertion": {"type": "exists"},
+}
+
+
+def _run_query(
+    tmp_path: Path,
+    artifacts_dir: Path,
+    query: object,
+    capsys: pytest.CaptureFixture[str],
+) -> tuple[int, dict[str, object]]:
+    """Write query, run CLI, parse JSON output."""
+    query_file = _write_query_file(tmp_path, query)
+    exit_code = main(
+        [
+            "query",
+            "--artifacts-dir",
+            str(artifacts_dir),
+            "--query-file",
+            str(query_file),
+        ]
+    )
+    output = json.loads(capsys.readouterr().out)
+    return exit_code, output
+
+
 class TestCliQueryHappyPath:
     def test_query_returns_matches_for_valid_query(
         self,
@@ -105,32 +53,11 @@ class TestCliQueryHappyPath:
         artifacts_dir: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        query_file = _write_query_file(
-            tmp_path,
-            {
-                "collection": "symbols",
-                "filter": {
-                    "type": "field",
-                    "field": "kind",
-                    "op": "eq",
-                    "value": "function",
-                },
-                "assertion": {"type": "exists"},
-            },
-        )
-
-        exit_code = main(
-            [
-                "query",
-                "--artifacts-dir",
-                str(artifacts_dir),
-                "--query-file",
-                str(query_file),
-            ]
+        exit_code, output = _run_query(
+            tmp_path, artifacts_dir, _SYMBOLS_FUNCTION_QUERY, capsys
         )
 
         assert exit_code == 0
-        output = json.loads(capsys.readouterr().out)
         assert output["query_valid"] is True
         assert output["error"] is None
         assert len(output["matches"]) == 1
@@ -143,32 +70,19 @@ class TestCliQueryHappyPath:
         artifacts_dir: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        query_file = _write_query_file(
-            tmp_path,
-            {
-                "collection": "symbols",
-                "filter": {
-                    "type": "field",
-                    "field": "kind",
-                    "op": "eq",
-                    "value": "nonexistent_kind",
-                },
-                "assertion": {"type": "exists"},
+        no_match_query = {
+            "collection": "symbols",
+            "filter": {
+                "type": "field",
+                "field": "kind",
+                "op": "eq",
+                "value": "nonexistent_kind",
             },
-        )
-
-        exit_code = main(
-            [
-                "query",
-                "--artifacts-dir",
-                str(artifacts_dir),
-                "--query-file",
-                str(query_file),
-            ]
-        )
+            "assertion": {"type": "exists"},
+        }
+        exit_code, output = _run_query(tmp_path, artifacts_dir, no_match_query, capsys)
 
         assert exit_code == 0
-        output = json.loads(capsys.readouterr().out)
         assert output["query_valid"] is True
         assert output["matches"] == []
         assert output["matched_locations"] == []
@@ -180,23 +94,10 @@ class TestCliQueryHappyPath:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """When --artifacts-dir is omitted, it defaults to .repomap."""
-        _build_minimal_artifacts(tmp_path / ".repomap")
+        build_minimal_artifacts(tmp_path / ".repomap")
         monkeypatch.chdir(tmp_path)
 
-        query_file = _write_query_file(
-            tmp_path,
-            {
-                "collection": "symbols",
-                "filter": {
-                    "type": "field",
-                    "field": "kind",
-                    "op": "eq",
-                    "value": "function",
-                },
-                "assertion": {"type": "exists"},
-            },
-        )
-
+        query_file = _write_query_file(tmp_path, _SYMBOLS_FUNCTION_QUERY)
         exit_code = main(["query", "--query-file", str(query_file)])
 
         assert exit_code == 0
@@ -213,7 +114,6 @@ class TestCliQueryErrorHandling:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         missing_file = tmp_path / "nonexistent.json"
-
         exit_code = main(
             [
                 "query",
@@ -239,7 +139,6 @@ class TestCliQueryErrorHandling:
     ) -> None:
         query_file = tmp_path / "bad.json"
         query_file.write_text("{not valid json}", encoding="utf-8")
-
         exit_code = main(
             [
                 "query",
@@ -263,7 +162,6 @@ class TestCliQueryErrorHandling:
     ) -> None:
         query_file = tmp_path / "array.json"
         query_file.write_text("[1, 2, 3]", encoding="utf-8")
-
         exit_code = main(
             [
                 "query",
@@ -285,23 +183,14 @@ class TestCliQueryErrorHandling:
         artifacts_dir: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        query_file = _write_query_file(
+        exit_code, output = _run_query(
             tmp_path,
-            {"collection": "symbols"},  # missing filter and assertion
-        )
-
-        exit_code = main(
-            [
-                "query",
-                "--artifacts-dir",
-                str(artifacts_dir),
-                "--query-file",
-                str(query_file),
-            ]
+            artifacts_dir,
+            {"collection": "symbols"},
+            capsys,
         )
 
         assert exit_code == 1
-        output = json.loads(capsys.readouterr().out)
         assert output["query_valid"] is False
         assert "Invalid query structure" in output["error"]
 
@@ -311,33 +200,12 @@ class TestCliQueryErrorHandling:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Missing artifacts dir should return valid but empty results (not crash)."""
-        query_file = _write_query_file(
-            tmp_path,
-            {
-                "collection": "symbols",
-                "filter": {
-                    "type": "field",
-                    "field": "kind",
-                    "op": "eq",
-                    "value": "function",
-                },
-                "assertion": {"type": "exists"},
-            },
-        )
         missing_dir = tmp_path / "nonexistent_artifacts"
-
-        exit_code = main(
-            [
-                "query",
-                "--artifacts-dir",
-                str(missing_dir),
-                "--query-file",
-                str(query_file),
-            ]
+        exit_code, output = _run_query(
+            tmp_path, missing_dir, _SYMBOLS_FUNCTION_QUERY, capsys
         )
 
         assert exit_code == 0
-        output = json.loads(capsys.readouterr().out)
         assert output["query_valid"] is True
         assert output["matches"] == []
 
@@ -349,31 +217,8 @@ class TestCliQueryOutputFormat:
         artifacts_dir: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        query_file = _write_query_file(
-            tmp_path,
-            {
-                "collection": "symbols",
-                "filter": {
-                    "type": "field",
-                    "field": "kind",
-                    "op": "eq",
-                    "value": "function",
-                },
-                "assertion": {"type": "exists"},
-            },
-        )
+        _, output = _run_query(tmp_path, artifacts_dir, _SYMBOLS_FUNCTION_QUERY, capsys)
 
-        main(
-            [
-                "query",
-                "--artifacts-dir",
-                str(artifacts_dir),
-                "--query-file",
-                str(query_file),
-            ]
-        )
-
-        output = json.loads(capsys.readouterr().out)
         assert "matches" in output
         assert "matched_locations" in output
         assert "query_valid" in output
@@ -385,30 +230,6 @@ class TestCliQueryOutputFormat:
         artifacts_dir: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        query_file = _write_query_file(
-            tmp_path,
-            {
-                "collection": "symbols",
-                "filter": {
-                    "type": "field",
-                    "field": "kind",
-                    "op": "eq",
-                    "value": "function",
-                },
-                "assertion": {"type": "exists"},
-            },
-        )
+        _, output = _run_query(tmp_path, artifacts_dir, _SYMBOLS_FUNCTION_QUERY, capsys)
 
-        main(
-            [
-                "query",
-                "--artifacts-dir",
-                str(artifacts_dir),
-                "--query-file",
-                str(query_file),
-            ]
-        )
-
-        raw_out = capsys.readouterr().out
-        parsed = json.loads(raw_out)
-        assert isinstance(parsed, dict)
+        assert isinstance(output, dict)

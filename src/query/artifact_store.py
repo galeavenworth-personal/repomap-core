@@ -275,35 +275,28 @@ class ArtifactStore:
             )
             return empty
 
-        # Build fan_in with integer validation
-        fan_in_records: list[dict[str, object]] = []
-        for k, v in data.get("fan_in", {}).items():
-            try:
-                int_value = int(v)
-            except (TypeError, ValueError):
-                logger.warning(
-                    "Non-integer fan_in value for module %s in %s: %r",
-                    k,
-                    path,
-                    v,
-                )
-                continue
-            fan_in_records.append({"module": k, "value": int_value})
+        def _explode_int_dict(
+            key: str,
+        ) -> list[dict[str, object]]:
+            """Explode a {module: int_value} dict into [{module, value}, ...]."""
+            records: list[dict[str, object]] = []
+            for k, v in data.get(key, {}).items():
+                try:
+                    int_value = int(v)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Non-integer %s value for module %s in %s: %r",
+                        key,
+                        k,
+                        path,
+                        v,
+                    )
+                    continue
+                records.append({"module": k, "value": int_value})
+            return records
 
-        # Build fan_out with integer validation
-        fan_out_records: list[dict[str, object]] = []
-        for k, v in data.get("fan_out", {}).items():
-            try:
-                int_value = int(v)
-            except (TypeError, ValueError):
-                logger.warning(
-                    "Non-integer fan_out value for module %s in %s: %r",
-                    k,
-                    path,
-                    v,
-                )
-                continue
-            fan_out_records.append({"module": k, "value": int_value})
+        fan_in_records = _explode_int_dict("fan_in")
+        fan_out_records = _explode_int_dict("fan_out")
 
         cycles = data.get("cycles")
         if cycles is None:
