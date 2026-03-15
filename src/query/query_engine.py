@@ -124,12 +124,14 @@ class QueryResult:
     Attributes:
         matches: List of matching records
         matched_locations: Location strings for each match (for falsifiability)
-        query_valid: Whether the query executed successfully
+        query_valid: Whether the query executed successfully (indicates query
+            execution success, not assertion evaluation — see QueryEngine.execute())
         error: Error message if query_valid is False
     """
 
     matches: list[dict[str, object]]
     matched_locations: list[str]
+    # Indicates query execution success, not assertion evaluation.
     query_valid: bool
     error: str | None = None
 

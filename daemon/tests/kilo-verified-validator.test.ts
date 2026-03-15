@@ -277,6 +277,62 @@ describe("validateFromKiloLog", () => {
     expect(result.missing).toEqual([]);
   });
 
+  it("derives child_complete:child_error for errored task tool parts", async () => {
+    executeMock.mockResolvedValueOnce([
+      [
+        makeRequirementRow({
+          punch_type: "child_complete",
+          punch_key_pattern: "child_return",
+          required: 1,
+          description: "child must complete successfully",
+        }),
+      ],
+    ]);
+
+    const client = makeClient([
+      makeToolMessage([
+        makeToolPart("task", {
+          input: { subagent_type: "code" },
+          state: { status: "error" },
+        }),
+      ]),
+    ]);
+
+    const result = await validateFromKiloLog("ses-child-error", client, DOLT_CONFIG, "process-orchestrate");
+    expect(result.status).toBe("fail");
+    expect(result.missing).toHaveLength(1);
+    expect(result.missing[0]).toMatchObject({
+      punchType: "child_complete",
+      punchKeyPattern: "child_return",
+    });
+  });
+
+  it("error child yields child_error punch, not child_return", async () => {
+    executeMock.mockResolvedValueOnce([
+      [
+        makeRequirementRow({
+          punch_type: "child_complete",
+          punch_key_pattern: "child_error",
+          required: 1,
+          description: "error child detected",
+        }),
+      ],
+    ]);
+
+    const client = makeClient([
+      makeToolMessage([
+        makeToolPart("task", {
+          input: { subagent_type: "code" },
+          state: { status: "error" },
+        }),
+      ]),
+    ]);
+
+    const result = await validateFromKiloLog("ses-child-error-detected", client, DOLT_CONFIG, "process-orchestrate");
+    expect(result.status).toBe("pass");
+    expect(result.missing).toEqual([]);
+  });
+
   it("derives one child_complete:child_return per child_spawn", async () => {
     executeMock.mockResolvedValueOnce([
       [

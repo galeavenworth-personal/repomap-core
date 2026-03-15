@@ -85,7 +85,7 @@ class QueryService:
         result = self.execute(
             {
                 "collection": collection,
-                "filter": {"type": "field", **filter_dict},
+                "filter": {**filter_dict, "type": "field"},
                 "assertion": {"type": "exists"},
             }
         )
@@ -104,8 +104,8 @@ class QueryService:
         result = self.execute(
             {
                 "collection": collection,
-                "filter": {"type": "field", **filter_dict},
-                "assertion": {"type": "exists"},
+                "filter": {**filter_dict, "type": "field"},
+                "assertion": {"type": "count", "op": ">=", "value": 0},
             }
         )
         if not result.query_valid:

@@ -80,7 +80,7 @@ function toBool(value: number | boolean): boolean {
 }
 
 function escapeRegex(value: string): string {
-  return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value.replaceAll(new RegExp(String.raw`[.*+?^\${}()|[\]\\]`, "g"), String.raw`\$&`);
 }
 
 function sqlLikeToRegex(pattern: string): RegExp {
@@ -164,6 +164,15 @@ function derivePartPunches(
         punchKey: `context7:${suffix}`,
       });
     }
+
+    if (punch.punchType === "child_spawn") {
+      const state = asRecord(part.state);
+      const status = asStringOrNull(state.status);
+      partPunches.push({
+        punchType: "child_complete",
+        punchKey: status === "error" ? "child_error" : "child_return",
+      });
+    }
   }
 
   if (typeof part.tool === "string" && part.tool.toLowerCase() === "bash") {
@@ -204,16 +213,6 @@ function derivePunches(sessionId: string, messages: unknown[]): DerivedPunch[] {
     for (const partUnknown of parts) {
       const part = asRecord(partUnknown);
       punches.push(...derivePartPunches(sessionId, part));
-    }
-  }
-
-  // Mirror daemon child lifecycle derivation: completed task tools imply child return.
-  for (const punch of [...punches]) {
-    if (punch.punchType === "child_spawn") {
-      punches.push({
-        punchType: "child_complete",
-        punchKey: "child_return",
-      });
     }
   }
 

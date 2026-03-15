@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 # Keep these co-located so they can be promoted to contract constants later.
 _COMPLEXITY_JSONL = "complexity.jsonl"
 _SECURITY_JSONL = "security.jsonl"
+_LOG_NOT_FOUND = "%s not found, returning empty collection"
+_LOG_READ_FAILED = "Failed to read %s: %s"
 
 
 class ArtifactStoreProtocol(Protocol):
@@ -144,18 +146,23 @@ class ArtifactStore:
     # Tier-1 artifact loaders (filenames from contract constants)
     # ------------------------------------------------------------------
 
-    def _load_symbols(self) -> list[dict[str, object]]:
-        """Load symbols.jsonl.
+    def _load_jsonl(self, filename: str, record_label: str) -> list[dict[str, object]]:
+        """Load a JSONL artifact file into a list of records.
+
+        Args:
+            filename: Artifact filename relative to artifacts_dir.
+            record_label: Human-readable label for warning messages
+                (e.g. "symbol", "integration").
 
         Returns:
-            List of symbol records, or empty list if file doesn't exist
+            List of parsed records, or empty list on missing/unreadable file.
         """
-        path = self.artifacts_dir / SYMBOLS_JSONL
+        path = self.artifacts_dir / filename
         if not path.exists():
-            logger.debug("%s not found, returning empty collection", SYMBOLS_JSONL)
+            logger.debug(_LOG_NOT_FOUND, filename)
             return []
 
-        symbols: list[dict[str, object]] = []
+        records: list[dict[str, object]] = []
         try:
             with path.open("rb") as f:
                 for line_num, line in enumerate(f, 1):
@@ -163,19 +170,28 @@ class ArtifactStore:
                     if not line:
                         continue
                     try:
-                        symbols.append(orjson.loads(line))
+                        records.append(orjson.loads(line))
                     except orjson.JSONDecodeError as e:
                         logger.warning(
-                            "Failed to parse symbol record at line %d: %s",
+                            "Failed to parse %s record at line %d: %s",
+                            record_label,
                             line_num,
                             e,
                         )
                         continue
         except (OSError, UnicodeDecodeError) as e:
-            logger.warning("Failed to read %s: %s", SYMBOLS_JSONL, e)
+            logger.warning(_LOG_READ_FAILED, filename, e)
             return []
 
-        return symbols
+        return records
+
+    def _load_symbols(self) -> list[dict[str, object]]:
+        """Load symbols.jsonl.
+
+        Returns:
+            List of symbol records, or empty list if file doesn't exist
+        """
+        return self._load_jsonl(SYMBOLS_JSONL, "symbol")
 
     def _load_deps_edges(self) -> list[dict[str, object]]:
         """Load and normalize deps.edgelist.
@@ -188,7 +204,7 @@ class ArtifactStore:
         """
         path = self.artifacts_dir / DEPS_EDGELIST
         if not path.exists():
-            logger.debug("%s not found, returning empty collection", DEPS_EDGELIST)
+            logger.debug(_LOG_NOT_FOUND, DEPS_EDGELIST)
             return []
 
         edges: list[dict[str, object]] = []
@@ -207,7 +223,7 @@ class ArtifactStore:
                         }
                     )
         except (OSError, UnicodeDecodeError) as e:
-            logger.warning("Failed to read %s: %s", DEPS_EDGELIST, e)
+            logger.warning(_LOG_READ_FAILED, DEPS_EDGELIST, e)
             return []
 
         return edges
@@ -218,35 +234,7 @@ class ArtifactStore:
         Returns:
             List of integration records, or empty list if file doesn't exist
         """
-        path = self.artifacts_dir / INTEGRATIONS_STATIC_JSONL
-        if not path.exists():
-            logger.debug(
-                "%s not found, returning empty collection",
-                INTEGRATIONS_STATIC_JSONL,
-            )
-            return []
-
-        integrations: list[dict[str, object]] = []
-        try:
-            with path.open("rb") as f:
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        integrations.append(orjson.loads(line))
-                    except orjson.JSONDecodeError as e:
-                        logger.warning(
-                            "Failed to parse integration record at line %d: %s",
-                            line_num,
-                            e,
-                        )
-                        continue
-        except (OSError, UnicodeDecodeError) as e:
-            logger.warning("Failed to read %s: %s", INTEGRATIONS_STATIC_JSONL, e)
-            return []
-
-        return integrations
+        return self._load_jsonl(INTEGRATIONS_STATIC_JSONL, "integration")
 
     def _load_deps_summary(self) -> dict[str, list[dict[str, object]]]:
         """Load and explode deps_summary.json into queryable collections.
@@ -277,7 +265,14 @@ class ArtifactStore:
             with path.open("rb") as f:
                 data = orjson.loads(f.read())
         except (OSError, orjson.JSONDecodeError) as e:
-            logger.warning("Failed to read %s: %s", DEPS_SUMMARY_JSON, e)
+            logger.warning(_LOG_READ_FAILED, DEPS_SUMMARY_JSON, e)
+            return empty
+
+        if not isinstance(data, dict):
+            logger.warning(
+                "%s is not a JSON object, returning empty collections",
+                DEPS_SUMMARY_JSON,
+            )
             return empty
 
         # Build fan_in with integer validation
@@ -339,32 +334,7 @@ class ArtifactStore:
         Returns:
             List of complexity records, or empty list if file doesn't exist
         """
-        path = self.artifacts_dir / _COMPLEXITY_JSONL
-        if not path.exists():
-            logger.debug("%s not found, returning empty collection", _COMPLEXITY_JSONL)
-            return []
-
-        complexity: list[dict[str, object]] = []
-        try:
-            with path.open("rb") as f:
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        complexity.append(orjson.loads(line))
-                    except orjson.JSONDecodeError as e:
-                        logger.warning(
-                            "Failed to parse complexity record at line %d: %s",
-                            line_num,
-                            e,
-                        )
-                        continue
-        except (OSError, UnicodeDecodeError) as e:
-            logger.warning("Failed to read %s: %s", _COMPLEXITY_JSONL, e)
-            return []
-
-        return complexity
+        return self._load_jsonl(_COMPLEXITY_JSONL, "complexity")
 
     def _load_security(self) -> list[dict[str, object]]:
         """Load security.jsonl (optional analyzer artifact).
@@ -372,32 +342,7 @@ class ArtifactStore:
         Returns:
             List of security finding records, or empty list if file doesn't exist
         """
-        path = self.artifacts_dir / _SECURITY_JSONL
-        if not path.exists():
-            logger.debug("%s not found, returning empty collection", _SECURITY_JSONL)
-            return []
-
-        security: list[dict[str, object]] = []
-        try:
-            with path.open("rb") as f:
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        security.append(orjson.loads(line))
-                    except orjson.JSONDecodeError as e:
-                        logger.warning(
-                            "Failed to parse security record at line %d: %s",
-                            line_num,
-                            e,
-                        )
-                        continue
-        except (OSError, UnicodeDecodeError) as e:
-            logger.warning("Failed to read %s: %s", _SECURITY_JSONL, e)
-            return []
-
-        return security
+        return self._load_jsonl(_SECURITY_JSONL, "security")
 
     # ------------------------------------------------------------------
     # Hash computation
