@@ -199,27 +199,49 @@ async function catchUpSession(client: Client, session: Session, writer: DoltWrit
   await replayChildren(client, session, writer);
 }
 
-export async function runCatchUp(client: Client, writer: DoltWriter) {
+interface RunCatchUpOptions {
+  sinceMs?: number;
+}
+
+function resolveUpdatedMs(session: Session): number | undefined {
+  const updatedMs = session.time?.updated;
+  if (typeof updatedMs === "number" && Number.isFinite(updatedMs)) {
+    return updatedMs;
+  }
+  if (session.updatedAt) {
+    const parsed = new Date(session.updatedAt).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+export async function runCatchUp(
+  client: Client,
+  writer: DoltWriter,
+  options?: RunCatchUpOptions
+): Promise<number> {
   console.log("[oc-daemon] Starting batch catch-up...");
 
   try {
     const { data: sessions, error } = await client.session.list();
     if (error) {
       console.error("[oc-daemon] Catch-up failed to list sessions:", error);
-      return;
+      return 0;
     }
 
     const oneDayAgoMs = Date.now() - 24 * 60 * 60 * 1000;
+    const sinceMs = options?.sinceMs ?? oneDayAgoMs;
     const recentSessions = (sessions as unknown as Session[]).filter((s) => {
-      // Current SDK: time.updated is epoch ms
-      const updatedMs = s.time?.updated;
-      if (typeof updatedMs === "number") return updatedMs > oneDayAgoMs;
-      // Legacy fallback: updatedAt as ISO string
-      if (s.updatedAt) return new Date(s.updatedAt).getTime() > oneDayAgoMs;
-      return false;
+      const updatedMs = resolveUpdatedMs(s);
+      return typeof updatedMs === "number" && updatedMs > sinceMs;
     });
 
-    console.log(`[oc-daemon] Found ${recentSessions.length} sessions to catch up.`);
+    const catchUpMode = options?.sinceMs
+      ? `since ${new Date(sinceMs).toISOString()}`
+      : "within last 24h";
+    console.log(
+      `[oc-daemon] Found ${recentSessions.length} sessions to catch up (${catchUpMode}).`
+    );
 
     for (const session of recentSessions) {
       await catchUpSession(client, session, writer);
@@ -229,7 +251,9 @@ export async function runCatchUp(client: Client, writer: DoltWriter) {
     console.log(`[oc-daemon] Synced ${inserted} child_rels rows from child_spawn punches.`);
 
     console.log("[oc-daemon] Catch-up complete.");
+    return recentSessions.length;
   } catch (err) {
     console.error("[oc-daemon] Catch-up error:", err);
+    return 0;
   }
 }
