@@ -16,13 +16,12 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { findRepoRoot, sleep, timestamp } from "./utils.js";
 
 import {
   checkPort,
-  isPm2AppOnline,
 } from "./factory-dispatch.js";
 
 import {
@@ -85,7 +84,7 @@ export function defaultConfig(): StackConfig {
     doltPort: Number(process.env.DOLT_PORT ?? "3307"),
     temporalPort: Number(process.env.TEMPORAL_PORT ?? "7233"),
     temporalUiPort: Number(process.env.TEMPORAL_UI_PORT ?? "8233"),
-    manageKilo: false,
+    manageKilo: true,
     repoRoot,
     daemonDir,
     pm2Bin: join(daemonDir, "node_modules/.bin/pm2"),
@@ -224,11 +223,27 @@ export async function checkDoltComponent(
 }
 
 /**
+ * Check if a pm2 app is online using the CLI (subprocess, no lingering handles).
+ */
+function isPm2AppOnlineCli(pm2Bin: string, appName: string): boolean {
+  try {
+    const out = execFileSync(pm2Bin, ["jlist"], {
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const procs = JSON.parse(out) as Array<{ name?: string; pm2_env?: { status?: string } }>;
+    return procs.some((p) => p.name === appName && p.pm2_env?.status === "online");
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Check oc-daemon health via pm2 jlist.
- * Replaces: pm2 jlist | grep.
  */
 export async function checkOcDaemon(pm2Bin: string): Promise<ComponentHealth> {
-  const ok = await isPm2AppOnline(pm2Bin, "oc-daemon");
+  const ok = isPm2AppOnlineCli(pm2Bin, "oc-daemon");
   return {
     name: "oc-daemon",
     ok,
@@ -254,10 +269,9 @@ export async function checkTemporalServer(
 
 /**
  * Check Temporal worker health via pm2 jlist.
- * Replaces: pm2 jlist | grep.
  */
 export async function checkTemporalWorker(pm2Bin: string): Promise<ComponentHealth> {
-  const ok = await isPm2AppOnline(pm2Bin, "temporal-worker");
+  const ok = isPm2AppOnlineCli(pm2Bin, "temporal-worker");
   return {
     name: "Temporal worker",
     ok,
@@ -311,30 +325,24 @@ export async function ensureKilo(
   if (!config.manageKilo) {
     throw new Error(
       `kilo serve is not running at ${config.kiloHost}:${config.kiloPort}. ` +
-      `Start it first: kilo serve --port ${config.kiloPort}\n` +
-      `Or use: --with-kilo / --ensure`,
+      `Start it first: kilo serve --port ${config.kiloPort}`,
     );
   }
 
   log(`${timestamp()} Starting kilo serve on ${config.kiloHost}:${config.kiloPort}...`);
 
-  // Check for .env.op + op binary
-  const envOpFile = join(config.repoRoot, ".env.op");
-  const hasOp = existsSync(envOpFile) && resolveBin("op") !== null;
+  // kilo serve uses OAuth from 'kilo auth login' (stored in ~/.local/share/kilo/auth.json).
+  // Do NOT wrap with 'op run' — that's for DSPy compilation, not kilo serve.
+  // Launch as a detached child with stdio redirected to a persistent log file.
+  const kiloLogFd = openSync("/tmp/kilo-serve.log", "a");
+  const kiloChild = spawn("kilo", ["serve", "--port", String(config.kiloPort)], {
+    detached: true,
+    stdio: ["ignore", kiloLogFd, kiloLogFd],
+  });
+  kiloChild.unref();
+  closeSync(kiloLogFd);
 
-  if (hasOp) {
-    spawn(
-      "op",
-      ["run", "--env-file", envOpFile, "--", "kilo", "serve", "--port", String(config.kiloPort)],
-      { detached: true, stdio: ["ignore", "pipe", "pipe"] },
-    ).unref();
-  } else {
-    spawn(
-      "kilo",
-      ["serve", "--port", String(config.kiloPort)],
-      { detached: true, stdio: ["ignore", "pipe", "pipe"] },
-    ).unref();
-  }
+  log(`${timestamp()} kilo serve starting (PID ${kiloChild.pid ?? "?"})...`);
 
   // Wait up to 20s for kilo serve to become healthy
   for (let i = 0; i < 20; i++) {
