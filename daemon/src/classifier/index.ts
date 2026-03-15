@@ -1,3 +1,5 @@
+import { asRecord } from "../infra/record-utils.js";
+
 /**
  * Event Classifier
  *
@@ -91,10 +93,6 @@ function extractMetrics(part: Record<string, unknown>) {
     tokensOutput: typeof tokens?.output === "number" ? tokens.output : undefined,
     tokensReasoning: typeof tokens?.reasoning === "number" ? tokens.reasoning : undefined,
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
 function extractBashCommand(part: Record<string, unknown>): string | null {

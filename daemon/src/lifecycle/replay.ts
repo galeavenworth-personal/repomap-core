@@ -1,4 +1,5 @@
 import { classifyEvent, type Punch } from "../classifier/index.js";
+import { asRecord, pickDate, pickNumber, pickString, pickTimestamp, summarizeArgs } from "../infra/record-utils.js";
 import type { DoltWriter } from "../writer/index.js";
 
 type SessionMessagesClient = {
@@ -32,75 +33,6 @@ export interface ReplaySessionResult {
   punchesDerived: number;
   rowsWritten: number;
   derivedPunches: Punch[];
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
-
-function pickString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.length > 0) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function pickNumber(record: Record<string, unknown>, ...keys: string[]): number | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function pickDate(record: Record<string, unknown>, ...keys: string[]): Date | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (value instanceof Date) {
-      return value;
-    }
-    if (typeof value === "string") {
-      const parsed = new Date(value);
-      if (!Number.isNaN(parsed.getTime())) {
-        return parsed;
-      }
-    }
-  }
-  return undefined;
-}
-
-function pickTimestamp(record: Record<string, unknown>): number {
-  const ts = pickNumber(record, "ts", "timestamp", "createdAtMs");
-  if (typeof ts === "number") {
-    return ts;
-  }
-
-  const timeObj = record.time;
-  if (timeObj && typeof timeObj === "object") {
-    const t = timeObj as Record<string, unknown>;
-    const nested = pickNumber(t, "start", "end", "created", "updated", "completed");
-    if (typeof nested === "number") {
-      return nested;
-    }
-  }
-
-  const createdAt = pickDate(record, "createdAt", "updatedAt");
-  return createdAt ? createdAt.getTime() : Date.now();
-}
-
-function summarizeArgs(args: unknown): string | undefined {
-  if (typeof args === "string") {
-    return args;
-  }
-  if (args) {
-    return JSON.stringify(args).slice(0, 1024);
-  }
-  return undefined;
 }
 
 async function resolveSessionRecord(

@@ -49,6 +49,8 @@ import {
   auditPunchCards,
 } from "../src/infra/punch-card-audit.cli.js";
 
+import { makeValidatorResult } from "./helpers/mock-validator-result.js";
+
 function makeConfig(overrides: Partial<PunchCardCheckConfig> = {}): PunchCardCheckConfig {
   return {
     ...defaultCheckConfig(),
@@ -62,17 +64,7 @@ describe("punch-card-check", () => {
       execute: vi.fn(),
       end: vi.fn(async () => {}),
     };
-    validateFromKiloLogMock.mockResolvedValue({
-      status: "pass",
-      cardId: "card-1",
-      missing: [],
-      violations: [],
-      sessionId: "session-1",
-      sourceSessionId: "session-1",
-      messageCount: 0,
-      derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
-      trustLevel: "verified",
-    });
+    validateFromKiloLogMock.mockResolvedValue(makeValidatorResult());
   });
 
   afterEach(() => {
@@ -116,17 +108,7 @@ describe("punch-card-check", () => {
     });
 
     it("returns PASS when all required punches are present", async () => {
-      validateFromKiloLogMock.mockResolvedValueOnce({
-        status: "pass",
-        cardId: "card-1",
-        missing: [],
-        violations: [],
-        sessionId: "session-1",
-        sourceSessionId: "session-1",
-        messageCount: 3,
-        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
-        trustLevel: "verified",
-      });
+      validateFromKiloLogMock.mockResolvedValueOnce(makeValidatorResult({ messageCount: 3 }));
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -140,17 +122,11 @@ describe("punch-card-check", () => {
     });
 
     it("returns FAIL when required punch is missing", async () => {
-      validateFromKiloLogMock.mockResolvedValueOnce({
+      validateFromKiloLogMock.mockResolvedValueOnce(makeValidatorResult({
         status: "fail",
-        cardId: "card-1",
         missing: [{ punchType: "quality_gate", punchKeyPattern: "tsc%", description: "Must run tsc" }],
-        violations: [],
-        sessionId: "session-1",
-        sourceSessionId: "session-1",
         messageCount: 3,
-        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
-        trustLevel: "verified",
-      });
+      }));
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -165,10 +141,8 @@ describe("punch-card-check", () => {
     });
 
     it("returns FAIL when forbidden punch is present", async () => {
-      validateFromKiloLogMock.mockResolvedValueOnce({
+      validateFromKiloLogMock.mockResolvedValueOnce(makeValidatorResult({
         status: "fail",
-        cardId: "card-1",
-        missing: [],
         violations: [
           {
             punchType: "tool_call",
@@ -177,12 +151,8 @@ describe("punch-card-check", () => {
             description: "Must not call dangerous",
           },
         ],
-        sessionId: "session-1",
-        sourceSessionId: "session-1",
         messageCount: 3,
-        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
-        trustLevel: "verified",
-      });
+      }));
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -198,17 +168,7 @@ describe("punch-card-check", () => {
     });
 
     it("returns PASS when forbidden punch is absent", async () => {
-      validateFromKiloLogMock.mockResolvedValueOnce({
-        status: "pass",
-        cardId: "card-1",
-        missing: [],
-        violations: [],
-        sessionId: "session-1",
-        sourceSessionId: "session-1",
-        messageCount: 3,
-        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
-        trustLevel: "verified",
-      });
+      validateFromKiloLogMock.mockResolvedValueOnce(makeValidatorResult({ messageCount: 3 }));
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -221,17 +181,7 @@ describe("punch-card-check", () => {
     });
 
     it("skips requirements that are neither required nor forbidden", async () => {
-      validateFromKiloLogMock.mockResolvedValueOnce({
-        status: "pass",
-        cardId: "card-1",
-        missing: [],
-        violations: [],
-        sessionId: "session-1",
-        sourceSessionId: "session-1",
-        messageCount: 3,
-        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
-        trustLevel: "verified",
-      });
+      validateFromKiloLogMock.mockResolvedValueOnce(makeValidatorResult({ messageCount: 3 }));
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -244,17 +194,11 @@ describe("punch-card-check", () => {
     });
 
     it("handles multiple requirements with mixed results", async () => {
-      validateFromKiloLogMock.mockResolvedValueOnce({
+      validateFromKiloLogMock.mockResolvedValueOnce(makeValidatorResult({
         status: "fail",
-        cardId: "card-1",
         missing: [{ punchType: "quality_gate", punchKeyPattern: "vitest%", description: "Must run tests" }],
-        violations: [],
-        sessionId: "session-1",
-        sourceSessionId: "session-1",
         messageCount: 3,
-        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
-        trustLevel: "verified",
-      });
+      }));
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -327,10 +271,8 @@ describe("punch-card-check", () => {
     });
 
     it("handles string count values from mysql2", async () => {
-      validateFromKiloLogMock.mockResolvedValueOnce({
+      validateFromKiloLogMock.mockResolvedValueOnce(makeValidatorResult({
         status: "fail",
-        cardId: "card-1",
-        missing: [],
         violations: [
           {
             punchType: "tool_call",
@@ -339,12 +281,8 @@ describe("punch-card-check", () => {
             description: "",
           },
         ],
-        sessionId: "session-1",
-        sourceSessionId: "session-1",
         messageCount: 3,
-        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
-        trustLevel: "verified",
-      });
+      }));
 
       const config = makeConfig();
       const result = await checkPunchCard(config, {
@@ -443,28 +381,20 @@ describe("punch-card-audit", () => {
       ]);
 
       validateFromKiloLogMock
-        .mockResolvedValueOnce({
-          status: "pass",
+        .mockResolvedValueOnce(makeValidatorResult({
           cardId: "card-a",
-          missing: [],
-          violations: [],
           sessionId: "task-pass",
           sourceSessionId: "task-pass",
           messageCount: 1,
-          derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
-          trustLevel: "verified",
-        })
-        .mockResolvedValueOnce({
+        }))
+        .mockResolvedValueOnce(makeValidatorResult({
           status: "fail",
           cardId: "card-b",
           missing: [{ punchType: "gate", punchKeyPattern: "g%" }],
-          violations: [],
           sessionId: "task-fail",
           sourceSessionId: "task-fail",
           messageCount: 1,
-          derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
-          trustLevel: "verified",
-        })
+        }))
         .mockRejectedValueOnce(new Error("no requirements found"));
 
       const config = makeConfig();
@@ -486,17 +416,12 @@ describe("punch-card-audit", () => {
         [{ task_id: "task-1", card_id: "card-a" }],
         [],
       ]);
-      validateFromKiloLogMock.mockResolvedValueOnce({
-        status: "pass",
+      validateFromKiloLogMock.mockResolvedValueOnce(makeValidatorResult({
         cardId: "card-a",
-        missing: [],
-        violations: [],
         sessionId: "task-1",
         sourceSessionId: "task-1",
         messageCount: 1,
-        derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
-        trustLevel: "verified",
-      });
+      }));
 
       const config = makeConfig();
       const result = await auditPunchCards(config, { limit: 10, jsonOutput: false });

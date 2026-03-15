@@ -9,47 +9,21 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import mysql from "mysql2/promise";
 
 import { validateFromKiloLog } from "../src/governor/kilo-verified-validator.js";
-import { isSessionTerminal } from "./helpers/session-completion.js";
+import {
+  assertKiloReachable,
+  createDoltConnection,
+  DOLT_CONN_CONFIG,
+  kiloUrl,
+  pollUntilComplete,
+  SKIP_LIVE,
+} from "./helpers/live-test-harness.js";
 
-const KILO_HOST = process.env.KILO_HOST ?? "127.0.0.1";
-const KILO_PORT = Number.parseInt(process.env.KILO_PORT ?? "4096", 10);
-const BASE_URL = `http://${KILO_HOST}:${KILO_PORT}`;
-const DOLT_HOST = process.env.DOLT_HOST ?? "127.0.0.1";
-const DOLT_PORT = Number.parseInt(process.env.DOLT_PORT ?? "3307", 10);
-const DOLT_DB = process.env.DOLT_DATABASE ?? "factory";
-const SKIP = !process.env.KILO_LIVE;
-
-function kiloUrl(path: string): string {
-  return `${BASE_URL}${path}`;
-}
-
-async function pollUntilComplete(sessionId: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
-    const response = await fetch(kiloUrl(`/session/${sessionId}/message`));
-    if (!response.ok) continue;
-    const messages = (await response.json()) as Array<Record<string, unknown>>;
-    if (isSessionTerminal(messages)) return;
-  }
-  throw new Error(`Session ${sessionId} did not complete within ${timeoutMs}ms`);
-}
-
-describe.skipIf(SKIP)("Punch card enforcement loop", () => {
+describe.skipIf(SKIP_LIVE)("Punch card enforcement loop", () => {
   let conn: mysql.Connection;
 
   beforeAll(async () => {
-    const res = await fetch(kiloUrl("/session")).catch(() => null);
-    if (!res?.ok) {
-      throw new Error(`kilo serve not reachable at ${BASE_URL}`);
-    }
-
-    conn = await mysql.createConnection({
-      host: DOLT_HOST,
-      port: DOLT_PORT,
-      database: DOLT_DB,
-      user: "root",
-    });
+    await assertKiloReachable();
+    conn = await createDoltConnection();
   });
 
   afterAll(async () => {
@@ -140,12 +114,7 @@ describe.skipIf(SKIP)("Punch card enforcement loop", () => {
     const result = await validateFromKiloLog(
       taskId,
       kiloClient,
-      {
-        host: DOLT_HOST,
-        port: DOLT_PORT,
-        database: DOLT_DB,
-        user: "root",
-      },
+      DOLT_CONN_CONFIG,
       "plant-orchestrate",
     );
     expect(result.status).toBe("fail");

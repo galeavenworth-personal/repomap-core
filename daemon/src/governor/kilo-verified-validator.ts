@@ -1,6 +1,7 @@
 import mysql, { type Connection } from "mysql2/promise";
 
 import { classifyEvent } from "../classifier/index.js";
+import { asRecord } from "../infra/record-utils.js";
 import type { DoltConfig } from "../writer/index.js";
 import type { PunchCardRequirement } from "./types.js";
 import type { KiloVerifiedValidationResult } from "./validation-types.js";
@@ -80,10 +81,6 @@ function classifyGateFromCommand(command: string, status: string): DerivedPunch 
 
 function toBool(value: number | boolean): boolean {
   return value === true || value === 1;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value != null && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
 function escapeRegex(value: string): string {
