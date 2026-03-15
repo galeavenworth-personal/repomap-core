@@ -389,12 +389,12 @@ async function writeInitialTask(
 
 /**
  * Derive hierarchy depth from a bead ID convention: dots indicate nesting.
- * "repomap-core-1ax" → 0, "repomap-core-1ax.3" → 1, "repomap-core-mol-d9jz.2" → 1
+ * "repomap-core-1ax" → 1, "repomap-core-1ax.3" → 2, "repomap-core-mol-d9jz.2" → 2
  */
 function beadDepth(beadId: string): number {
   const base = beadId.replace(/^repomap-core-/, "");
   const dotCount = (base.match(/\./g) ?? []).length;
-  return dotCount;
+  return dotCount + 1;
 }
 
 /**
@@ -414,6 +414,7 @@ async function lookupBeadContext(
       user: process.env.DOLT_USER ?? "root",
       password: process.env.DOLT_PASSWORD ?? "",
       database: "beads_repomap-core",
+      connectTimeout: 2000,
     });
     try {
       const [rows] = await conn.execute(
@@ -446,9 +447,12 @@ async function maybeInjectCardPrompt(
       formulaId = ctx.formulaId;
     }
 
-    const cardResolution = config.cardId
-      ? await resolveCardExitPrompt(config.mode, config.cardId, depth, formulaId)
-      : await resolveCardExitPrompt(config.mode, undefined, depth, formulaId);
+    const cardResolution = await resolveCardExitPrompt(
+      config.mode,
+      config.cardId || undefined,
+      depth,
+      formulaId,
+    );
     if (cardResolution.prompt) {
       for (const part of payload.parts) {
         if (part.type === "text" && typeof part.text === "string") {

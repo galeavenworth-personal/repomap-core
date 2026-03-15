@@ -205,7 +205,7 @@ INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, 
     ('pr-review-orchestrate', 'pr-review-orchestrate', 'tool_call',       'apply_diff%',            TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs directly', TRUE),
     ('pr-review-orchestrate', 'pr-review-orchestrate', 'tool_call',       'write_to_file%',         TRUE,  TRUE,  'FORBIDDEN: Must not write files directly', TRUE),
     ('pr-review-orchestrate', 'pr-review-orchestrate', 'mcp_call',        '%codebase___retrieval%', TRUE,  TRUE,  'FORBIDDEN: Must not explore codebase directly', TRUE),
-    ('pr-review-orchestrate', 'pr-review-orchestrate', 'command_exec',    'bash%',                  TRUE,  TRUE,  'FORBIDDEN: Must not call GitHub CLI directly', TRUE),
+    ('pr-review-orchestrate', 'pr-review-orchestrate', 'command_exec',    'bash%',                  TRUE,  TRUE,  'FORBIDDEN: Must not execute bash commands directly', TRUE),
     ('pr-review-orchestrate', 'pr-review-orchestrate', 'cost_checkpoint', '%',                      FALSE, FALSE, 'Cost tracking (optional)', FALSE)
 ON DUPLICATE KEY UPDATE
     workflow_name = VALUES(workflow_name),
