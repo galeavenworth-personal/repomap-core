@@ -192,7 +192,8 @@ customModes:
         - `mcp_call:%context7%` — Verify external API interfaces via documentation
       - Forbidden punches: none defined for this card.
       - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "refactor"`.
-      - If the check fails, continue work, mint missing punches, and re-run until PASS.
+      - This script is the kilo-verified validator for card exit; do not use punch_engine mint/check commands.
+      - If the check fails, complete missing requirements and re-run until PASS.
     source: project
   - slug: code
     name: Code Fabricator
@@ -266,7 +267,8 @@ customModes:
       - Forbidden punches:
         - `child_spawn:%` — Do not delegate from specialist mode
       - Before exiting, run `.kilocode/tools/check_punch_card.sh "$SESSION_ID" "execute-subtask"`.
-      - If the check fails, continue work, mint missing punches, and re-run until PASS.
+      - This script is the kilo-verified validator for card exit; do not use punch_engine mint/check commands.
+      - If the check fails, complete missing requirements and re-run until PASS.
     source: project
 
   - slug: product-skeptic

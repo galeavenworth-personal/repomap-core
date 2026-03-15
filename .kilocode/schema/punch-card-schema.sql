@@ -47,7 +47,7 @@ CREATE TABLE tasks (
 -- -----------------------------------------------------------------------------
 -- punches: Append-only ledger of observed execution events
 -- -----------------------------------------------------------------------------
--- Each row is a single punch minted by the replication daemon when it
+-- Each row is a single punch written by the daemon projector when it
 -- observes a qualifying event in Kilo session data.
 --
 -- Punches cannot be faked. They can only be caused.
