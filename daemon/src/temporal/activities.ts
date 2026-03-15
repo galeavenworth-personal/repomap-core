@@ -751,21 +751,19 @@ export async function validateTaskPunchCard(
     ...doltConfig,
     password: process.env.DOLT_DB_PASSWORD,
   };
-  const { PunchCardValidator } = await import("../governor/punch-card-validator.js");
-  const validator = new PunchCardValidator(fullConfig);
-  try {
-    await validator.connect();
-    const result = await validator.validatePunchCard(taskId, cardId, {
-      enforcedOnly: enforcedOnly ?? false,
-    });
-    return {
-      status: result.status,
-      missing: result.missing.map((m) => `${m.punchType}:${m.punchKeyPattern}`),
-      violations: result.violations.map(
-        (v) => `${v.punchType}:${v.punchKeyPattern} (${v.count}x)`
-      ),
-    };
-  } finally {
-    await validator.disconnect();
-  }
+  const { validateFromKiloLog } = await import("../governor/kilo-verified-validator.js");
+  const kiloClient = createOpencodeClient({
+    baseUrl: `http://${process.env.KILO_HOST ?? "127.0.0.1"}:${process.env.KILO_PORT ?? "4096"}`,
+  });
+  const result = await validateFromKiloLog(taskId, kiloClient, fullConfig, cardId, {
+    enforcedOnly: enforcedOnly ?? false,
+    sourceSessionId: taskId,
+  });
+  return {
+    status: result.status,
+    missing: result.missing.map((m) => `${m.punchType}:${m.punchKeyPattern}`),
+    violations: result.violations.map(
+      (v) => `${v.punchType}:${v.punchKeyPattern} (${v.count}x)`
+    ),
+  };
 }

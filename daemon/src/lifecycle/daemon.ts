@@ -2,7 +2,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk/client";
 import { createHash } from "node:crypto";
 
 import { classifyEvent, type RawEvent } from "../classifier/index.js";
-import { PunchCardValidator } from "../governor/punch-card-validator.js";
+import { validateFromKiloLog } from "../governor/kilo-verified-validator.js";
 import { DEFAULT_MODE_CARD_MAP, loadModeCardMap } from "../infra/mode-card-map.js";
 import { sortKeysDeep } from "../infra/utils.js";
 import { createDoltWriter, type DoltWriter } from "../writer/index.js";
@@ -202,6 +202,7 @@ async function fetchSessionMode(config: DaemonConfig, taskId: string): Promise<s
 }
 
 async function validateSessionCheckpoint(
+  client: OcClient,
   writer: DoltWriter,
   config: DaemonConfig,
   taskId: string,
@@ -220,17 +221,22 @@ async function validateSessionCheckpoint(
     return;
   }
 
-  const validator = new PunchCardValidator({
-    host: config.doltHost,
-    port: config.doltPort,
-    database: config.doltDatabase,
-    user: config.doltUser,
-    password: config.doltPassword,
-  });
-
   try {
-    await validator.connect();
-    const result = await validator.validatePunchCard(taskId, cardId);
+    const result = await validateFromKiloLog(
+      taskId,
+      client,
+      {
+        host: config.doltHost,
+        port: config.doltPort,
+        database: config.doltDatabase,
+        user: config.doltUser,
+        password: config.doltPassword,
+      },
+      cardId,
+      {
+        sourceSessionId: taskId,
+      },
+    );
     const details = {
       missing: result.missing.map((m) => `${m.punchType}:${m.punchKeyPattern}`),
       violations: result.violations.map((v) => `${v.punchType}:${v.punchKeyPattern} (${v.count}x)`),
@@ -253,8 +259,6 @@ async function validateSessionCheckpoint(
     }
   } catch (error) {
     console.error(`[oc-daemon] Checkpoint validation failed for ${taskId}:`, error);
-  } finally {
-    await validator.disconnect();
   }
 }
 
@@ -460,7 +464,7 @@ async function processEvent(
     // For session.updated events (legacy), mode was on the session info
     const info = asRecord(properties.info);
     const mode = pickString(info, "mode");
-    await validateSessionCheckpoint(writer, config, punch.taskId, mode);
+    await validateSessionCheckpoint(client, writer, config, punch.taskId, mode);
   }
 
   return observedAt.getTime();

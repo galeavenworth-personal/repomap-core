@@ -95,7 +95,7 @@ describe("loadCostBudgetConfig", () => {
 //
 // These tests mock the mysql2 connection to test the monitor's logic without
 // requiring a live Dolt database. This is the same pattern used by
-// punch-card-validator.test.ts.
+// legacy punch-card validation tests.
 
 /** Helper to create a mock MySQL connection that returns configurable query results. */
 function createMockConnection(queryResponses: Map<string, unknown[]>) {

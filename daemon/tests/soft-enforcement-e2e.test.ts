@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import mysql from "mysql2/promise";
 
-import { PunchCardValidator } from "../src/governor/punch-card-validator.js";
+import { validateFromKiloLog } from "../src/governor/kilo-verified-validator.js";
 import { resolveCardExitPrompt } from "../src/optimization/prompt-injection.js";
 import { isSessionTerminal } from "./helpers/session-completion.js";
 
@@ -217,32 +217,40 @@ describe.skipIf(SKIP_LIVE)("soft enforcement live scenarios", () => {
   });
 
   it("scenario 3: negative test with forced card failure", async () => {
-    const validator = new PunchCardValidator({
-      host: DOLT_HOST,
-      port: DOLT_PORT,
-      database: DOLT_DB,
-      user: "root",
-    });
-
     const taskId = `soft-enforce-neg-${Date.now()}`;
-    await conn.execute(
-      `INSERT INTO punches (task_id, punch_type, punch_key, observed_at, source_hash)
-       VALUES (?, 'tool_call', 'edit_file', NOW(), SHA2(CONCAT(?, '-forbidden'), 256))`,
-      [taskId, taskId],
+    const kiloClient = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              parts: [
+                {
+                  type: "tool",
+                  tool: "edit_file",
+                  state: { status: "completed" },
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    };
+    const result = await validateFromKiloLog(
+      taskId,
+      kiloClient,
+      {
+        host: DOLT_HOST,
+        port: DOLT_PORT,
+        database: DOLT_DB,
+        user: "root",
+      },
+      "plant-orchestrate",
     );
-
-    try {
-      await validator.connect();
-      const result = await validator.validatePunchCard(taskId, "plant-orchestrate");
-      expect(result.status).toBe("fail");
-      expect(
-        result.violations.some(
-          (v) => v.punchType === "tool_call" && v.punchKeyPattern === "edit_file%",
-        ),
-      ).toBe(true);
-    } finally {
-      await validator.disconnect();
-      await conn.execute(`DELETE FROM punches WHERE task_id = ?`, [taskId]);
-    }
+    expect(result.status).toBe("fail");
+    expect(
+      result.violations.some(
+        (v) => v.punchType === "tool_call" && v.punchKeyPattern === "edit_file%",
+      ),
+    ).toBe(true);
   });
 });
