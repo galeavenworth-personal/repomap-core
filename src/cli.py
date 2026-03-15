@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -51,6 +52,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Artifacts directory (default: config output dir)",
     )
 
+    query_parser = subparsers.add_parser(
+        "query", help="Execute a structured query against artifacts"
+    )
+    query_parser.add_argument(
+        "--artifacts-dir",
+        default=".repomap",
+        help="Artifacts directory (default: .repomap)",
+    )
+    query_parser.add_argument(
+        "--query-file",
+        required=True,
+        help="Path to JSON file containing the structured query",
+    )
+
     return parser
 
 
@@ -83,6 +98,89 @@ def _handle_validate(root: Path, artifacts_dir: str | None) -> int:
     return 0
 
 
+def _handle_query(artifacts_dir_str: str, query_file_str: str) -> int:
+    """Execute a structured query against artifacts and print JSON result."""
+    from pydantic import ValidationError
+
+    from query.query_engine import QueryResult
+    from query.service import QueryService
+
+    def _result_to_json(result: QueryResult) -> str:
+        return json.dumps(
+            {
+                "matches": result.matches,
+                "matched_locations": result.matched_locations,
+                "query_valid": result.query_valid,
+                "error": result.error,
+            },
+            indent=2,
+            default=str,
+        )
+
+    query_file = Path(query_file_str).expanduser().resolve()
+    if not query_file.is_file():
+        error_result = QueryResult(
+            matches=[],
+            matched_locations=[],
+            query_valid=False,
+            error=f"Query file not found: {query_file}",
+        )
+        sys.stdout.write(_result_to_json(error_result) + "\n")
+        return 1
+
+    try:
+        raw_text = query_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        error_result = QueryResult(
+            matches=[],
+            matched_locations=[],
+            query_valid=False,
+            error=f"Failed to read query file: {exc}",
+        )
+        sys.stdout.write(_result_to_json(error_result) + "\n")
+        return 1
+
+    try:
+        query_dict = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        error_result = QueryResult(
+            matches=[],
+            matched_locations=[],
+            query_valid=False,
+            error=f"Invalid JSON in query file: {exc}",
+        )
+        sys.stdout.write(_result_to_json(error_result) + "\n")
+        return 1
+
+    if not isinstance(query_dict, dict):
+        error_result = QueryResult(
+            matches=[],
+            matched_locations=[],
+            query_valid=False,
+            error="Query file must contain a JSON object",
+        )
+        sys.stdout.write(_result_to_json(error_result) + "\n")
+        return 1
+
+    artifacts_dir = Path(artifacts_dir_str).expanduser().resolve()
+
+    try:
+        svc = QueryService(artifacts_dir)
+        result = svc.execute(query_dict)
+    except ValidationError as exc:
+        error_result = QueryResult(
+            matches=[],
+            matched_locations=[],
+            query_valid=False,
+            error=f"Invalid query structure: {exc}",
+        )
+        sys.stdout.write(_result_to_json(error_result) + "\n")
+        return 1
+
+    sys.stdout.write(_result_to_json(result) + "\n")
+    return 0 if result.query_valid else 1
+
+
 def _handle_verify(root: Path, artifacts_dir: str | None) -> int:
     resolved_artifacts_dir = _resolve_artifacts_dir(root, artifacts_dir)
     try:
@@ -106,6 +204,9 @@ def _handle_verify(root: Path, artifacts_dir: str | None) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "query":
+        return _handle_query(args.artifacts_dir, args.query_file)
 
     root = Path(args.root).expanduser().resolve()
 
