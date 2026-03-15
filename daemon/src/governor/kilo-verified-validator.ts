@@ -207,6 +207,16 @@ function derivePunches(sessionId: string, messages: unknown[]): DerivedPunch[] {
     }
   }
 
+  // Mirror daemon child lifecycle derivation: completed task tools imply child return.
+  for (const punch of [...punches]) {
+    if (punch.punchType === "child_spawn") {
+      punches.push({
+        punchType: "child_complete",
+        punchKey: "child_return",
+      });
+    }
+  }
+
   if (hasSessionCompletionEvidence(messages)) {
     punches.push({
       punchType: "step_complete",

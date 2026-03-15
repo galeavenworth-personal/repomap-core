@@ -254,6 +254,82 @@ describe("validateFromKiloLog", () => {
     expect(result.missing).toEqual([]);
   });
 
+  it("derives child_complete:child_return for completed task tool parts", async () => {
+    executeMock.mockResolvedValueOnce([
+      [
+        makeRequirementRow({
+          punch_type: "child_complete",
+          punch_key_pattern: "child_return",
+          required: 1,
+          description: "child must complete",
+        }),
+      ],
+    ]);
+
+    const client = makeClient([
+      makeToolMessage([
+        makeToolPart("task", { input: { subagent_type: "code" } }),
+      ]),
+    ]);
+
+    const result = await validateFromKiloLog("ses-child-complete", client, DOLT_CONFIG, "process-orchestrate");
+    expect(result.status).toBe("pass");
+    expect(result.missing).toEqual([]);
+  });
+
+  it("derives one child_complete:child_return per child_spawn", async () => {
+    executeMock.mockResolvedValueOnce([
+      [
+        makeRequirementRow({
+          punch_type: "child_spawn",
+          punch_key_pattern: "code",
+          required: 1,
+          description: "must spawn code child",
+        }),
+        makeRequirementRow({
+          punch_type: "child_complete",
+          punch_key_pattern: "child_return",
+          required: 1,
+          description: "child must return",
+        }),
+      ],
+    ]);
+
+    const client = makeClient([
+      makeToolMessage([
+        makeToolPart("task", { input: { subagent_type: "code" } }),
+        makeToolPart("task", { input: { subagent_type: "architect" } }),
+      ]),
+    ]);
+
+    const result = await validateFromKiloLog("ses-multi-child", client, DOLT_CONFIG, "process-orchestrate");
+    expect(result.status).toBe("pass");
+    expect(result.missing).toEqual([]);
+  });
+
+  it("matches legacy numeric type '7' for child_complete punches", async () => {
+    executeMock.mockResolvedValueOnce([
+      [
+        makeRequirementRow({
+          punch_type: "7",
+          punch_key_pattern: "child_return",
+          required: 1,
+          description: "legacy child_complete requirement",
+        }),
+      ],
+    ]);
+
+    const client = makeClient([
+      makeToolMessage([
+        makeToolPart("task", { input: { subagent_type: "code" } }),
+      ]),
+    ]);
+
+    const result = await validateFromKiloLog("ses-legacy-child-complete", client, DOLT_CONFIG, "process-orchestrate");
+    expect(result.status).toBe("pass");
+    expect(result.missing).toEqual([]);
+  });
+
   it("matches legacy numeric type '6' for child_spawn via state.input replay path", async () => {
     executeMock.mockResolvedValueOnce([
       [
