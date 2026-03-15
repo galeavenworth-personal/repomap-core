@@ -163,9 +163,17 @@ function canonicalMcpPunchKey(toolName: string): string {
 }
 
 function extractSubagentType(part: Record<string, unknown>): string {
+  // Real-time SSE event shape: part.input.subagent_type
   const input = asRecord(part.input);
   const subagent = input.subagent_type;
   if (typeof subagent === "string" && subagent.length > 0) return subagent;
+
+  // session.messages replay shape: part.state.input.subagent_type
+  const state = asRecord(part.state);
+  const stateInput = asRecord(state.input);
+  const stateSubagent = stateInput.subagent_type;
+  if (typeof stateSubagent === "string" && stateSubagent.length > 0) return stateSubagent;
+
   return "unknown_child";
 }
 

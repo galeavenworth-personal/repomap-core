@@ -80,7 +80,7 @@ function toBool(value: number | boolean): boolean {
 }
 
 function escapeRegex(value: string): string {
-  return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value.replaceAll(new RegExp(String.raw`[.*+?^\${}()|[\]\\]`, "g"), String.raw`\$&`);
 }
 
 function sqlLikeToRegex(pattern: string): RegExp {
@@ -94,6 +94,8 @@ function punchTypeAliases(punchType: string): string[] {
   const aliases = [punchType];
   if (punchType === "mcp_call") aliases.push("3");
   if (punchType === "gate_pass") aliases.push("4");
+  if (punchType === "child_spawn") aliases.push("6");
+  if (punchType === "child_complete") aliases.push("7");
   if (punchType === "step_complete") aliases.push("9");
   return aliases;
 }
@@ -160,6 +162,15 @@ function derivePartPunches(
       partPunches.push({
         punchType: "mcp_call",
         punchKey: `context7:${suffix}`,
+      });
+    }
+
+    if (punch.punchType === "child_spawn") {
+      const state = asRecord(part.state);
+      const status = asStringOrNull(state.status);
+      partPunches.push({
+        punchType: "child_complete",
+        punchKey: status === "error" ? "child_error" : "child_return",
       });
     }
   }
