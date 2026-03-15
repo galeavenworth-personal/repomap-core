@@ -18,6 +18,7 @@ import {
   DOLT_PORT,
   DOLT_DB,
   kiloUrl,
+  makeForbiddenEditClient,
   pollUntilComplete,
   SKIP_LIVE,
 } from "./helpers/live-test-harness.js";
@@ -195,26 +196,9 @@ describe.skipIf(SKIP_LIVE)("soft enforcement live scenarios", () => {
 
   it("scenario 3: negative test with forced card failure", async () => {
     const taskId = `soft-enforce-neg-${Date.now()}`;
-    const kiloClient = {
-      session: {
-        messages: async () => ({
-          data: [
-            {
-              parts: [
-                {
-                  type: "tool",
-                  tool: "edit_file",
-                  state: { status: "completed" },
-                },
-              ],
-            },
-          ],
-        }),
-      },
-    };
     const result = await validateFromKiloLog(
       taskId,
-      kiloClient,
+      makeForbiddenEditClient(),
       DOLT_CONN_CONFIG,
       "plant-orchestrate",
     );

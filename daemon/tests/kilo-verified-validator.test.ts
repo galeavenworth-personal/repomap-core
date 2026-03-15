@@ -47,6 +47,19 @@ function makeRequirementRow(overrides: Partial<{
   };
 }
 
+function makeToolPart(tool: string, overrides: Record<string, unknown> = {}) {
+  return {
+    type: "tool",
+    tool,
+    state: { status: "completed" },
+    ...overrides,
+  };
+}
+
+function makeToolMessage(parts: Record<string, unknown>[]) {
+  return { parts };
+}
+
 describe("validateFromKiloLog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -69,17 +82,8 @@ describe("validateFromKiloLog", () => {
       {
         role: "assistant",
         parts: [
-          {
-            type: "tool",
-            tool: "readFile",
-            state: { status: "completed" },
-          },
-          {
-            type: "tool",
-            tool: "bash",
-            input: { command: "ruff check ." },
-            state: { status: "completed" },
-          },
+          makeToolPart("readFile"),
+          makeToolPart("bash", { input: { command: "ruff check ." } }),
         ],
       },
     ]);
@@ -103,19 +107,10 @@ describe("validateFromKiloLog", () => {
     ]);
 
     const client = makeClient([
-      {
-        parts: [
-          {
-            type: "tool",
-            tool: "bash",
-            input: null,
-            state: { status: "completed", input: { command: "ruff format --check ." } },
-          },
-          {
-            type: "step-finish",
-          },
-        ],
-      },
+      makeToolMessage([
+        makeToolPart("bash", { input: null, state: { status: "completed", input: { command: "ruff format --check ." } } }),
+        { type: "step-finish" },
+      ]),
     ]);
 
     const result = await validateFromKiloLog("ses-replay-shape", client, DOLT_CONFIG, "execute-subtask");
@@ -135,17 +130,7 @@ describe("validateFromKiloLog", () => {
       ],
     ]);
 
-    const client = makeClient([
-      {
-        parts: [
-          {
-            type: "tool",
-            tool: "readFile",
-            state: { status: "completed" },
-          },
-        ],
-      },
-    ]);
+    const client = makeClient([makeToolMessage([makeToolPart("readFile")])]);
 
     const result = await validateFromKiloLog("ses-abandoned", client, DOLT_CONFIG, "execute-subtask");
 
@@ -160,17 +145,7 @@ describe("validateFromKiloLog", () => {
   it("fails when a required punch is missing", async () => {
     executeMock.mockResolvedValueOnce([[makeRequirementRow({ punch_key_pattern: "edit_file%" })]]);
 
-    const client = makeClient([
-      {
-        parts: [
-          {
-            type: "tool",
-            tool: "readFile",
-            state: { status: "completed" },
-          },
-        ],
-      },
-    ]);
+    const client = makeClient([makeToolMessage([makeToolPart("readFile")])]);
 
     const result = await validateFromKiloLog("ses-missing", client, DOLT_CONFIG, "execute-subtask");
 
@@ -194,17 +169,7 @@ describe("validateFromKiloLog", () => {
       ],
     ]);
 
-    const client = makeClient([
-      {
-        parts: [
-          {
-            type: "tool",
-            tool: "applyDiff",
-            state: { status: "completed" },
-          },
-        ],
-      },
-    ]);
+    const client = makeClient([makeToolMessage([makeToolPart("applyDiff")])]);
 
     const result = await validateFromKiloLog("ses-forbidden", client, DOLT_CONFIG, "execute-subtask");
 
@@ -221,18 +186,8 @@ describe("validateFromKiloLog", () => {
     executeMock.mockResolvedValueOnce([[makeRequirementRow({ punch_key_pattern: "read%" })]]);
 
     const client = makeClient([
-      {
-        parts: [
-          {
-            type: "tool",
-            tool: "readFile",
-            state: { status: "completed" },
-          },
-        ],
-      },
-      {
-        parts: [],
-      },
+      makeToolMessage([makeToolPart("readFile")]),
+      makeToolMessage([]),
     ]);
 
     const result = await validateFromKiloLog("ses-coc", client, DOLT_CONFIG, "execute-subtask", {
@@ -267,21 +222,10 @@ describe("validateFromKiloLog", () => {
     ]);
 
     const client = makeClient([
-      {
-        parts: [
-          {
-            type: "tool",
-            tool: "context7_query-docs",
-            state: { status: "completed" },
-          },
-          {
-            type: "tool",
-            tool: "bash",
-            input: { command: "mypy src" },
-            state: { status: "completed" },
-          },
-        ],
-      },
+      makeToolMessage([
+        makeToolPart("context7_query-docs"),
+        makeToolPart("bash", { input: { command: "mypy src" } }),
+      ]),
     ]);
 
     const result = await validateFromKiloLog("ses-legacy", client, DOLT_CONFIG, "execute-subtask");

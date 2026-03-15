@@ -2,8 +2,9 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
 
 import { classifyEvent, RawEvent } from "../classifier/index.js";
-import { asRecord, pickDate, pickNumber, pickString, pickTimestamp, summarizeArgs } from "../infra/record-utils.js";
+import { asRecord, pickDate, pickNumber, pickString, pickTimestamp } from "../infra/record-utils.js";
 import { DoltWriter } from "../writer/index.js";
+import { writeTextMessagePart, writeToolPart } from "./write-parts.js";
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
@@ -24,47 +25,6 @@ interface Message {
   parts?: Record<string, unknown>[];
   role?: string;
   [key: string]: unknown;
-}
-
-async function writeTextMessagePart(
-  writer: DoltWriter,
-  sessionId: string,
-  partRecord: Record<string, unknown>,
-  messageRole: string,
-  punch: ReturnType<typeof classifyEvent>
-): Promise<void> {
-  const text = pickString(partRecord, "text", "content") ?? "";
-  await writer.writeMessage({
-    sessionId,
-    role: pickString(partRecord, "role") ?? messageRole,
-    contentType: "text",
-    contentPreview: text.slice(0, 512),
-    ts: pickTimestamp(partRecord),
-    cost: pickNumber(partRecord, "cost") ?? punch?.cost,
-    tokensIn: pickNumber(asRecord(partRecord.tokens), "input") ?? punch?.tokensInput,
-    tokensOut: pickNumber(asRecord(partRecord.tokens), "output") ?? punch?.tokensOutput,
-  });
-}
-
-async function writeToolPart(
-  writer: DoltWriter,
-  sessionId: string,
-  partRecord: Record<string, unknown>,
-  punch: ReturnType<typeof classifyEvent>
-): Promise<void> {
-  const state = asRecord(partRecord.state);
-  const args = partRecord.input;
-  const toolName = pickString(partRecord, "tool") ?? punch?.punchKey ?? "unknown_tool";
-  await writer.writeToolCall({
-    sessionId,
-    toolName,
-    argsSummary: summarizeArgs(args),
-    status: pickString(state, "status"),
-    error: pickString(state, "error"),
-    durationMs: pickNumber(partRecord, "durationMs"),
-    cost: pickNumber(partRecord, "cost") ?? punch?.cost,
-    ts: pickTimestamp(partRecord),
-  });
 }
 
 /** Emit synthetic lifecycle punches for a session (created + updated). */

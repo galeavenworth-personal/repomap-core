@@ -14,6 +14,7 @@ import {
   createDoltConnection,
   DOLT_CONN_CONFIG,
   kiloUrl,
+  makeForbiddenEditClient,
   pollUntilComplete,
   SKIP_LIVE,
 } from "./helpers/live-test-harness.js";
@@ -94,26 +95,9 @@ describe.skipIf(SKIP_LIVE)("Punch card enforcement loop", () => {
 
   it("fails validation when forbidden orchestrator punch exists", async () => {
     const taskId = `neg-${Date.now()}`;
-    const kiloClient = {
-      session: {
-        messages: async () => ({
-          data: [
-            {
-              parts: [
-                {
-                  type: "tool",
-                  tool: "edit_file",
-                  state: { status: "completed" },
-                },
-              ],
-            },
-          ],
-        }),
-      },
-    };
     const result = await validateFromKiloLog(
       taskId,
-      kiloClient,
+      makeForbiddenEditClient(),
       DOLT_CONN_CONFIG,
       "plant-orchestrate",
     );

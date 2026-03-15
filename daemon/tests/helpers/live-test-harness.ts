@@ -43,3 +43,28 @@ export async function assertKiloReachable(): Promise<void> {
 export async function createDoltConnection(): Promise<mysql.Connection> {
   return mysql.createConnection(DOLT_CONN_CONFIG);
 }
+
+/**
+ * Creates a mock kilo client whose session.messages returns a single
+ * completed edit_file tool call — useful for negative validation tests
+ * that expect a forbidden-punch violation.
+ */
+export function makeForbiddenEditClient() {
+  return {
+    session: {
+      messages: async () => ({
+        data: [
+          {
+            parts: [
+              {
+                type: "tool",
+                tool: "edit_file",
+                state: { status: "completed" },
+              },
+            ],
+          },
+        ],
+      }),
+    },
+  };
+}

@@ -1,6 +1,7 @@
 import { classifyEvent, type Punch } from "../classifier/index.js";
-import { asRecord, pickDate, pickNumber, pickString, pickTimestamp, summarizeArgs } from "../infra/record-utils.js";
+import { asRecord, pickDate, pickString } from "../infra/record-utils.js";
 import type { DoltWriter } from "../writer/index.js";
+import { writeTextMessagePart, writeToolPart } from "./write-parts.js";
 
 type SessionMessagesClient = {
   session: {
@@ -89,31 +90,10 @@ async function replayMessagePart(
 
   const partType = pickString(partRecord, "type");
   if (partType === "text" && writer && !dryRun) {
-    const text = pickString(partRecord, "text", "content") ?? "";
-    await writer.writeMessage({
-      sessionId,
-      role: pickString(partRecord, "role") ?? messageRole,
-      contentType: "text",
-      contentPreview: text.slice(0, 512),
-      ts: pickTimestamp(partRecord),
-      cost: pickNumber(partRecord, "cost") ?? punch?.cost,
-      tokensIn: pickNumber(asRecord(partRecord.tokens), "input") ?? punch?.tokensInput,
-      tokensOut: pickNumber(asRecord(partRecord.tokens), "output") ?? punch?.tokensOutput,
-    });
+    await writeTextMessagePart(writer, sessionId, partRecord, messageRole, punch);
     rowsWritten += 1;
   } else if (partType === "tool" && writer && !dryRun) {
-    const state = asRecord(partRecord.state);
-    const toolName = pickString(partRecord, "tool") ?? punch?.punchKey ?? "unknown_tool";
-    await writer.writeToolCall({
-      sessionId,
-      toolName,
-      argsSummary: summarizeArgs(partRecord.input),
-      status: pickString(state, "status"),
-      error: pickString(state, "error"),
-      durationMs: pickNumber(partRecord, "durationMs"),
-      cost: pickNumber(partRecord, "cost") ?? punch?.cost,
-      ts: pickTimestamp(partRecord),
-    });
+    await writeToolPart(writer, sessionId, partRecord, punch);
     rowsWritten += 1;
   }
 
