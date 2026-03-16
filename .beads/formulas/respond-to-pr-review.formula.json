@@ -17,10 +17,17 @@
       "description": "Fix ledger items marked disposition=fix for PR {{pr_number}} in {{owner_repo}} on head {{head_ref_name}}"
     },
     {
+      "id": "commit-and-push",
+      "title": "Commit and push fixes",
+      "depends_on": ["fix-items"],
+      "labels": ["mode:code", "card:execute-subtask", "phase:3"],
+      "description": "Stage all changes from fix-items, commit with message referencing PR {{pr_number}} and bead {{bead_id}}, push to {{head_ref_name}}. Verify git status is clean and branch is up to date with origin."
+    },
+    {
       "id": "acknowledge-ledger",
       "title": "Acknowledge ledger",
-      "depends_on": ["fix-items"],
-      "labels": ["mode:pr-review", "card:acknowledge-pr-ledger", "phase:3"],
+      "depends_on": ["commit-and-push"],
+      "labels": ["mode:pr-review", "card:acknowledge-pr-ledger", "phase:4"],
       "description": "Reply to each review comment for PR {{pr_number}} in {{owner_repo}} with fix references and bead {{bead_id}} context"
     }
   ]
