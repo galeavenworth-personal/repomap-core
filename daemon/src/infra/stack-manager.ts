@@ -174,6 +174,10 @@ export async function checkKiloHealth(
     const resp = await fetchFn(`http://${host}:${port}/session`, {
       signal: AbortSignal.timeout(5000),
     });
+    // Any HTTP response means kilo is alive (401 = running but needs auth)
+    if (resp.status === 401) {
+      return { name: "kilo serve", ok: true, detail: `alive (auth required on ${host}:${port})` };
+    }
     if (!resp.ok) {
       return { name: "kilo serve", ok: false, detail: `HTTP ${resp.status} from ${host}:${port}` };
     }

@@ -224,7 +224,11 @@ export async function preflight(
   // 1. kilo serve
   try {
     const resp = await fetchFn(`${baseUrl}/session`, { signal: AbortSignal.timeout(5000) });
-    if (resp.ok) {
+    if (resp.status === 401) {
+      // 401 means kilo is alive but needs auth — treat as healthy
+      log(`${timestamp()}   ✅ kilo serve (alive, auth required)`);
+      components.push({ name: "kilo serve", ok: true, detail: "alive (auth required)" });
+    } else if (resp.ok) {
       const sessions = (await resp.json()) as unknown[];
       log(`${timestamp()}   ✅ kilo serve (${sessions.length} sessions)`);
       components.push({ name: "kilo serve", ok: true, detail: `${sessions.length} sessions` });
@@ -579,6 +583,33 @@ function normalizeMoleculeSteps(raw: unknown): MoleculeStep[] {
     .filter((step): step is MoleculeStep => step !== null);
 }
 
+
+// Build molecule steps by merging cooked formula steps (with labels) and pour id_mapping (with bead IDs)
+function buildStepsFromCookAndPour(cookedOutput: unknown, pouredOutput: unknown, protoId: string): MoleculeStep[] {
+  const cooked = asRecord(cookedOutput);
+  const poured = asRecord(pouredOutput);
+  const idMapping = asRecord(poured.id_mapping);
+  const rawSteps = getArrayField(cooked, ["steps"]);
+
+  return rawSteps
+    .map((item) => {
+      const step = asRecord(item);
+      const stepId = getStringField(step, ["id"]);
+      if (!stepId) return null;
+
+      // Map formula step ID to poured bead ID via id_mapping
+      const mappingKey = `${protoId}.${stepId}`;
+      const beadId = getStringField(idMapping, [mappingKey]) ?? stepId;
+
+      const title = getStringField(step, ["title", "name"]) ?? stepId;
+      const description = getStringField(step, ["description", "prompt", "body"]) ?? "";
+      const rawLabels = Array.isArray(step.labels) ? step.labels : [];
+      const labels = rawLabels.filter((label): label is string => typeof label === "string");
+      return { id: beadId, title, description, labels };
+    })
+    .filter((step): step is MoleculeStep => step !== null);
+}
+
 function parseCookProtoId(raw: unknown): string | undefined {
   const data = asRecord(raw);
   const nestedProto = asRecord(data.proto);
@@ -624,8 +655,11 @@ export function extractStepConfig(labels: string[]): { mode?: string; card?: str
 }
 
 // Build bd cook command args
-export function buildCookCommand(formula: string, vars: string[]): string[] {
+export function buildCookCommand(formula: string, vars: string[], persist = false): string[] {
   const args = ["cook", formula];
+  if (persist) {
+    args.push("--persist", "--force");
+  }
   for (const variable of vars) {
     args.push("--var", variable);
   }
@@ -701,16 +735,25 @@ async function runMoleculeDispatch(
   fetchFn: typeof fetch,
   deps: DispatchDependencies,
 ): Promise<ExitCodeValue> {
+  // Two-phase cook: ephemeral (get steps with labels) then persist (get proto_id)
   let cookedOutput: unknown;
   try {
     log(`${timestamp()} Cooking formula: ${config.formula}`);
-    cookedOutput = await deps.execBdFn(buildCookCommand(config.formula, config.vars));
+    cookedOutput = await deps.execBdFn(buildCookCommand(config.formula, config.vars, false));
   } catch (e) {
     process.stderr.write(`ERROR: ${(e as Error).message}\n`);
     return ExitCode.GENERAL_ERROR;
   }
 
-  const protoId = parseCookProtoId(cookedOutput);
+  let persistedOutput: unknown;
+  try {
+    persistedOutput = await deps.execBdFn(buildCookCommand(config.formula, config.vars, true));
+  } catch (e) {
+    process.stderr.write(`ERROR: ${(e as Error).message}\n`);
+    return ExitCode.GENERAL_ERROR;
+  }
+
+  const protoId = parseCookProtoId(persistedOutput);
   if (!protoId) {
     process.stderr.write("ERROR: Failed to parse proto id from bd cook output\n");
     return ExitCode.GENERAL_ERROR;
@@ -744,8 +787,12 @@ async function runMoleculeDispatch(
     return ExitCode.GENERAL_ERROR;
   }
 
-  const steps = normalizeMoleculeSteps(showedOutput);
-  const effectiveSteps = steps.length > 0 ? steps : normalizeMoleculeSteps(pouredOutput);
+  // Primary: merge cooked formula steps (with labels) + pour id_mapping (with bead IDs)
+  // Fallback: try bd mol show output, then pour output directly
+  const cookedSteps = buildStepsFromCookAndPour(cookedOutput, pouredOutput, protoId);
+  const showSteps = normalizeMoleculeSteps(showedOutput);
+  const pourSteps = normalizeMoleculeSteps(pouredOutput);
+  const effectiveSteps = cookedSteps.length > 0 ? cookedSteps : showSteps.length > 0 ? showSteps : pourSteps;
   const result: MoleculeDispatchResult = {
     molecule_id: moleculeId,
     formula: config.formula,
