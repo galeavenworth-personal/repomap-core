@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { asNumber, asRecord, asString, summarizeArgs, toTimestamp } from "../infra/record-utils.js";
 import { createDoltWriter } from "../writer/index.js";
 
 interface SessionAccumulator {
@@ -25,27 +26,6 @@ function expandHome(inputPath: string): string {
     return path.join(homedir(), inputPath.slice(2));
   }
   return inputPath;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function toTimestamp(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = new Date(value).getTime();
-    if (!Number.isNaN(parsed)) return parsed;
-  }
-  return Date.now();
 }
 
 async function readJsonIfExists(filePath: string): Promise<unknown[] | null> {
@@ -106,16 +86,6 @@ function parseToolUses(row: Record<string, unknown>): unknown[] {
     return row.toolUse;
   }
   return [];
-}
-
-function summarizeArgs(args: unknown): string | undefined {
-  if (typeof args === "string") {
-    return args;
-  }
-  if (args) {
-    return JSON.stringify(args).slice(0, 1024);
-  }
-  return undefined;
 }
 
 async function ingestUiMessages(

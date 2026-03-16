@@ -8,33 +8,20 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import mysql from "mysql2/promise";
 
-import { PunchCardValidator } from "../src/governor/punch-card-validator.js";
+import { validateFromKiloLog } from "../src/governor/kilo-verified-validator.js";
 import { resolveCardExitPrompt } from "../src/optimization/prompt-injection.js";
-import { isSessionTerminal } from "./helpers/session-completion.js";
-
-const KILO_HOST = process.env.KILO_HOST ?? "127.0.0.1";
-const KILO_PORT = Number.parseInt(process.env.KILO_PORT ?? "4096", 10);
-const BASE_URL = `http://${KILO_HOST}:${KILO_PORT}`;
-const DOLT_HOST = process.env.DOLT_HOST ?? "127.0.0.1";
-const DOLT_PORT = Number.parseInt(process.env.DOLT_PORT ?? "3307", 10);
-const DOLT_DB = process.env.DOLT_DATABASE ?? "factory";
-const SKIP_LIVE = !process.env.KILO_LIVE;
-
-function kiloUrl(path: string): string {
-  return `${BASE_URL}${path}`;
-}
-
-async function pollUntilComplete(sessionId: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
-    const response = await fetch(kiloUrl(`/session/${sessionId}/message`));
-    if (!response.ok) continue;
-    const messages = (await response.json()) as Array<Record<string, unknown>>;
-    if (isSessionTerminal(messages)) return;
-  }
-  throw new Error(`Session ${sessionId} did not complete within ${timeoutMs}ms`);
-}
+import {
+  assertKiloReachable,
+  createDoltConnection,
+  DOLT_CONN_CONFIG,
+  DOLT_HOST,
+  DOLT_PORT,
+  DOLT_DB,
+  kiloUrl,
+  makeForbiddenEditClient,
+  pollUntilComplete,
+  SKIP_LIVE,
+} from "./helpers/live-test-harness.js";
 
 describe("soft enforcement prompt injection", () => {
   let conn: mysql.Connection;
@@ -124,17 +111,8 @@ describe.skipIf(SKIP_LIVE)("soft enforcement live scenarios", () => {
   let conn: mysql.Connection;
 
   beforeAll(async () => {
-    const res = await fetch(kiloUrl("/session")).catch(() => null);
-    if (!res?.ok) {
-      throw new Error(`kilo serve not reachable at ${BASE_URL}`);
-    }
-
-    conn = await mysql.createConnection({
-      host: DOLT_HOST,
-      port: DOLT_PORT,
-      database: DOLT_DB,
-      user: "root",
-    });
+    await assertKiloReachable();
+    conn = await createDoltConnection();
   });
 
   afterAll(async () => {
@@ -217,32 +195,18 @@ describe.skipIf(SKIP_LIVE)("soft enforcement live scenarios", () => {
   });
 
   it("scenario 3: negative test with forced card failure", async () => {
-    const validator = new PunchCardValidator({
-      host: DOLT_HOST,
-      port: DOLT_PORT,
-      database: DOLT_DB,
-      user: "root",
-    });
-
     const taskId = `soft-enforce-neg-${Date.now()}`;
-    await conn.execute(
-      `INSERT INTO punches (task_id, punch_type, punch_key, observed_at, source_hash)
-       VALUES (?, 'tool_call', 'edit_file', NOW(), SHA2(CONCAT(?, '-forbidden'), 256))`,
-      [taskId, taskId],
+    const result = await validateFromKiloLog(
+      taskId,
+      makeForbiddenEditClient(),
+      DOLT_CONN_CONFIG,
+      "plant-orchestrate",
     );
-
-    try {
-      await validator.connect();
-      const result = await validator.validatePunchCard(taskId, "plant-orchestrate");
-      expect(result.status).toBe("fail");
-      expect(
-        result.violations.some(
-          (v) => v.punchType === "tool_call" && v.punchKeyPattern === "edit_file%",
-        ),
-      ).toBe(true);
-    } finally {
-      await validator.disconnect();
-      await conn.execute(`DELETE FROM punches WHERE task_id = ?`, [taskId]);
-    }
+    expect(result.status).toBe("fail");
+    expect(
+      result.violations.some(
+        (v) => v.punchType === "tool_call" && v.punchKeyPattern === "edit_file%",
+      ),
+    ).toBe(true);
   });
 });

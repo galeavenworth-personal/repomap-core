@@ -177,30 +177,6 @@ export interface PunchCardRequirement {
   description?: string;
 }
 
-/** Result of evaluating a punch card for a task. */
-export interface ValidationResult {
-  status: "pass" | "fail";
-  cardId: string;
-  taskId: string;
-  missing: Array<{ punchType: string; punchKeyPattern: string; description?: string }>;
-  violations: Array<{ punchType: string; punchKeyPattern: string; count: number; description?: string }>;
-  toolAdherence?: ToolAdherenceResult;
-}
-
-/** Tool adherence check result. */
-export interface ToolAdherenceResult {
-  editCount: number;
-  expectedRange: [number, number];
-  withinRange: boolean;
-}
-
-/** Result of validating all children of a parent task. */
-export interface SubtaskValidation {
-  parentTaskId: string;
-  children: Array<{ childId: string; validation: ValidationResult }>;
-  allChildrenValid: boolean;
-}
-
 // ── Session Audit ──
 
 /** Severity of an audit finding. */

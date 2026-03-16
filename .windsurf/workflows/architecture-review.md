@@ -11,26 +11,53 @@ The target scope is determined by context:
 - **Planning phase**: the modules/files the upcoming task will touch
 - **Ad-hoc**: a directory or the entire codebase (`daemon/src/`, `src/`, or both)
 
-### Prerequisites: Repomap Artifacts
+### Prerequisites: Repomap Artifacts & Query API
 
 The Python layer (`src/`) has pre-computed repomap artifacts in `.repomap/`.
 These provide structured, resolved data that is **far more precise than grep**
 for dependency, call graph, and symbol analysis. Use them as the primary source
 for the Python layer; fall back to grep for the TypeScript/daemon layer.
 
-| Artifact | Format | Key Fields | Useful For |
-|----------|--------|------------|------------|
-| `deps.edgelist` | `src -> dst` per line | module dependency edges | Lens 1 (dep overlap), Lens 4 (DIP) |
-| `deps_summary.json` | JSON | `fan_in`, `fan_out`, `cycles`, `layer_violations`, `top_modules` | Lens 1 (fan-in), Lens 2 (complexity), Lens 4 (SRP/DIP) |
-| `calls.jsonl` | JSONL | `callee_expr`, `enclosing_symbol_id`, `resolved_to.qualified_name`, `module` | Lens 1 (parallel call targets) |
-| `symbols.jsonl` | JSONL | `kind`, `qualified_name`, `path`, `layer`, `name` | Lens 1 (duplicate names), Lens 4 (SRP: symbols per module) |
-| `refs.jsonl` | JSONL | `ref_kind`, `resolved_to`, `evidence.strategy` | Lens 3 (unresolved refs = broken contracts) |
-| `modules.jsonl` | JSONL | `module`, `path`, `is_package` | Module enumeration |
-| `integrations_static.jsonl` | JSONL | `tag`, `path`, `evidence` | Lens 5 (external integration points) |
+**Query API** — use `repomap query` instead of raw `jq`/`read_file` against
+artifact files. The query API normalizes heterogeneous formats into uniform
+collections, provides typed filters, and returns provenance locations.
 
-To regenerate artifacts: `python -m cli generate .`
+```bash
+# CLI usage: write a query JSON file, then execute it
+.venv/bin/python -m cli query --query-file /tmp/my-query.json --artifacts-dir .repomap
+```
 
-No query API exists yet — consume artifacts directly with `jq` or `read_file`.
+Query JSON format (StructuredQuery):
+```json
+{
+  "collection": "<collection-name>",
+  "filter": {"type": "field", "field": "<field>", "op": "<operator>", "value": "<value>"},
+  "assertion": {"type": "exists"}
+}
+```
+- **Operators**: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`
+- **Boolean composition**: `{"type": "and", "filters": [...]}`, `{"type": "or", "filters": [...]}`
+- **Assertions**: `{"type": "exists"}` or `{"type": "count", "op": ">=", "value": 10}`
+- **Dot notation**: nested field access, e.g. `"field": "resolved_to.qualified_name"`
+
+| Collection | Source Artifact | Key Fields | Useful For |
+|------------|----------------|------------|------------|
+| `symbols` | `symbols.jsonl` | `kind`, `qualified_name`, `path`, `layer`, `name` | Lens 1 (duplicate names), Lens 4 (SRP) |
+| `deps_edges` | `deps.edgelist` | `source`, `target` | Lens 1 (dep overlap), Lens 4 (DIP) |
+| `fan_in` | `deps_summary.json` | `module`, `value` | Lens 1 (fan-in analysis) |
+| `fan_out` | `deps_summary.json` | `module`, `value` | Lens 2 (complexity), Lens 4 (SRP) |
+| `layer_violations` | `deps_summary.json` | (violation records) | Lens 3 (interface), Lens 4 (DIP) |
+| `cycles` | `deps_summary.json` | `cycle_id`, `modules` | Dependency cycle detection |
+| `integrations` | `integrations_static.jsonl` | `tag`, `path`, `evidence` | Lens 5 (subprocess/exec detection) |
+| `complexity` | `complexity.jsonl` | (optional) | Complexity metrics |
+| `security` | `security.jsonl` | (optional) | Security findings |
+
+> **Not yet in query API**: `calls.jsonl` and `refs.jsonl` are generated as
+> artifacts but not loaded as query collections. For those, use
+> `jq` against the raw files or grep as a fallback until collections are added.
+
+To regenerate artifacts: `.venv/bin/python -m cli generate .`
+
 The TypeScript layer (`daemon/src/`) is not covered by repomap; use grep there.
 
 ---
@@ -51,36 +78,62 @@ unmaintainable.
    ```
    Any function name appearing 2+ times across different files is a candidate.
 
-2. **Duplicate symbol names across modules** (Python — via `symbols.jsonl`)
-   ```bash
-   jq -r 'select(.kind == "function") | .name' .repomap/symbols.jsonl \
-     | sort | uniq -c | sort -rn | awk '$1 > 1'
+2. **Duplicate symbol names across modules** (Python — via `symbols` collection)
+   Query all function symbols, then group by name to find duplicates:
+   ```json
+   {
+     "collection": "symbols",
+     "filter": {"type": "field", "field": "kind", "op": "eq", "value": "function"},
+     "assertion": {"type": "exists"}
+   }
    ```
-   Cross-reference with `path` to find same-name functions in different modules.
+   ```bash
+   # Save as /tmp/lens1-dup-symbols.json, then:
+   .venv/bin/python -m cli query --query-file /tmp/lens1-dup-symbols.json --artifacts-dir .repomap
+   ```
+   From the result `matches`, group by `name` field. Any name appearing in 2+
+   distinct `path` values is a candidate for parallel path elimination.
 
-3. **Repomap dependency overlap** (Python — via `deps.edgelist`)
-   Parse `.repomap/deps.edgelist`. Two modules with >70% overlap in their
-   dependency sets likely solve overlapping problems:
-   ```bash
-   # Build per-module dep sets from deps.edgelist, compute Jaccard similarity
-   # Modules with Jaccard > 0.7 are candidates for merging
+3. **Repomap dependency overlap** (Python — via `deps_edges` collection)
+   Query all dependency edges, then compute Jaccard similarity on dep sets:
+   ```json
+   {
+     "collection": "deps_edges",
+     "filter": {"type": "field", "field": "source", "op": "ne", "value": ""},
+     "assertion": {"type": "exists"}
+   }
    ```
+   ```bash
+   .venv/bin/python -m cli query --query-file /tmp/lens1-dep-edges.json --artifacts-dir .repomap
+   ```
+   From the result `matches`, build per-module dep sets (group by `source`,
+   collect `target` values). Two modules with Jaccard similarity >0.7 in
+   their dependency sets are candidates for merging.
 
 4. **Parallel call targets** (Python — via `calls.jsonl`)
-   Find functions that call the same resolved targets:
+   > `calls.jsonl` is not yet available as a query collection. Use `jq` directly:
    ```bash
    jq -r 'select(.resolved_to != null) | "\(.enclosing_symbol_id) -> \(.resolved_to.qualified_name)"' \
      .repomap/calls.jsonl | sort
    ```
    Two different enclosing symbols calling the same set of targets = likely
    parallel implementations.
+   > **TODO**: Add `calls` collection to ArtifactStore to enable query API usage here.
 
-5. **Fan-in analysis** (Python — via `deps_summary.json`)
-   High fan-in modules are shared infrastructure. If two modules with similar
-   fan-in/fan-out profiles exist, they may be solving the same problem:
-   ```bash
-   jq '.fan_in | to_entries | sort_by(-.value) | .[:15]' .repomap/deps_summary.json
+5. **Fan-in analysis** (Python — via `fan_in` collection)
+   High fan-in modules are shared infrastructure. Query modules with high fan-in:
+   ```json
+   {
+     "collection": "fan_in",
+     "filter": {"type": "field", "field": "value", "op": "gte", "value": 3},
+     "assertion": {"type": "exists"}
+   }
    ```
+   ```bash
+   .venv/bin/python -m cli query --query-file /tmp/lens1-fan-in.json --artifacts-dir .repomap
+   ```
+   Sort results by `value` descending. If two modules with similar fan-in/fan-out
+   profiles exist, they may be solving the same problem.
 
 6. **Shared utility patterns not extracted** (TypeScript)
    Search for common inline patterns that should be a shared utility:
@@ -126,12 +179,21 @@ strong signal.
    ```
    Cross-reference with SonarQube cognitive complexity issues.
 
-3. **Fan-out as complexity signal** (Python — via `deps_summary.json`)
+3. **Fan-out as complexity signal** (Python — via `fan_out` collection)
    Modules with high fan-out are doing too many things and may benefit from
    a library that encapsulates the concern:
-   ```bash
-   jq '.fan_out | to_entries | sort_by(-.value) | .[:10]' .repomap/deps_summary.json
+   ```json
+   {
+     "collection": "fan_out",
+     "filter": {"type": "field", "field": "value", "op": "gte", "value": 5},
+     "assertion": {"type": "exists"}
+   }
    ```
+   ```bash
+   .venv/bin/python -m cli query --query-file /tmp/lens2-fan-out.json --artifacts-dir .repomap
+   ```
+   Sort results by `value` descending. Top 10 modules with highest fan-out
+   are candidates for build-or-buy analysis.
 
 4. **Dependency count** — modules with many internal dependencies that
    implement a well-known pattern (e.g., "durable workflow execution",
@@ -165,20 +227,28 @@ a citable source. "Close enough" is fully wrong.
 ### Machine checks
 
 1. **Unresolved references** (Python — via `refs.jsonl`)
-   Refs where `resolved_to` is null indicate broken cross-boundary contracts:
+   > `refs.jsonl` is not yet available as a query collection. Use `jq` directly:
    ```bash
    jq -r 'select(.resolved_to == null and .evidence.strategy != "dynamic_unresolvable") | "\(.module) -> \(.expr)"' \
      .repomap/refs.jsonl | sort | uniq -c | sort -rn | head -20
    ```
    Exclude `dynamic_unresolvable` (e.g., `dict.get`) which are expected.
    Remaining unresolved refs are interface discipline violations.
+   > **TODO**: Add `refs` collection to ArtifactStore to enable query API usage here.
 
-2. **Layer violations** (Python — via `deps_summary.json`)
-   ```bash
-   jq '.layer_violations' .repomap/deps_summary.json
+2. **Layer violations** (Python — via `layer_violations` collection)
+   ```json
+   {
+     "collection": "layer_violations",
+     "filter": {"type": "field", "field": "from_file", "op": "ne", "value": ""},
+     "assertion": {"type": "exists"}
+   }
    ```
-   Any layer violation means a module is importing across an architectural
-   boundary it shouldn't.
+   ```bash
+   .venv/bin/python -m cli query --query-file /tmp/lens3-layer-violations.json --artifacts-dir .repomap
+   ```
+   Any match means a module is importing across an architectural boundary
+   it shouldn't. Review each `from_file` → `to_file` edge in the results.
 
 3. **Cross-boundary imports audit** (TypeScript)
    For the target scope, list all imports from other modules. For each:
@@ -228,19 +298,35 @@ grep -rn 'export function\|export async function\|export class\|export interface
   <file> | wc -l
 ```
 
-Python (via `symbols.jsonl` — count symbols per module):
-```bash
-jq -r '.path' .repomap/symbols.jsonl | sort | uniq -c | sort -rn | head -15
+Python (via `symbols` collection — count symbols per module):
+```json
+{
+  "collection": "symbols",
+  "filter": {"type": "field", "field": "kind", "op": "ne", "value": ""},
+  "assertion": {"type": "exists"}
+}
 ```
-
-Python (via `deps_summary.json` — high fan-out = doing too much):
 ```bash
-jq '.fan_out | to_entries | sort_by(-.value) | .[:10]' .repomap/deps_summary.json
+.venv/bin/python -m cli query --query-file /tmp/lens4-srp-symbols.json --artifacts-dir .repomap
+```
+From the result `matches`, group by `path` and count. Modules with >15
+symbols are SRP violation candidates.
+
+Python (via `fan_out` collection — high fan-out = doing too much):
+```json
+{
+  "collection": "fan_out",
+  "filter": {"type": "field", "field": "value", "op": "gte", "value": 10},
+  "assertion": {"type": "exists"}
+}
+```
+```bash
+.venv/bin/python -m cli query --query-file /tmp/lens4-srp-fanout.json --artifacts-dir .repomap
 ```
 
 - **Threshold**: >15 exports/symbols from a single file = flag for review
 - **Also check**: LOC per file (>500 = review, >800 = strong signal)
-- **Also check**: Fan-out >10 from deps_summary = strong signal
+- **Also check**: Fan-out ≥10 from `fan_out` collection = strong signal
 - **Also check**: Does the file mix concerns? (e.g., CLI parsing + business logic + I/O)
 
 #### O — Open/Closed Principle
@@ -266,14 +352,39 @@ Interfaces where >50% of members are optional suggest they should be split.
 
 #### D — Dependency Inversion
 
-Python (via `deps.edgelist` + `symbols.jsonl` layer tags):
-```bash
-# Find edges from high-level layers to low-level layers
-# Cross-reference with symbols.jsonl layer field and deps.edgelist
-jq -r 'select(.layer != null) | "\(.path)\t\(.layer)"' .repomap/symbols.jsonl | sort -u
+Python (via `symbols` + `deps_edges` + `layer_violations` collections):
+
+First, get layer assignments from symbols:
+```json
+{
+  "collection": "symbols",
+  "filter": {"type": "field", "field": "layer", "op": "ne", "value": ""},
+  "assertion": {"type": "exists"}
+}
 ```
-Then check `deps.edgelist` for edges from high-layer modules to low-layer ones.
-Also check `deps_summary.json` `.layer_violations` (pre-computed).
+```bash
+.venv/bin/python -m cli query --query-file /tmp/lens4-dip-layers.json --artifacts-dir .repomap
+```
+From results, build a module→layer map (using `path` and `layer` fields).
+
+Then, get all dependency edges:
+```json
+{
+  "collection": "deps_edges",
+  "filter": {"type": "field", "field": "source", "op": "ne", "value": ""},
+  "assertion": {"type": "exists"}
+}
+```
+Cross-reference edges with the layer map to find high-layer → low-layer imports.
+
+Also query pre-computed layer violations directly:
+```json
+{
+  "collection": "layer_violations",
+  "filter": {"type": "field", "field": "from_file", "op": "ne", "value": ""},
+  "assertion": {"type": "exists"}
+}
+```
 
 TypeScript: import analysis to find high-level modules importing low-level
 modules directly.
@@ -309,11 +420,24 @@ still flag PATH trust issues. The *real* fix is often: use the vendor's SDK.
      | grep -v '\.test\.' | grep -v node_modules
    ```
 
-   Python (via `integrations_static.jsonl`):
-   ```bash
-   jq -r 'select(.tag == "subprocess" or .tag == "os_exec") | "\(.path):\(.line) \(.evidence)"' \
-     .repomap/integrations_static.jsonl
+   Python (via `integrations` collection):
+   ```json
+   {
+     "collection": "integrations",
+     "filter": {
+       "type": "or",
+       "filters": [
+         {"type": "field", "field": "tag", "op": "eq", "value": "subprocess"},
+         {"type": "field", "field": "tag", "op": "eq", "value": "os_exec"}
+       ]
+     },
+     "assertion": {"type": "exists"}
+   }
    ```
+   ```bash
+   .venv/bin/python -m cli query --query-file /tmp/lens5-integrations.json --artifacts-dir .repomap
+   ```
+   Each match includes `path`, `tag`, and `evidence` fields with provenance locations.
 
 2. **Classify each binary**
    For each unique binary invoked, ask:

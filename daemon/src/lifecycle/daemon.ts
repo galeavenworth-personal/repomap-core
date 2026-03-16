@@ -1,9 +1,11 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
+import { createEventSource } from "eventsource-client";
 import { createHash } from "node:crypto";
 
 import { classifyEvent, type RawEvent } from "../classifier/index.js";
-import { PunchCardValidator } from "../governor/punch-card-validator.js";
+import { validateFromKiloLog } from "../governor/kilo-verified-validator.js";
 import { DEFAULT_MODE_CARD_MAP, loadModeCardMap } from "../infra/mode-card-map.js";
+import { asRecord, pickDate, pickNumber, pickString, pickTimestamp, summarizeArgs } from "../infra/record-utils.js";
 import { sortKeysDeep } from "../infra/utils.js";
 import { createDoltWriter, type DoltWriter } from "../writer/index.js";
 import { runCatchUp } from "./catchup.js";
@@ -25,58 +27,6 @@ export interface Daemon {
 
 type OcClient = ReturnType<typeof createOpencodeClient>;
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
-
-function pickString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.length > 0) return value;
-  }
-  return undefined;
-}
-
-function pickNumber(record: Record<string, unknown>, ...keys: string[]): number | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return undefined;
-}
-
-function pickDate(record: Record<string, unknown>, ...keys: string[]): Date | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (value instanceof Date) return value;
-    if (typeof value === "string") {
-      const parsed = new Date(value);
-      if (!Number.isNaN(parsed.getTime())) return parsed;
-    }
-  }
-  return undefined;
-}
-
-function pickTimestamp(record: Record<string, unknown>): number {
-  // Direct numeric timestamp fields
-  const ts = pickNumber(record, "ts", "timestamp", "createdAtMs");
-  if (typeof ts === "number") return ts;
-
-  // Current SDK shape: nested `time` object with epoch ms fields
-  const timeObj = record.time;
-  if (timeObj && typeof timeObj === "object") {
-    const t = timeObj as Record<string, unknown>;
-    const nested = pickNumber(t, "start", "end", "created", "updated", "completed");
-    if (typeof nested === "number") return nested;
-  }
-
-  // Legacy ISO string dates
-  const created = pickDate(record, "createdAt", "updatedAt");
-  if (created) return created.getTime();
-
-  // Only warn once per event type to reduce log spam
-  return Date.now();
-}
 
 function computeRawEventSourceHash(event: RawEvent): string {
   const canonical = JSON.stringify(
@@ -142,12 +92,6 @@ function extractRawEventTs(event: RawEvent): Date | undefined {
   return undefined;
 }
 
-function summarizeArgs(args: unknown): string | undefined {
-  if (typeof args === "string") return args;
-  if (args) return JSON.stringify(args).slice(0, 1024);
-  return undefined;
-}
-
 function resolveMessageRole(part: Record<string, unknown>, properties: Record<string, unknown>): string {
   const partRole = pickString(part, "role");
   if (partRole) return partRole;
@@ -176,6 +120,7 @@ async function fetchSessionMode(config: DaemonConfig, taskId: string): Promise<s
 }
 
 async function validateSessionCheckpoint(
+  client: OcClient,
   writer: DoltWriter,
   config: DaemonConfig,
   taskId: string,
@@ -194,17 +139,22 @@ async function validateSessionCheckpoint(
     return;
   }
 
-  const validator = new PunchCardValidator({
-    host: config.doltHost,
-    port: config.doltPort,
-    database: config.doltDatabase,
-    user: config.doltUser,
-    password: config.doltPassword,
-  });
-
   try {
-    await validator.connect();
-    const result = await validator.validatePunchCard(taskId, cardId);
+    const result = await validateFromKiloLog(
+      taskId,
+      client,
+      {
+        host: config.doltHost,
+        port: config.doltPort,
+        database: config.doltDatabase,
+        user: config.doltUser,
+        password: config.doltPassword,
+      },
+      cardId,
+      {
+        sourceSessionId: taskId,
+      },
+    );
     const details = {
       missing: result.missing.map((m) => `${m.punchType}:${m.punchKeyPattern}`),
       violations: result.violations.map((v) => `${v.punchType}:${v.punchKeyPattern} (${v.count}x)`),
@@ -227,8 +177,6 @@ async function validateSessionCheckpoint(
     }
   } catch (error) {
     console.error(`[oc-daemon] Checkpoint validation failed for ${taskId}:`, error);
-  } finally {
-    await validator.disconnect();
   }
 }
 
@@ -363,7 +311,7 @@ async function processEvent(
   writer: DoltWriter,
   config: DaemonConfig,
   event: unknown
-): Promise<void> {
+): Promise<number> {
   const rawEvent = event as RawEvent;
   const observedAt = new Date();
   const rawEventWriter = writer as DoltWriter & {
@@ -389,7 +337,7 @@ async function processEvent(
   await projectSessionEvent(writer, rawEvent);
 
   const punch = classifyEvent(rawEvent);
-  if (!punch) return;
+  if (!punch) return observedAt.getTime();
 
   await writer.writePunch(punch);
   const properties = asRecord(rawEvent.properties);
@@ -434,8 +382,10 @@ async function processEvent(
     // For session.updated events (legacy), mode was on the session info
     const info = asRecord(properties.info);
     const mode = pickString(info, "mode");
-    await validateSessionCheckpoint(writer, config, punch.taskId, mode);
+    await validateSessionCheckpoint(client, writer, config, punch.taskId, mode);
   }
+
+  return observedAt.getTime();
 }
 
 /** Return true if the error is an expected AbortError during shutdown. */
@@ -473,33 +423,59 @@ export function createDaemon(config: DaemonConfig): Daemon {
 
       await runCatchUp(client, writer);
 
-      let backoffMs = 1000;
-      const maxBackoffMs = 30000;
+      let lastSeenEventMs: number | undefined;
+      let hasConnected = false;
+      let disconnectedSinceLastConnect = false;
 
-      while (!abortController.signal.aborted) {
-        try {
-          console.log("[oc-daemon] Subscribing to SSE event stream...");
-          const { stream } = await client.event.subscribe({
+      const runReconnectCatchUp = async () => {
+        if (typeof lastSeenEventMs !== "number") {
+          console.log("[oc-daemon] Reconnect catch-up skipped (no prior event timestamp).");
+          return;
+        }
+        const gapMs = Math.max(0, Date.now() - lastSeenEventMs);
+        console.log(`[oc-daemon] Reconnect gap duration: ${gapMs}ms.`);
+        const caughtUpSessions = await runCatchUp(client, writer, { sinceMs: lastSeenEventMs });
+        console.log(`[oc-daemon] Reconnect catch-up complete (${caughtUpSessions} sessions).`);
+      };
+
+      console.log("[oc-daemon] Subscribing to SSE event stream...");
+
+      const eventSource = createEventSource({
+        url: `http://${config.kiloHost}:${config.kiloPort}/event`,
+        fetch: (url, init) =>
+          fetch(url, {
+            ...init,
             signal: abortController.signal,
-          });
-
-          backoffMs = 1000;
-
-          for await (const event of stream) {
-            await processEvent(client, writer, config, event);
+          }),
+        onConnect: () => {
+          if (disconnectedSinceLastConnect) {
+            disconnectedSinceLastConnect = false;
+            void runReconnectCatchUp().catch((error: unknown) => {
+              console.error("[oc-daemon] Reconnect catch-up failed:", error);
+            });
           }
-          console.log("[oc-daemon] SSE stream ended. Reconnecting...");
-        } catch (error: unknown) {
-          if (isAbortError(error) || abortController.signal.aborted) break;
+          hasConnected = true;
+        },
+        onDisconnect: () => {
+          if (!abortController.signal.aborted && hasConnected) {
+            disconnectedSinceLastConnect = true;
+          }
+        },
+      });
+
+      try {
+        for await (const event of eventSource) {
+          if (abortController.signal.aborted) break;
+          lastSeenEventMs = await processEvent(client, writer, config, event.data);
+        }
+      } catch (error: unknown) {
+        if (!isAbortError(error) && !abortController.signal.aborted) {
           console.error("[oc-daemon] SSE stream error:", error);
         }
-
-        if (!abortController.signal.aborted) {
-          console.log(`[oc-daemon] Waiting ${backoffMs}ms before reconnecting...`);
-          await new Promise((resolve) => setTimeout(resolve, backoffMs));
-          backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
-        }
+      } finally {
+        eventSource.close();
       }
+
       console.log("[oc-daemon] Event loop exited.");
     },
 

@@ -1,7 +1,10 @@
 
 import { createOpencodeClient } from "@opencode-ai/sdk/client";
-import { DoltWriter } from "../writer/index.js";
+
 import { classifyEvent, RawEvent } from "../classifier/index.js";
+import { asRecord, pickDate, pickNumber, pickString, pickTimestamp } from "../infra/record-utils.js";
+import { DoltWriter } from "../writer/index.js";
+import { writeTextMessagePart, writeToolPart } from "./write-parts.js";
 
 type Client = ReturnType<typeof createOpencodeClient>;
 
@@ -22,101 +25,6 @@ interface Message {
   parts?: Record<string, unknown>[];
   role?: string;
   [key: string]: unknown;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
-
-function pickString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.length > 0) return value;
-  }
-  return undefined;
-}
-
-function pickNumber(record: Record<string, unknown>, ...keys: string[]): number | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return undefined;
-}
-
-function pickDate(record: Record<string, unknown>, ...keys: string[]): Date | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (value instanceof Date) return value;
-    if (typeof value === "string") {
-      const parsed = new Date(value);
-      if (!Number.isNaN(parsed.getTime())) return parsed;
-    }
-  }
-  return undefined;
-}
-
-function pickTimestamp(record: Record<string, unknown>): number {
-  const ts = pickNumber(record, "ts", "timestamp", "createdAtMs");
-  if (typeof ts === "number") return ts;
-
-  // Current SDK shape: nested `time` object with epoch ms fields
-  const timeObj = record.time;
-  if (timeObj && typeof timeObj === "object") {
-    const t = timeObj as Record<string, unknown>;
-    const nested = pickNumber(t, "start", "end", "created", "updated", "completed");
-    if (typeof nested === "number") return nested;
-  }
-
-  const createdAt = pickDate(record, "createdAt", "updatedAt");
-  return createdAt ? createdAt.getTime() : Date.now();
-}
-
-function summarizeArgs(args: unknown): string | undefined {
-  if (typeof args === "string") return args;
-  if (args) return JSON.stringify(args).slice(0, 1024);
-  return undefined;
-}
-
-async function writeTextMessagePart(
-  writer: DoltWriter,
-  sessionId: string,
-  partRecord: Record<string, unknown>,
-  messageRole: string,
-  punch: ReturnType<typeof classifyEvent>
-): Promise<void> {
-  const text = pickString(partRecord, "text", "content") ?? "";
-  await writer.writeMessage({
-    sessionId,
-    role: pickString(partRecord, "role") ?? messageRole,
-    contentType: "text",
-    contentPreview: text.slice(0, 512),
-    ts: pickTimestamp(partRecord),
-    cost: pickNumber(partRecord, "cost") ?? punch?.cost,
-    tokensIn: pickNumber(asRecord(partRecord.tokens), "input") ?? punch?.tokensInput,
-    tokensOut: pickNumber(asRecord(partRecord.tokens), "output") ?? punch?.tokensOutput,
-  });
-}
-
-async function writeToolPart(
-  writer: DoltWriter,
-  sessionId: string,
-  partRecord: Record<string, unknown>,
-  punch: ReturnType<typeof classifyEvent>
-): Promise<void> {
-  const state = asRecord(partRecord.state);
-  const args = partRecord.input;
-  const toolName = pickString(partRecord, "tool") ?? punch?.punchKey ?? "unknown_tool";
-  await writer.writeToolCall({
-    sessionId,
-    toolName,
-    argsSummary: summarizeArgs(args),
-    status: pickString(state, "status"),
-    error: pickString(state, "error"),
-    durationMs: pickNumber(partRecord, "durationMs"),
-    cost: pickNumber(partRecord, "cost") ?? punch?.cost,
-    ts: pickTimestamp(partRecord),
-  });
 }
 
 /** Emit synthetic lifecycle punches for a session (created + updated). */
@@ -199,27 +107,49 @@ async function catchUpSession(client: Client, session: Session, writer: DoltWrit
   await replayChildren(client, session, writer);
 }
 
-export async function runCatchUp(client: Client, writer: DoltWriter) {
+interface RunCatchUpOptions {
+  sinceMs?: number;
+}
+
+function resolveUpdatedMs(session: Session): number | undefined {
+  const updatedMs = session.time?.updated;
+  if (typeof updatedMs === "number" && Number.isFinite(updatedMs)) {
+    return updatedMs;
+  }
+  if (session.updatedAt) {
+    const parsed = new Date(session.updatedAt).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+export async function runCatchUp(
+  client: Client,
+  writer: DoltWriter,
+  options?: RunCatchUpOptions
+): Promise<number> {
   console.log("[oc-daemon] Starting batch catch-up...");
 
   try {
     const { data: sessions, error } = await client.session.list();
     if (error) {
       console.error("[oc-daemon] Catch-up failed to list sessions:", error);
-      return;
+      return 0;
     }
 
     const oneDayAgoMs = Date.now() - 24 * 60 * 60 * 1000;
+    const sinceMs = options?.sinceMs ?? oneDayAgoMs;
     const recentSessions = (sessions as unknown as Session[]).filter((s) => {
-      // Current SDK: time.updated is epoch ms
-      const updatedMs = s.time?.updated;
-      if (typeof updatedMs === "number") return updatedMs > oneDayAgoMs;
-      // Legacy fallback: updatedAt as ISO string
-      if (s.updatedAt) return new Date(s.updatedAt).getTime() > oneDayAgoMs;
-      return false;
+      const updatedMs = resolveUpdatedMs(s);
+      return typeof updatedMs === "number" && updatedMs >= sinceMs;
     });
 
-    console.log(`[oc-daemon] Found ${recentSessions.length} sessions to catch up.`);
+    const catchUpMode = options?.sinceMs
+      ? `since ${new Date(sinceMs).toISOString()}`
+      : "within last 24h";
+    console.log(
+      `[oc-daemon] Found ${recentSessions.length} sessions to catch up (${catchUpMode}).`
+    );
 
     for (const session of recentSessions) {
       await catchUpSession(client, session, writer);
@@ -229,7 +159,9 @@ export async function runCatchUp(client: Client, writer: DoltWriter) {
     console.log(`[oc-daemon] Synced ${inserted} child_rels rows from child_spawn punches.`);
 
     console.log("[oc-daemon] Catch-up complete.");
+    return recentSessions.length;
   } catch (err) {
     console.error("[oc-daemon] Catch-up error:", err);
+    return 0;
   }
 }

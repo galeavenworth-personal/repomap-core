@@ -2,14 +2,14 @@
 /**
  * CLI entry point for punch card validation.
  *
- * Replaces .kilocode/tools/check_punch_card.sh with mysql2 protocol
- * queries instead of shell SQL via mysql/dolt CLI.
+ * Uses kilo-verified event-log replay validation via session.messages,
+ * then evaluates against punch_cards requirements.
  *
  * Usage:
  *   npx tsx daemon/src/infra/punch-card-check.cli.ts [OPTIONS] <session_id> <card_id>
  *
  * Options:
- *   --parent-session UUID   Parent session ID (informational)
+ *   --parent-session UUID   Parent session ID (provenance hint)
  *   --enforced-only         Only check enforced requirements
  *   --json                  Output results as JSON instead of human-readable text
  *   --help                  Show this help
@@ -18,14 +18,14 @@
  *   0  All requirements satisfied (PASS)
  *   1  One or more requirements violated (FAIL)
  *   2  Usage error or query failure
- *
- * See: repomap-core-76q.3
  */
 
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import mysql from "mysql2/promise";
+import { createOpencodeClient } from "@opencode-ai/sdk/client";
+
+import { validateFromKiloLog } from "../governor/kilo-verified-validator.js";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -45,18 +45,6 @@ export interface CheckOptions {
   jsonOutput?: boolean;
 }
 
-interface RequirementRow {
-  forbidden: number | boolean;
-  required: number | boolean;
-  punch_type: string;
-  punch_key_pattern: string;
-  description: string | null;
-}
-
-interface CountRow {
-  count: number | string;
-}
-
 export interface RequirementResult {
   kind: "required" | "forbidden";
   punchType: string;
@@ -71,6 +59,10 @@ export interface CheckResult {
   cardId: string;
   parentSession?: string;
   enforcedOnly: boolean;
+  sourceSessionId: string;
+  messageCount: number;
+  derivationPath: string;
+  trustLevel: "verified" | "projected" | "untrusted";
   requirements: RequirementResult[];
   failures: number;
   passed: boolean;
@@ -90,24 +82,10 @@ export function defaultCheckConfig(): PunchCardCheckConfig {
 
 // ── Core Logic ───────────────────────────────────────────────────────────
 
-function toBool(value: number | boolean): boolean {
-  return value === true || value === 1;
-}
-
-function toNumber(value: number | string | undefined): number {
-  if (typeof value === "number") return value;
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
-}
-
 const SAFE_ID_RE = /^[A-Za-z0-9._:-]+$/;
 
 /**
- * Validate a punch card for a given session.
- * This is the core logic extracted for reuse by the audit CLI.
+ * Validate a punch card for a given session using kilo-verified replay.
  */
 export async function checkPunchCard(
   config: PunchCardCheckConfig,
@@ -120,95 +98,58 @@ export async function checkPunchCard(
     throw new Error(`invalid card_id '${options.cardId}'`);
   }
 
-  let connection: mysql.Connection | undefined;
-  try {
-    connection = await mysql.createConnection({
+  const baseUrl = `http://${process.env.KILO_HOST ?? "127.0.0.1"}:${process.env.KILO_PORT ?? "4096"}`;
+  const client = createOpencodeClient({ baseUrl });
+
+  const validation = await validateFromKiloLog(
+    options.sessionId,
+    client,
+    {
       host: config.host,
       port: config.port,
       database: config.database,
       user: config.user,
       password: config.password,
-      connectTimeout: 5000,
-    });
+    },
+    options.cardId,
+    {
+      enforcedOnly: options.enforcedOnly,
+      sourceSessionId: options.parentSession ?? options.sessionId,
+    },
+  );
 
-    // Fetch requirements
-    const enforcedClause = options.enforcedOnly ? " AND enforced = TRUE" : "";
-    const [reqRows] = await connection.execute(
-      `SELECT forbidden, required, punch_type, punch_key_pattern, COALESCE(description, '') AS description
-       FROM punch_cards
-       WHERE card_id = ?${enforcedClause}
-       ORDER BY forbidden DESC, required DESC, punch_type, punch_key_pattern`,
-      [options.cardId],
-    );
+  const requirementFailures: RequirementResult[] = [
+    ...validation.violations.map((violation) => ({
+      kind: "forbidden" as const,
+      punchType: violation.punchType,
+      punchKeyPattern: violation.punchKeyPattern,
+      description: violation.description,
+      count: violation.count,
+      passed: false,
+    })),
+    ...validation.missing.map((missing) => ({
+      kind: "required" as const,
+      punchType: missing.punchType,
+      punchKeyPattern: missing.punchKeyPattern,
+      description: missing.description,
+      count: 0,
+      passed: false,
+    })),
+  ];
 
-    const requirements = reqRows as RequirementRow[];
-    if (requirements.length === 0) {
-      throw new Error(`no requirements found for card '${options.cardId}'`);
-    }
-
-    const results: RequirementResult[] = [];
-    let failures = 0;
-
-    for (const req of requirements) {
-      const forbidden = toBool(req.forbidden);
-      const required = toBool(req.required);
-
-      if (!forbidden && !required) {
-        continue;
-      }
-
-      const [countRows] = await connection.execute(
-        `SELECT COUNT(*) AS count
-         FROM punches
-         WHERE task_id = ?
-           AND punch_type = ?
-           AND punch_key LIKE ?`,
-        [options.sessionId, req.punch_type, req.punch_key_pattern],
-      );
-
-      const count = toNumber((countRows as CountRow[])[0]?.count);
-
-      if (forbidden) {
-        const passed = count === 0;
-        if (!passed) failures++;
-        results.push({
-          kind: "forbidden",
-          punchType: req.punch_type,
-          punchKeyPattern: req.punch_key_pattern,
-          description: req.description || undefined,
-          count,
-          passed,
-        });
-        continue;
-      }
-
-      // required
-      const passed = count > 0;
-      if (!passed) failures++;
-      results.push({
-        kind: "required",
-        punchType: req.punch_type,
-        punchKeyPattern: req.punch_key_pattern,
-        description: req.description || undefined,
-        count,
-        passed,
-      });
-    }
-
-    return {
-      sessionId: options.sessionId,
-      cardId: options.cardId,
-      parentSession: options.parentSession,
-      enforcedOnly: options.enforcedOnly ?? false,
-      requirements: results,
-      failures,
-      passed: failures === 0,
-    };
-  } finally {
-    if (connection) {
-      await connection.end().catch(() => {});
-    }
-  }
+  return {
+    sessionId: options.sessionId,
+    cardId: options.cardId,
+    parentSession: options.parentSession,
+    enforcedOnly: options.enforcedOnly ?? false,
+    sourceSessionId: validation.sourceSessionId,
+    messageCount: validation.messageCount,
+    derivationPath: validation.derivationPath,
+    trustLevel: validation.trustLevel,
+    requirements: requirementFailures,
+    failures: requirementFailures.length,
+    passed: validation.status === "pass",
+  };
 }
 
 // ── Output Formatting ────────────────────────────────────────────────────
@@ -220,8 +161,13 @@ function formatCheckResult(result: CheckResult): string {
     "Punch Card Check",
     `- Session: ${result.sessionId}`,
     `- Card: ${result.cardId}`,
-    "- Engine: mysql2",
+    "- Engine: kilo-verified",
+    `- Source Session: ${result.sourceSessionId}`,
+    `- Message Count: ${result.messageCount}`,
+    `- Trust Level: ${result.trustLevel}`,
+    `- Derivation Path: ${result.derivationPath}`,
   );
+
   if (result.enforcedOnly) {
     lines.push("- Mode: enforced-only (exit gate)");
   }
@@ -230,15 +176,13 @@ function formatCheckResult(result: CheckResult): string {
   }
 
   for (const req of result.requirements) {
-    const desc = req.description ? ` \u2014 ${req.description}` : "";
-    if (req.kind === "forbidden" && req.passed) {
-      lines.push(`\u2705 FORBIDDEN ${req.punchType}:${req.punchKeyPattern} absent${desc}`);
-    } else if (req.kind === "forbidden") {
-      lines.push(`\uD83D\uDEAB FORBIDDEN ${req.punchType}:${req.punchKeyPattern} observed ${req.count} time(s)${desc}`);
-    } else if (req.passed) {
-      lines.push(`\u2705 REQUIRED ${req.punchType}:${req.punchKeyPattern} satisfied (${req.count})${desc}`);
+    const desc = req.description ? ` -- ${req.description}` : "";
+    if (req.kind === "forbidden") {
+      lines.push(
+        `[VIOLATION] FORBIDDEN ${req.punchType}:${req.punchKeyPattern} observed ${req.count} time(s)${desc}`,
+      );
     } else {
-      lines.push(`\u274C REQUIRED ${req.punchType}:${req.punchKeyPattern} missing${desc}`);
+      lines.push(`[MISSING] REQUIRED ${req.punchType}:${req.punchKeyPattern} missing${desc}`);
     }
   }
 

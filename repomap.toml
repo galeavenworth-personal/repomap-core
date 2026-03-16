@@ -27,6 +27,7 @@ globs = [
     "src/scan/**",
     "src/graph/**",
     "src/contract/**",
+    "src/query/**",
     "src/utils.py",
 ]
 

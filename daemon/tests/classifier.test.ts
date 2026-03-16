@@ -6,6 +6,17 @@ function makeEvent(type: string, properties: Record<string, unknown> = {}): RawE
   return { type, properties };
 }
 
+/** Shorthand for the most common test shape: a completed tool part event. */
+function makeToolEvent(
+  sessionID: string,
+  tool: string,
+  overrides: Record<string, unknown> = {},
+): RawEvent {
+  return makeEvent("message.part.updated", {
+    part: { type: "tool", sessionID, tool, state: { status: "completed" }, ...overrides },
+  });
+}
+
 describe("toSnakeCase", () => {
   it("converts camelCase to snake_case", () => {
     expect(toSnakeCase("editFile")).toBe("edit_file");
@@ -32,17 +43,7 @@ describe("classifyEvent", () => {
   });
 
   it("maps message.part.updated tool parts to tool_call", () => {
-    const result = classifyEvent(
-      makeEvent("message.part.updated", {
-        part: {
-          type: "tool",
-          sessionID: "daemon-f9x",
-          callID: "call-1",
-          tool: "readFile",
-          state: { status: "completed" },
-        },
-      })
-    );
+    const result = classifyEvent(makeToolEvent("daemon-f9x", "readFile", { callID: "call-1" }));
 
     expect(result).not.toBeNull();
     expect(result?.taskId).toBe("daemon-f9x");
@@ -53,174 +54,103 @@ describe("classifyEvent", () => {
   });
 
   it("returns null for pending tool calls", () => {
-    const result = classifyEvent(
-      makeEvent("message.part.updated", {
-        part: {
-          type: "tool",
-          sessionID: "daemon-pending",
-          callID: "call-pending",
-          tool: "readFile",
-          state: { status: "pending" },
-        },
-      })
-    );
-
+    const result = classifyEvent(makeToolEvent("daemon-pending", "readFile", {
+      callID: "call-pending", state: { status: "pending" },
+    }));
     expect(result).toBeNull();
   });
 
   it("returns null for running tool calls", () => {
-    const result = classifyEvent(
-      makeEvent("message.part.updated", {
-        part: {
-          type: "tool",
-          sessionID: "daemon-running",
-          callID: "call-running",
-          tool: "readFile",
-          state: { status: "running" },
-        },
-      })
-    );
-
+    const result = classifyEvent(makeToolEvent("daemon-running", "readFile", {
+      callID: "call-running", state: { status: "running" },
+    }));
     expect(result).toBeNull();
   });
 
   it('defaults to "unknown_tool" when tool is missing', () => {
-    const result = classifyEvent(
-      makeEvent("message.part.updated", {
-        part: {
-          type: "tool",
-          sessionID: "daemon-fallback",
-          callID: "call-2",
-          state: { status: "completed" },
-        },
-      })
-    );
-
+    const result = classifyEvent(makeEvent("message.part.updated", {
+      part: { type: "tool", sessionID: "daemon-fallback", callID: "call-2", state: { status: "completed" } },
+    }));
     expect(result).not.toBeNull();
     expect(result?.punchKey).toBe("unknown_tool");
   });
 
   it("maps error tool calls to tool_call", () => {
-    const result = classifyEvent(
-      makeEvent("message.part.updated", {
-        part: {
-          type: "tool",
-          sessionID: "daemon-error",
-          callID: "call-error",
-          tool: "editFile",
-          state: { status: "error" },
-        },
-      })
-    );
-
+    const result = classifyEvent(makeToolEvent("daemon-error", "editFile", {
+      callID: "call-error", state: { status: "error" },
+    }));
     expect(result).not.toBeNull();
     expect(result?.taskId).toBe("daemon-error");
     expect(result?.punchType).toBe("tool_call");
     expect(result?.punchKey).toBe("edit_file");
   });
 
-  it("maps task tool calls to child_spawn using subagent_type", () => {
-    const result = classifyEvent(
-      makeEvent("message.part.updated", {
-        part: {
-          type: "tool",
-          sessionID: "daemon-child",
-          tool: "task",
-          input: { subagent_type: "process-orchestrator" },
-          state: { status: "completed" },
-        },
-      })
-    );
-
+  it("maps task tool calls to child_spawn using subagent_type from input (real-time SSE path)", () => {
+    const result = classifyEvent(makeToolEvent("daemon-child", "task", {
+      input: { subagent_type: "process-orchestrator" },
+    }));
     expect(result?.punchType).toBe("child_spawn");
     expect(result?.punchKey).toBe("process-orchestrator");
   });
 
-  it("maps bash gate commands to gate_pass", () => {
-    const result = classifyEvent(
-      makeEvent("message.part.updated", {
-        part: {
-          type: "tool",
-          sessionID: "daemon-gate",
-          tool: "bash",
-          input: { command: "ruff check ." },
-          state: { status: "completed" },
-        },
-      })
-    );
+  it("maps task tool calls to child_spawn using subagent_type from state.input (replay path)", () => {
+    const result = classifyEvent(makeToolEvent("daemon-child-replay", "task", {
+      state: { status: "completed", input: { subagent_type: "architect" } },
+    }));
+    expect(result?.punchType).toBe("child_spawn");
+    expect(result?.punchKey).toBe("architect");
+  });
 
+  it("falls back to unknown_child when subagent_type is absent in both input and state.input", () => {
+    const result = classifyEvent(makeToolEvent("daemon-child-unknown", "task"));
+    expect(result?.punchType).toBe("child_spawn");
+    expect(result?.punchKey).toBe("unknown_child");
+  });
+
+  it("prefers input.subagent_type over state.input.subagent_type when both are present", () => {
+    const result = classifyEvent(makeToolEvent("daemon-child-both", "task", {
+      input: { subagent_type: "code" },
+      state: { status: "completed", input: { subagent_type: "architect" } },
+    }));
+    expect(result?.punchType).toBe("child_spawn");
+    expect(result?.punchKey).toBe("code");
+  });
+
+  it("maps bash gate commands to gate_pass", () => {
+    const result = classifyEvent(makeToolEvent("daemon-gate", "bash", {
+      input: { command: "ruff check ." },
+    }));
     expect(result?.punchType).toBe("gate_pass");
     expect(result?.punchKey).toBe("ruff-check");
   });
 
   it("maps failed bash gate commands to gate_fail", () => {
-    const result = classifyEvent(
-      makeEvent("message.part.updated", {
-        part: {
-          type: "tool",
-          sessionID: "daemon-gate-fail",
-          tool: "bash",
-          input: { command: "pytest -q" },
-          state: { status: "error" },
-        },
-      })
-    );
-
+    const result = classifyEvent(makeToolEvent("daemon-gate-fail", "bash", {
+      input: { command: "pytest -q" }, state: { status: "error" },
+    }));
     expect(result?.punchType).toBe("gate_fail");
     expect(result?.punchKey).toBe("pytest");
   });
 
   it("maps non-gate bash commands to command_exec", () => {
-    const result = classifyEvent(
-      makeEvent("message.part.updated", {
-        part: {
-          type: "tool",
-          sessionID: "daemon-command",
-          tool: "bash",
-          input: { command: "ls -la" },
-          state: { status: "completed" },
-        },
-      })
-    );
-
+    const result = classifyEvent(makeToolEvent("daemon-command", "bash", {
+      input: { command: "ls -la" },
+    }));
     expect(result?.punchType).toBe("command_exec");
     expect(result?.punchKey).toBe("bash");
   });
 
   it("maps MCP tools to mcp_call", () => {
-    const result = classifyEvent(
-      makeEvent("message.part.updated", {
-        part: {
-          type: "tool",
-          sessionID: "daemon-mcp",
-          tool: "augment-context-engine_codebase-retrieval",
-          state: { status: "completed" },
-        },
-      })
-    );
-
+    const result = classifyEvent(makeToolEvent("daemon-mcp", "augment-context-engine_codebase-retrieval"));
     expect(result?.punchType).toBe("mcp_call");
     expect(result?.punchKey).toBe("codebase___retrieval");
   });
 
   it("extracts task ID from message part sessionID or defaults unknown", () => {
-    const fromPartSessionID = classifyEvent(
-      makeEvent("message.part.updated", {
-        part: {
-          type: "tool",
-          sessionID: "id-3",
-          callID: "call-3",
-          tool: "x",
-          state: { status: "completed" },
-        },
-      })
-    );
-    const result = classifyEvent(
-      makeEvent("message.part.updated", {
-        part: { type: "tool", callID: "call-4", tool: "x", state: { status: "completed" } },
-      })
-    );
-
+    const fromPartSessionID = classifyEvent(makeToolEvent("id-3", "x", { callID: "call-3" }));
+    const result = classifyEvent(makeEvent("message.part.updated", {
+      part: { type: "tool", callID: "call-4", tool: "x", state: { status: "completed" } },
+    }));
     expect(fromPartSessionID?.taskId).toBe("id-3");
     expect(result?.taskId).toBe("unknown");
   });

@@ -47,7 +47,7 @@ CREATE TABLE tasks (
 -- -----------------------------------------------------------------------------
 -- punches: Append-only ledger of observed execution events
 -- -----------------------------------------------------------------------------
--- Each row is a single punch minted by the replication daemon when it
+-- Each row is a single punch written by the daemon projector when it
 -- observes a qualifying event in Kilo session data.
 --
 -- Punches cannot be faked. They can only be caused.
@@ -290,13 +290,13 @@ INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, 
     ('pr-review-orchestrate', 'pr-review-orchestrate', 'tool_call',       'apply_diff%',            TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs directly', TRUE),
     ('pr-review-orchestrate', 'pr-review-orchestrate', 'tool_call',       'write_to_file%',         TRUE,  TRUE,  'FORBIDDEN: Must not write files directly', TRUE),
     ('pr-review-orchestrate', 'pr-review-orchestrate', 'mcp_call',        '%codebase___retrieval%', TRUE,  TRUE,  'FORBIDDEN: Must not explore codebase directly', TRUE),
-    ('pr-review-orchestrate', 'pr-review-orchestrate', 'tool_call',       'bash%gh %',              TRUE,  TRUE,  'FORBIDDEN: Must not call GitHub CLI directly', TRUE),
+    ('pr-review-orchestrate', 'pr-review-orchestrate', 'command_exec',    'bash%',                  TRUE,  TRUE,  'FORBIDDEN: Must not execute bash commands directly', TRUE),
     ('pr-review-orchestrate', 'pr-review-orchestrate', 'cost_checkpoint', '%',                      FALSE, FALSE, 'Cost tracking (optional)', FALSE);
 
 -- Build PR Ledger card (Tier 3: Specialist — pr-review child Phase 0 — ENFORCED)
 -- Fetches GitHub comments + SonarQube gate → returns structured ledger. No code edits.
 INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description, enforced) VALUES
-    ('build-pr-ledger', 'build-pr-ledger', 'tool_call',       'bash%gh %',        TRUE,  FALSE, 'Must use gh CLI to fetch PR comments', TRUE),
+    ('build-pr-ledger', 'build-pr-ledger', 'command_exec',    'bash%',             TRUE,  FALSE, 'Must execute bash commands (e.g. gh CLI)', TRUE),
     ('build-pr-ledger', 'build-pr-ledger', 'step_complete',   'task_exit',        TRUE,  FALSE, 'Phase must complete', TRUE),
     ('build-pr-ledger', 'build-pr-ledger', 'tool_call',       'edit_file%',       TRUE,  TRUE,  'FORBIDDEN: Must not edit files (ledger building only)', TRUE),
     ('build-pr-ledger', 'build-pr-ledger', 'tool_call',       'apply_diff%',      TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs (ledger building only)', TRUE),
@@ -306,7 +306,7 @@ INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, 
 -- Acknowledge PR Ledger card (Tier 3: Specialist — pr-review child Phase 5 — ENFORCED)
 -- Replies to GitHub comments with fix references. No code edits.
 INSERT INTO punch_cards (card_id, workflow_name, punch_type, punch_key_pattern, required, forbidden, description, enforced) VALUES
-    ('acknowledge-pr-ledger', 'acknowledge-pr-ledger', 'tool_call',       'bash%gh %',        TRUE,  FALSE, 'Must use gh CLI to reply to PR comments', TRUE),
+    ('acknowledge-pr-ledger', 'acknowledge-pr-ledger', 'command_exec',    'bash%',             TRUE,  FALSE, 'Must execute bash commands (e.g. gh CLI)', TRUE),
     ('acknowledge-pr-ledger', 'acknowledge-pr-ledger', 'step_complete',   'task_exit',        TRUE,  FALSE, 'Phase must complete', TRUE),
     ('acknowledge-pr-ledger', 'acknowledge-pr-ledger', 'tool_call',       'edit_file%',       TRUE,  TRUE,  'FORBIDDEN: Must not edit files (acknowledgement only)', TRUE),
     ('acknowledge-pr-ledger', 'acknowledge-pr-ledger', 'tool_call',       'apply_diff%',      TRUE,  TRUE,  'FORBIDDEN: Must not apply diffs (acknowledgement only)', TRUE),

@@ -1,5 +1,7 @@
 import { timestamp } from "./utils.js";
-import { PunchCardValidator } from "../governor/punch-card-validator.js";
+import { createOpencodeClient } from "@opencode-ai/sdk/client";
+
+import { validateFromKiloLog } from "../governor/kilo-verified-validator.js";
 import type { FactoryDispatchConfig, Logger } from "./factory-dispatch.js";
 
 /** Post-session audit result. */
@@ -16,16 +18,25 @@ export async function runPostSessionAudit(
   config: FactoryDispatchConfig,
   log: Logger,
 ): Promise<AuditResult | null> {
-  const validator = new PunchCardValidator({
-    host: config.host === "127.0.0.1" ? config.host : "127.0.0.1",
-    port: config.doltPort,
-    database: process.env.DOLT_DATABASE || "factory",
-    user: "root",
+  const kiloClient = createOpencodeClient({
+    baseUrl: `http://${config.host}:${config.port}`,
   });
 
   try {
-    await validator.connect();
-    const result = await validator.validatePunchCard(sessionId, cardId);
+    const result = await validateFromKiloLog(
+      sessionId,
+      kiloClient,
+      {
+        host: config.host === "127.0.0.1" ? config.host : "127.0.0.1",
+        port: config.doltPort,
+        database: process.env.DOLT_DATABASE || "factory",
+        user: "root",
+      },
+      cardId,
+      {
+        sourceSessionId: sessionId,
+      },
+    );
     const audit: AuditResult = {
       cardId,
       status: result.status,
@@ -49,7 +60,5 @@ export async function runPostSessionAudit(
   } catch (e) {
     log(`${timestamp()} Warning: post-session audit failed: ${(e as Error).message}`);
     return null;
-  } finally {
-    await validator.disconnect();
   }
 }

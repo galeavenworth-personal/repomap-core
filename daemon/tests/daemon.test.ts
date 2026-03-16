@@ -8,15 +8,12 @@ const {
   writeMessageMock,
   writeToolCallMock,
   writeCheckpointMock,
-  validatorConnectMock,
-  validatorValidateMock,
-  validatorDisconnectMock,
-  PunchCardValidatorMock,
+  validateFromKiloLogMock,
   syncChildRelsFromPunchesMock,
   writeChildRelationMock,
   createDoltWriterMock,
   classifyEventMock,
-  subscribeMock,
+  createEventSourceMock,
   createOpencodeClientMock,
   sessionListMock,
   sessionMessagesMock,
@@ -30,16 +27,7 @@ const {
   const writeMessageMock = vi.fn();
   const writeToolCallMock = vi.fn();
   const writeCheckpointMock = vi.fn();
-  const validatorConnectMock = vi.fn();
-  const validatorValidateMock = vi.fn();
-  const validatorDisconnectMock = vi.fn();
-  const PunchCardValidatorMock = vi.fn(function MockPunchCardValidator() {
-    return {
-      connect: validatorConnectMock,
-      validatePunchCard: validatorValidateMock,
-      disconnect: validatorDisconnectMock,
-    };
-  });
+  const validateFromKiloLogMock = vi.fn();
   const syncChildRelsFromPunchesMock = vi.fn();
   const writeChildRelationMock = vi.fn();
   const createDoltWriterMock = vi.fn(() => ({
@@ -55,12 +43,11 @@ const {
     disconnect: disconnectMock,
   }));
   const classifyEventMock = vi.fn();
-  const subscribeMock = vi.fn();
+  const createEventSourceMock = vi.fn();
   const sessionListMock = vi.fn();
   const sessionMessagesMock = vi.fn();
   const sessionChildrenMock = vi.fn();
   const createOpencodeClientMock = vi.fn(() => ({
-    event: { subscribe: subscribeMock },
     session: {
       list: sessionListMock,
       messages: sessionMessagesMock,
@@ -75,15 +62,12 @@ const {
     writeMessageMock,
     writeToolCallMock,
     writeCheckpointMock,
-    validatorConnectMock,
-    validatorValidateMock,
-    validatorDisconnectMock,
-    PunchCardValidatorMock,
+    validateFromKiloLogMock,
     syncChildRelsFromPunchesMock,
     writeChildRelationMock,
     createDoltWriterMock,
     classifyEventMock,
-    subscribeMock,
+    createEventSourceMock,
     createOpencodeClientMock,
     sessionListMock,
     sessionMessagesMock,
@@ -99,23 +83,36 @@ vi.mock("../src/classifier/index.js", () => ({
   classifyEvent: classifyEventMock,
 }));
 
-vi.mock("../src/governor/punch-card-validator.js", () => ({
-  PunchCardValidator: PunchCardValidatorMock,
+vi.mock("../src/governor/kilo-verified-validator.js", () => ({
+  validateFromKiloLog: validateFromKiloLogMock,
 }));
 
 vi.mock("@opencode-ai/sdk/client", () => ({
   createOpencodeClient: createOpencodeClientMock,
 }));
 
+vi.mock("eventsource-client", () => ({
+  createEventSource: createEventSourceMock,
+}));
+
 import { createDaemon } from "../src/lifecycle/daemon.js";
 
-/** Helper: create an async generator from an array of events */
-async function* mockEventStream(
-  events: Array<{ type: string; properties: Record<string, unknown> }>
+/** Helper: create an async iterable EventSource client mock. */
+function mockEventSource(
+  events: Array<{
+    data: { type: string; properties: Record<string, unknown> };
+    event?: string;
+    id?: string;
+  }>
 ) {
-  for (const event of events) {
-    yield event;
-  }
+  return {
+    close: vi.fn(),
+    async *[Symbol.asyncIterator]() {
+      for (const event of events) {
+        yield event;
+      }
+    },
+  };
 }
 
 describe("createDaemon", () => {
@@ -130,15 +127,17 @@ describe("createDaemon", () => {
     writeMessageMock.mockResolvedValue(undefined);
     writeToolCallMock.mockResolvedValue(undefined);
     writeCheckpointMock.mockResolvedValue(undefined);
-    validatorConnectMock.mockResolvedValue(undefined);
-    validatorValidateMock.mockResolvedValue({
+    validateFromKiloLogMock.mockResolvedValue({
       status: "pass",
       cardId: "plant-orchestrate",
-      taskId: "session-checkpoint",
+      sessionId: "session-checkpoint",
+      sourceSessionId: "session-checkpoint",
+      messageCount: 0,
+      derivationPath: "kilo-sse:/event -> session.messages -> classifyEvent(message.part.updated) -> punch-card-evaluation",
+      trustLevel: "verified",
       missing: [],
       violations: [],
     });
-    validatorDisconnectMock.mockResolvedValue(undefined);
     syncChildRelsFromPunchesMock.mockResolvedValue(0);
     writeChildRelationMock.mockResolvedValue(undefined);
     sessionListMock.mockResolvedValue({ data: [] });
@@ -155,7 +154,7 @@ describe("createDaemon", () => {
   });
 
   it("returns object with start and stop methods", () => {
-    subscribeMock.mockResolvedValue({ stream: mockEventStream([]) });
+    createEventSourceMock.mockReturnValue(mockEventSource([]));
     const daemon = createDaemon({
       kiloHost: "127.0.0.1",
       kiloPort: 4096,
@@ -170,7 +169,7 @@ describe("createDaemon", () => {
   });
 
   it("creates the SDK client with correct baseUrl", () => {
-    subscribeMock.mockResolvedValue({ stream: mockEventStream([]) });
+    createEventSourceMock.mockReturnValue(mockEventSource([]));
     createDaemon({
       kiloHost: "127.0.0.1",
       kiloPort: 4096,
@@ -210,9 +209,9 @@ describe("createDaemon", () => {
       },
     ];
 
-    subscribeMock
-      .mockResolvedValueOnce({ stream: mockEventStream(testEvents) })
-      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+    createEventSourceMock.mockReturnValue(
+      mockEventSource(testEvents.map((event) => ({ data: event })))
+    );
 
     // Classify returns punch for recognized events, null for unknown
     classifyEventMock
@@ -246,8 +245,8 @@ describe("createDaemon", () => {
     // Verify Dolt connection
     expect(connectMock).toHaveBeenCalledTimes(1);
 
-    // Verify SSE subscription (called twice: once successful, then reconnects and throws AbortError)
-    expect(subscribeMock).toHaveBeenCalledTimes(2);
+    // Verify EventSource client creation
+    expect(createEventSourceMock).toHaveBeenCalledTimes(1);
 
     // Verify all 3 events were classified
     expect(classifyEventMock).toHaveBeenCalledTimes(3);
@@ -262,7 +261,6 @@ describe("createDaemon", () => {
       "[oc-daemon] Connecting to kilo serve at 127.0.0.1:4096"
     );
     expect(logSpy).toHaveBeenCalledWith("[oc-daemon] Subscribing to SSE event stream...");
-    expect(logSpy).toHaveBeenCalledWith("[oc-daemon] SSE stream ended. Reconnecting...");
   });
 
   it("start() runs catch-up for recent sessions", async () => {
@@ -279,9 +277,7 @@ describe("createDaemon", () => {
 
     sessionMessagesMock.mockResolvedValue({ data: [], error: undefined });
 
-    subscribeMock
-      .mockResolvedValueOnce({ stream: mockEventStream([]) })
-      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+    createEventSourceMock.mockReturnValue(mockEventSource([]));
 
     // Need to mock classifyEvent to return something for session.updated
     classifyEventMock.mockReturnValue({
@@ -318,7 +314,7 @@ describe("createDaemon", () => {
 
   it("stop() aborts the stream and disconnects from Dolt", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    subscribeMock.mockResolvedValue({ stream: mockEventStream([]) });
+    createEventSourceMock.mockReturnValue(mockEventSource([]));
 
     const daemon = createDaemon({
       kiloHost: "127.0.0.1",
@@ -337,16 +333,16 @@ describe("createDaemon", () => {
   });
 
   it("writes checkpoint after session completion when card mapping exists", async () => {
-    subscribeMock
-      .mockResolvedValueOnce({
-        stream: mockEventStream([
-          {
+    createEventSourceMock.mockReturnValue(
+      mockEventSource([
+        {
+          data: {
             type: "session.updated",
             properties: { info: { id: "session-checkpoint", status: "completed" } },
           },
-        ]),
-      })
-      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+        },
+      ])
+    );
 
     classifyEventMock.mockReturnValue({
       taskId: "session-checkpoint",
@@ -367,8 +363,17 @@ describe("createDaemon", () => {
 
     await daemon.start();
 
-    expect(PunchCardValidatorMock).toHaveBeenCalled();
-    expect(validatorValidateMock).toHaveBeenCalledWith("session-checkpoint", "plant-orchestrate");
+    expect(validateFromKiloLogMock).toHaveBeenCalledWith(
+      "session-checkpoint",
+      expect.any(Object),
+      expect.objectContaining({
+        host: "127.0.0.1",
+        port: 3307,
+        database: "factory",
+      }),
+      "plant-orchestrate",
+      expect.objectContaining({ sourceSessionId: "session-checkpoint" }),
+    );
     expect(writeCheckpointMock).toHaveBeenCalledWith(
       expect.objectContaining({
         taskId: "session-checkpoint",

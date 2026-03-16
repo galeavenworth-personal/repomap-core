@@ -10,7 +10,7 @@ const {
   syncChildRelsFromPunchesMock,
   writeChildRelationMock,
   createDoltWriterMock,
-  subscribeMock,
+  createEventSourceMock,
   createOpencodeClientMock,
   sessionListMock,
   sessionMessagesMock,
@@ -36,12 +36,11 @@ const {
     syncChildRelsFromPunches: syncChildRelsFromPunchesMock,
     disconnect: disconnectMock,
   }));
-  const subscribeMock = vi.fn();
+  const createEventSourceMock = vi.fn();
   const sessionListMock = vi.fn();
   const sessionMessagesMock = vi.fn();
   const sessionChildrenMock = vi.fn();
   const createOpencodeClientMock = vi.fn(() => ({
-    event: { subscribe: subscribeMock },
     session: {
       list: sessionListMock,
       messages: sessionMessagesMock,
@@ -60,7 +59,7 @@ const {
     syncChildRelsFromPunchesMock,
     writeChildRelationMock,
     createDoltWriterMock,
-    subscribeMock,
+    createEventSourceMock,
     createOpencodeClientMock,
     sessionListMock,
     sessionMessagesMock,
@@ -76,14 +75,27 @@ vi.mock("../src/writer/index.js", () => ({
   createDoltWriter: createDoltWriterMock,
 }));
 
+vi.mock("eventsource-client", () => ({
+  createEventSource: createEventSourceMock,
+}));
+
 import { createDaemon } from "../src/lifecycle/daemon.js";
 
-async function* mockEventStream(
-  events: Array<{ type: string; properties: Record<string, unknown> }>
+function mockEventSource(
+  events: Array<{
+    data: { type: string; properties: Record<string, unknown> };
+    event?: string;
+    id?: string;
+  }>
 ) {
-  for (const event of events) {
-    yield event;
-  }
+  return {
+    close: vi.fn(),
+    async *[Symbol.asyncIterator]() {
+      for (const event of events) {
+        yield event;
+      }
+    },
+  };
 }
 
 const config = {
@@ -148,9 +160,9 @@ describe("e2e pipeline integration", () => {
       { type: "file.edited", properties: {} },
     ];
 
-    subscribeMock
-      .mockResolvedValueOnce({ stream: mockEventStream(events) })
-      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+    createEventSourceMock.mockReturnValue(
+      mockEventSource(events.map((event) => ({ data: event })))
+    );
 
     const daemon = createDaemon(config);
     await daemon.start();
@@ -201,9 +213,9 @@ describe("e2e pipeline integration", () => {
       { type: "file.edited", properties: {} },
     ];
 
-    subscribeMock
-      .mockResolvedValueOnce({ stream: mockEventStream(events) })
-      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+    createEventSourceMock.mockReturnValue(
+      mockEventSource(events.map((event) => ({ data: event })))
+    );
 
     const daemon = createDaemon(config);
     await daemon.start();
@@ -265,9 +277,9 @@ describe("e2e pipeline integration", () => {
       },
     ];
 
-    subscribeMock
-      .mockResolvedValueOnce({ stream: mockEventStream(events) })
-      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+    createEventSourceMock.mockReturnValue(
+      mockEventSource(events.map((event) => ({ data: event })))
+    );
 
     const daemon = createDaemon(config);
     await daemon.start();
@@ -291,9 +303,9 @@ describe("e2e pipeline integration", () => {
       },
     ];
 
-    subscribeMock
-      .mockResolvedValueOnce({ stream: mockEventStream(events) })
-      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+    createEventSourceMock.mockReturnValue(
+      mockEventSource(events.map((event) => ({ data: event })))
+    );
     
     writePunchMock.mockRejectedValueOnce(new Error("Dolt connection lost"));
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -310,16 +322,14 @@ describe("e2e pipeline integration", () => {
   });
 
   it("error resilience: empty stream triggers reconnect", async () => {
-    subscribeMock
-      .mockResolvedValueOnce({ stream: mockEventStream([]) })
-      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+    createEventSourceMock.mockReturnValue(mockEventSource([]));
 
     const daemon = createDaemon(config);
     await daemon.start();
 
     // Connects, stream ends (empty), loops, connects again (throws abort)
     expect(connectMock).toHaveBeenCalledTimes(1);
-    expect(subscribeMock).toHaveBeenCalledTimes(2);
+    expect(createEventSourceMock).toHaveBeenCalledTimes(1);
     expect(writePunchMock).not.toHaveBeenCalled();
   });
 });
