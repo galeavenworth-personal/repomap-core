@@ -143,6 +143,29 @@ parse_child_ids_from_children_json() {
   return 1
 }
 
+build_formula_metadata_json() {
+  local formula_value="$1"
+  local metadata_json=""
+
+  if command -v jq >/dev/null 2>&1; then
+    metadata_json="$(jq -cn --arg formula_id "${formula_value}" '{formula_id: $formula_id}' 2>/dev/null || true)"
+  elif [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    metadata_json="$("${REPO_ROOT}/.venv/bin/python" -c 'import json,sys; print(json.dumps({"formula_id": sys.argv[1]}))' "${formula_value}" 2>/dev/null || true)"
+  elif command -v python3 >/dev/null 2>&1; then
+    metadata_json="$(python3 -c 'import json,sys; print(json.dumps({"formula_id": sys.argv[1]}))' "${formula_value}" 2>/dev/null || true)"
+  else
+    warn "cannot build metadata JSON; jq/python unavailable"
+    return 1
+  fi
+
+  if [[ -z "${metadata_json}" ]]; then
+    return 1
+  fi
+
+  printf '%s' "${metadata_json}"
+  return 0
+}
+
 if [[ ! -x "${PINNED_BD}" ]]; then
   echo "ERROR: pinned bd is not installed." >&2
   echo "Install the pinned version for this repo:" >&2
@@ -160,8 +183,15 @@ if has_arg "--help" "$@" || has_arg "-h" "$@"; then
   exec "${PINNED_BD}" "$@"
 fi
 
-proto_id="${3:-}"
-if [[ -z "${proto_id}" || "${proto_id}" == -* ]]; then
+proto_id=""
+for arg in "${@:3}"; do
+  if [[ "${arg}" == -* ]]; then
+    continue
+  fi
+  proto_id="${arg}"
+  break
+done
+if [[ -z "${proto_id}" ]]; then
   exec "${PINNED_BD}" "$@"
 fi
 
@@ -237,7 +267,13 @@ if [[ "${#child_ids[@]}" -eq 0 ]]; then
   fi
 fi
 
-declare -A seen_ids=()
+metadata_payload="$(build_formula_metadata_json "${formula_id}" || true)"
+if [[ -z "${metadata_payload}" ]]; then
+  warn "could not build metadata payload for formula_id=${formula_id}; skipping metadata updates"
+  exit "${pour_rc}"
+fi
+
+seen_ids=$'\n'
 declare -a targets=("${root_id}")
 for child_id in "${child_ids[@]}"; do
   targets+=("${child_id}")
@@ -245,13 +281,13 @@ done
 
 for target_id in "${targets[@]}"; do
   [[ -z "${target_id}" ]] && continue
-  if [[ -n "${seen_ids[$target_id]:-}" ]]; then
+  if [[ "${seen_ids}" == *$'\n'"${target_id}"$'\n'* ]]; then
     continue
   fi
-  seen_ids["${target_id}"]=1
+  seen_ids+="${target_id}"$'\n'
 
   set +e
-  "${PINNED_BD}" update "${target_id}" --set-metadata "formula_id=${formula_id}" >/dev/null 2>&1
+  "${PINNED_BD}" update "${target_id}" --metadata "${metadata_payload}" >/dev/null 2>&1
   update_rc=$?
   set -e
 

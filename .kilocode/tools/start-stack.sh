@@ -19,7 +19,10 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 DAEMON_DIR="${REPO_ROOT}/daemon"
 CLI="${DAEMON_DIR}/src/infra/stack-manager.cli.ts"
 
-die() { echo "ERROR: $*" >&2; exit 1; }
+die() {
+    echo "ERROR: $*" >&2
+    return 1
+}
 
 # ── Find tsx ──────────────────────────────────────────────────────────────
 find_tsx() {
@@ -61,8 +64,11 @@ map_command() {
             echo "Logic: daemon/src/infra/stack-manager.ts"
             exit 0
             ;;
-        *)  die "Unknown flag: ${flag}. Use --help for usage." ;;
+        *)  die "Unknown flag: ${flag}. Use --help for usage."
+            return 1
+            ;;
     esac
+    return 0
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────
