@@ -7,17 +7,257 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 BEADS_VERSION="${BEADS_VERSION:-$(cat "${SCRIPT_DIR}/beads_version")}" 
 BEADS_PREFIX_BASE="${BEADS_PREFIX_BASE:-${HOME}/.local/beads}"
 PINNED_BD="${BEADS_PREFIX_BASE}/${BEADS_VERSION}/bin/bd"
 
-if [[ -x "${PINNED_BD}" ]]; then
+warn() {
+  echo "WARN: $*" >&2
+}
+
+has_arg() {
+  local wanted="$1"
+  shift
+  local arg
+  for arg in "$@"; do
+    if [[ "${arg}" == "${wanted}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+run_capture() {
+  local rc
+  set +e
+  CAPTURE_OUT="$("$@" 2>&1)"
+  rc=$?
+  set -e
+  CAPTURE_RC="${rc}"
+}
+
+read_formula_id() {
+  local formula_file="$1"
+  local value=""
+
+  if [[ ! -f "${formula_file}" ]]; then
+    return 1
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    value="$(jq -r '.formula // empty' "${formula_file}" 2>/dev/null || true)"
+  elif [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    value="$("${REPO_ROOT}/.venv/bin/python" -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(d.get("formula", ""))' "${formula_file}" 2>/dev/null || true)"
+  elif command -v python3 >/dev/null 2>&1; then
+    value="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(d.get("formula", ""))' "${formula_file}" 2>/dev/null || true)"
+  else
+    warn "neither jq nor python is available to parse ${formula_file}; skipping formula metadata"
+    return 1
+  fi
+
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+    return 0
+  fi
+
+  return 1
+}
+
+parse_root_from_text() {
+  local text="$1"
+  local line
+  while IFS= read -r line; do
+    if [[ "${line}" =~ ^[[:space:]]*Root[[:space:]]issue:[[:space:]]([^[:space:]]+) ]]; then
+      printf '%s' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done <<< "${text}"
+  return 1
+}
+
+parse_root_from_json() {
+  local text="$1"
+  local root_id=""
+
+  if command -v jq >/dev/null 2>&1; then
+    root_id="$(printf '%s' "${text}" | jq -r '.new_epic_id // empty' 2>/dev/null || true)"
+  elif [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    root_id="$(printf '%s' "${text}" | "${REPO_ROOT}/.venv/bin/python" -c 'import json,sys; print((json.load(sys.stdin) or {}).get("new_epic_id", ""))' 2>/dev/null || true)"
+  elif command -v python3 >/dev/null 2>&1; then
+    root_id="$(printf '%s' "${text}" | python3 -c 'import json,sys; print((json.load(sys.stdin) or {}).get("new_epic_id", ""))' 2>/dev/null || true)"
+  else
+    warn "cannot parse JSON pour output; jq/python unavailable"
+    return 1
+  fi
+
+  if [[ -n "${root_id}" ]]; then
+    printf '%s' "${root_id}"
+    return 0
+  fi
+
+  return 1
+}
+
+parse_child_ids_from_json_mapping() {
+  local text="$1"
+
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "${text}" | jq -r '.id_mapping // {} | to_entries[]?.value // empty' 2>/dev/null || true
+    return 0
+  fi
+
+  if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    printf '%s' "${text}" | "${REPO_ROOT}/.venv/bin/python" -c 'import json,sys; d=json.load(sys.stdin) or {}; m=d.get("id_mapping") or {}; [print(v) for v in m.values() if v]' 2>/dev/null || true
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "${text}" | python3 -c 'import json,sys; d=json.load(sys.stdin) or {}; m=d.get("id_mapping") or {}; [print(v) for v in m.values() if v]' 2>/dev/null || true
+    return 0
+  fi
+
+  warn "cannot parse id_mapping; jq/python unavailable"
+  return 1
+}
+
+parse_child_ids_from_children_json() {
+  local text="$1"
+
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "${text}" | jq -r '.[]?.id // empty' 2>/dev/null || true
+    return 0
+  fi
+
+  if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    printf '%s' "${text}" | "${REPO_ROOT}/.venv/bin/python" -c 'import json,sys; arr=json.load(sys.stdin) or []; [print(x.get("id", "")) for x in arr if isinstance(x, dict) and x.get("id")]' 2>/dev/null || true
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "${text}" | python3 -c 'import json,sys; arr=json.load(sys.stdin) or []; [print(x.get("id", "")) for x in arr if isinstance(x, dict) and x.get("id")]' 2>/dev/null || true
+    return 0
+  fi
+
+  warn "cannot parse children JSON; jq/python unavailable"
+  return 1
+}
+
+if [[ ! -x "${PINNED_BD}" ]]; then
+  echo "ERROR: pinned bd is not installed." >&2
+  echo "Install the pinned version for this repo:" >&2
+  echo "  .kilocode/tools/beads_install.sh" >&2
+  echo "(You can override location/version with BEADS_PREFIX_BASE / BEADS_VERSION env vars.)" >&2
+  echo "This wrapper does not fall back to a PATH-installed bd." >&2
+  exit 2
+fi
+
+if [[ "${1:-}" != "mol" || "${2:-}" != "pour" ]]; then
   exec "${PINNED_BD}" "$@"
 fi
 
-echo "ERROR: pinned bd is not installed." >&2
-echo "Install the pinned version for this repo:" >&2
-echo "  .kilocode/tools/beads_install.sh" >&2
-echo "(You can override location/version with BEADS_PREFIX_BASE / BEADS_VERSION env vars.)" >&2
-echo "This wrapper does not fall back to a PATH-installed bd." >&2
-exit 2
+if has_arg "--help" "$@" || has_arg "-h" "$@"; then
+  exec "${PINNED_BD}" "$@"
+fi
+
+proto_id="${3:-}"
+if [[ -z "${proto_id}" || "${proto_id}" == -* ]]; then
+  exec "${PINNED_BD}" "$@"
+fi
+
+if has_arg "--dry-run" "$@"; then
+  exec "${PINNED_BD}" "$@"
+fi
+
+formula_file="${REPO_ROOT}/.beads/formulas/${proto_id}.formula.json"
+formula_id=""
+if [[ -f "${formula_file}" ]]; then
+  formula_id="$(read_formula_id "${formula_file}" || true)"
+  if [[ -z "${formula_id}" ]]; then
+    warn "formula file found but formula_id is missing/unreadable: ${formula_file}; skipping metadata updates"
+  fi
+else
+  warn "formula file not found for proto-id ${proto_id}: ${formula_file}; skipping metadata updates"
+fi
+
+CAPTURE_OUT=""
+CAPTURE_RC=0
+run_capture "${PINNED_BD}" "$@"
+pour_output="${CAPTURE_OUT}"
+pour_rc="${CAPTURE_RC}"
+printf '%s' "${pour_output}"
+if [[ -n "${pour_output}" && "${pour_output: -1}" != $'\n' ]]; then
+  printf '\n'
+fi
+
+if [[ "${pour_rc}" -ne 0 ]]; then
+  exit "${pour_rc}"
+fi
+
+if [[ -z "${formula_id}" ]]; then
+  exit "${pour_rc}"
+fi
+
+is_json_mode=0
+if has_arg "--json" "$@"; then
+  is_json_mode=1
+fi
+
+root_id=""
+if [[ "${is_json_mode}" -eq 1 ]]; then
+  root_id="$(parse_root_from_json "${pour_output}" || true)"
+else
+  root_id="$(parse_root_from_text "${pour_output}" || true)"
+fi
+
+if [[ -z "${root_id}" ]]; then
+  warn "could not determine root bead id after pour; skipping metadata updates"
+  exit "${pour_rc}"
+fi
+
+declare -a child_ids=()
+if [[ "${is_json_mode}" -eq 1 ]]; then
+  while IFS= read -r child_id; do
+    [[ -n "${child_id}" ]] && child_ids+=("${child_id}")
+  done < <(parse_child_ids_from_json_mapping "${pour_output}" || true)
+fi
+
+if [[ "${#child_ids[@]}" -eq 0 ]]; then
+  CAPTURE_OUT=""
+  CAPTURE_RC=0
+  run_capture "${PINNED_BD}" children "${root_id}" --json
+  children_output="${CAPTURE_OUT}"
+  children_rc="${CAPTURE_RC}"
+  if [[ "${children_rc}" -ne 0 ]]; then
+    warn "failed to list children for ${root_id}; skipping child metadata updates"
+  else
+    while IFS= read -r child_id; do
+      [[ -n "${child_id}" ]] && child_ids+=("${child_id}")
+    done < <(parse_child_ids_from_children_json "${children_output}" || true)
+  fi
+fi
+
+declare -A seen_ids=()
+declare -a targets=("${root_id}")
+for child_id in "${child_ids[@]}"; do
+  targets+=("${child_id}")
+done
+
+for target_id in "${targets[@]}"; do
+  [[ -z "${target_id}" ]] && continue
+  if [[ -n "${seen_ids[$target_id]:-}" ]]; then
+    continue
+  fi
+  seen_ids["${target_id}"]=1
+
+  set +e
+  "${PINNED_BD}" update "${target_id}" --set-metadata "formula_id=${formula_id}" >/dev/null 2>&1
+  update_rc=$?
+  set -e
+
+  if [[ "${update_rc}" -ne 0 ]]; then
+    warn "failed to set metadata formula_id=${formula_id} on bead ${target_id}"
+  fi
+done
+
+exit "${pour_rc}"
