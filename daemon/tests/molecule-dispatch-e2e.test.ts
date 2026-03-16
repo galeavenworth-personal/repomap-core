@@ -14,31 +14,31 @@
  *   4. MoleculeDispatchResult has correct step counts
  *   5. Backward compatibility: raw prompt dispatch still works alongside molecule dispatch
  *   6. formula_id metadata plumbing for DSPy compiled prompt keying
- *   7. Step label parsing: mode/card/action extraction from realistic labels
+ *   7. bd output normalization resilience
+ *   8. Mode/card override from labels vs config defaults
+ *   9. No-monitor mode with molecule dispatch
  */
 
-import { describe, expect, it, vi, afterAll } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   type FactoryDispatchConfig,
   type MoleculeDispatchResult,
-  defaultConfig,
   runDispatch,
-  parseLabelValue,
-  isParentOnlyStep,
-  extractStepConfig,
-  buildCookCommand,
-  buildPourCommand,
   ExitCode,
 } from "../src/infra/factory-dispatch.js";
-import * as pm2Client from "../src/infra/pm2-client.js";
-import { createServer } from "node:net";
-
-type FetchInput = string | URL | Request;
+import {
+  startHealthyStack,
+  mockBdPipeline,
+  mockSuccessfulDispatches,
+  captureStdout,
+  moleculeTestConfig,
+  makeTestConfig,
+} from "./helpers/factory-dispatch-helpers.js";
 
 // ── Realistic formula data matching decompose-epic.formula.json ─────────
 
 /**
- * Simulates the 4-step decompose_epic formula with realistic labels:
+ * Simulates the 4-step decompose-epic formula with realistic labels:
  *   1. discover  -> mode:architect, card:discover-phase
  *   2. explore   -> mode:architect, card:explore-phase
  *   3. prepare   -> mode:architect, card:prepare-phase
@@ -79,87 +79,24 @@ const DECOMPOSE_EPIC_STEPS = [
   },
 ];
 
-// ── Helpers ──────────────────────────────────────────────────────────────
-
-function makeTestConfig(overrides: Partial<FactoryDispatchConfig> = {}): FactoryDispatchConfig {
-  return {
-    ...defaultConfig(),
-    quiet: true,
-    pollInterval: 0.01,
-    maxWait: 1,
-    idleConfirm: 1,
-    ...overrides,
-  };
-}
-
-function mockFetchResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-async function startHealthyStack() {
-  const doltServer = createServer();
-  const temporalServer = createServer();
-  await new Promise<void>((resolve) => doltServer.listen(0, "127.0.0.1", resolve));
-  await new Promise<void>((resolve) => temporalServer.listen(0, "127.0.0.1", resolve));
-
-  const doltAddr = doltServer.address();
-  const temporalAddr = temporalServer.address();
-  const doltPort = typeof doltAddr === "object" && doltAddr ? doltAddr.port : 0;
-  const temporalPort = typeof temporalAddr === "object" && temporalAddr ? temporalAddr.port : 0;
-
-  const pm2Spy = vi.spyOn(pm2Client, "withPm2Connection").mockImplementation(async () => true as never);
-  const mockFetch = vi.fn(async () => mockFetchResponse([]));
-
-  return {
-    doltPort,
-    temporalPort,
-    pm2Spy,
-    mockFetch,
-    async cleanup() {
-      pm2Spy.mockRestore();
-      await new Promise<void>((resolve) => doltServer.close(() => resolve()));
-      await new Promise<void>((resolve) => temporalServer.close(() => resolve()));
-    },
-  };
-}
-
 // ── E2E Integration Tests ───────────────────────────────────────────────
 
 describe("MoleculeDispatch E2E Integration", () => {
   describe("full pipeline: cook -> pour -> show -> dispatch with decompose-epic formula", () => {
     it("exercises the complete molecule dispatch pipeline with 4-step formula", async () => {
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "decompose_epic",
+      const config = moleculeTestConfig(stack, {
+        formula: "decompose-epic",
         vars: ["epic_id=repomap-core-638"],
-        promptArg: "",
         mode: "process-orchestrator",
         cardId: "",
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
       });
 
-      // Mock the 3-phase bd pipeline: cook -> pour -> show
-      const execBdFn = vi
-        .fn()
-        // Phase 1: bd cook decompose_epic --var epic_id=repomap-core-638 --json
-        .mockResolvedValueOnce({
-          id: "proto-decompose-638",
-          proto: { id: "proto-decompose-638", formula: "decompose_epic" },
-        })
-        // Phase 2: bd mol pour proto-decompose-638 --var epic_id=repomap-core-638 --json
-        .mockResolvedValueOnce({
-          molecule_id: "mol-decompose-638",
-          molecule: { id: "mol-decompose-638" },
-        })
-        // Phase 3: bd mol show mol-decompose-638 --json
-        .mockResolvedValueOnce({
-          steps: DECOMPOSE_EPIC_STEPS,
-        });
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-decompose-638",
+        moleculeId: "mol-decompose-638",
+        steps: DECOMPOSE_EPIC_STEPS,
+      });
 
       // Mock dispatch for each non-parent step (3 dispatches expected)
       let dispatchCallCount = 0;
@@ -173,13 +110,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         };
       });
 
-      const stdoutChunks: string[] = [];
-      const stdoutSpy = vi
-        .spyOn(process.stdout, "write")
-        .mockImplementation((chunk: string | Uint8Array) => {
-          stdoutChunks.push(String(chunk));
-          return true;
-        });
+      const stdout = captureStdout();
 
       try {
         const code = await runDispatch(config, stack.mockFetch, {
@@ -191,15 +122,24 @@ describe("MoleculeDispatch E2E Integration", () => {
         expect(code).toBe(ExitCode.SUCCESS);
 
         // --- Verify bd CLI was called correctly ---
-        expect(execBdFn).toHaveBeenCalledTimes(3);
+        expect(execBdFn).toHaveBeenCalledTimes(4);
         expect(execBdFn).toHaveBeenNthCalledWith(1, [
           "cook",
-          "decompose_epic",
+          "decompose-epic",
           "--var",
           "epic_id=repomap-core-638",
           "--json",
         ]);
         expect(execBdFn).toHaveBeenNthCalledWith(2, [
+          "cook",
+          "decompose-epic",
+          "--persist",
+          "--force",
+          "--var",
+          "epic_id=repomap-core-638",
+          "--json",
+        ]);
+        expect(execBdFn).toHaveBeenNthCalledWith(3, [
           "mol",
           "pour",
           "proto-decompose-638",
@@ -207,7 +147,7 @@ describe("MoleculeDispatch E2E Integration", () => {
           "epic_id=repomap-core-638",
           "--json",
         ]);
-        expect(execBdFn).toHaveBeenNthCalledWith(3, [
+        expect(execBdFn).toHaveBeenNthCalledWith(4, [
           "mol",
           "show",
           "mol-decompose-638",
@@ -218,9 +158,9 @@ describe("MoleculeDispatch E2E Integration", () => {
         expect(runSingleDispatchFn).toHaveBeenCalledTimes(3);
 
         // --- Verify MoleculeDispatchResult ---
-        const output = JSON.parse(stdoutChunks.join("")) as MoleculeDispatchResult;
+        const output = stdout.json();
         expect(output.molecule_id).toBe("mol-decompose-638");
-        expect(output.formula).toBe("decompose_epic");
+        expect(output.formula).toBe("decompose-epic");
         expect(output.total_steps).toBe(4);
         expect(output.dispatched_steps).toBe(3);
         expect(output.skipped_steps).toBe(1);
@@ -268,28 +208,24 @@ describe("MoleculeDispatch E2E Integration", () => {
         });
         expect(mintStep?.session_id).toBeUndefined();
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });
 
     it("verifies bead_id flows through to each step's dispatch config", async () => {
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "decompose_epic",
+      const config = moleculeTestConfig(stack, {
+        formula: "decompose-epic",
         vars: ["epic_id=repomap-core-638"],
-        promptArg: "",
         mode: "process-orchestrator",
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
       });
 
-      const execBdFn = vi
-        .fn()
-        .mockResolvedValueOnce({ id: "proto-1" })
-        .mockResolvedValueOnce({ molecule_id: "mol-1" })
-        .mockResolvedValueOnce({ steps: DECOMPOSE_EPIC_STEPS });
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-1",
+        moleculeId: "mol-1",
+        steps: DECOMPOSE_EPIC_STEPS,
+      });
 
       const runSingleDispatchFn = vi.fn().mockResolvedValue({
         code: ExitCode.SUCCESS,
@@ -298,7 +234,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         elapsed_seconds: 1,
       });
 
-      const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const stdout = captureStdout();
 
       try {
         await runDispatch(config, stack.mockFetch, { execBdFn, runSingleDispatchFn });
@@ -319,28 +255,23 @@ describe("MoleculeDispatch E2E Integration", () => {
           expect(callArgs[0].config.beadId).toBe(expectedBeadIds[i]);
         }
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });
 
     it("verifies step descriptions from formula flow through as promptArg", async () => {
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "decompose_epic",
-        vars: [],
-        promptArg: "",
+      const config = moleculeTestConfig(stack, {
+        formula: "decompose-epic",
         mode: "code",
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
       });
 
-      const execBdFn = vi
-        .fn()
-        .mockResolvedValueOnce({ id: "proto-1" })
-        .mockResolvedValueOnce({ molecule_id: "mol-1" })
-        .mockResolvedValueOnce({ steps: DECOMPOSE_EPIC_STEPS });
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-1",
+        moleculeId: "mol-1",
+        steps: DECOMPOSE_EPIC_STEPS,
+      });
 
       const runSingleDispatchFn = vi.fn().mockResolvedValue({
         code: ExitCode.SUCCESS,
@@ -349,7 +280,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         elapsed_seconds: 1,
       });
 
-      const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const stdout = captureStdout();
 
       try {
         await runDispatch(config, stack.mockFetch, { execBdFn, runSingleDispatchFn });
@@ -369,28 +300,23 @@ describe("MoleculeDispatch E2E Integration", () => {
           "Dispatch architect child to design the subtask decomposition",
         );
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });
 
     it("verifies step titles from formula flow through as config title", async () => {
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "decompose_epic",
-        vars: [],
-        promptArg: "",
+      const config = moleculeTestConfig(stack, {
+        formula: "decompose-epic",
         mode: "code",
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
       });
 
-      const execBdFn = vi
-        .fn()
-        .mockResolvedValueOnce({ id: "proto-1" })
-        .mockResolvedValueOnce({ molecule_id: "mol-1" })
-        .mockResolvedValueOnce({ steps: DECOMPOSE_EPIC_STEPS });
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-1",
+        moleculeId: "mol-1",
+        steps: DECOMPOSE_EPIC_STEPS,
+      });
 
       const runSingleDispatchFn = vi.fn().mockResolvedValue({
         code: ExitCode.SUCCESS,
@@ -399,7 +325,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         elapsed_seconds: 1,
       });
 
-      const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const stdout = captureStdout();
 
       try {
         await runDispatch(config, stack.mockFetch, { execBdFn, runSingleDispatchFn });
@@ -412,7 +338,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         expect(calls[1][0].config.title).toBe("Explore codebase");
         expect(calls[2][0].config.title).toBe("Prepare subtask plan");
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });
@@ -421,63 +347,26 @@ describe("MoleculeDispatch E2E Integration", () => {
   describe("parent-only step skipping", () => {
     it("skips all action:parent steps and dispatches the rest", async () => {
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
+      const config = moleculeTestConfig(stack, {
         formula: "mixed-formula",
-        promptArg: "",
-        jsonOutput: true,
         mode: "code",
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
       });
 
       // Formula with alternating parent and dispatch steps
-      const execBdFn = vi
-        .fn()
-        .mockResolvedValueOnce({ id: "proto-mixed" })
-        .mockResolvedValueOnce({ molecule_id: "mol-mixed" })
-        .mockResolvedValueOnce({
-          steps: [
-            {
-              id: "step-code-1",
-              title: "Code step 1",
-              description: "Write code",
-              labels: ["mode:code", "card:execute-subtask"],
-            },
-            {
-              id: "step-parent-1",
-              title: "Parent orchestration",
-              description: "Orchestrate children",
-              labels: ["action:parent", "card:process-orchestrate"],
-            },
-            {
-              id: "step-architect-1",
-              title: "Architect step",
-              description: "Design system",
-              labels: ["mode:architect", "card:explore-phase"],
-            },
-            {
-              id: "step-parent-2",
-              title: "Another parent step",
-              description: "More orchestration",
-              labels: ["action:parent"],
-            },
-          ],
-        });
-
-      const runSingleDispatchFn = vi.fn().mockResolvedValue({
-        code: ExitCode.SUCCESS,
-        session_id: "sess-skip-test",
-        result: "ok",
-        elapsed_seconds: 1,
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-mixed",
+        moleculeId: "mol-mixed",
+        steps: [
+          { id: "step-code-1", title: "Code step 1", description: "Write code", labels: ["mode:code", "card:execute-subtask"] },
+          { id: "step-parent-1", title: "Parent orchestration", description: "Orchestrate children", labels: ["action:parent", "card:process-orchestrate"] },
+          { id: "step-architect-1", title: "Architect step", description: "Design system", labels: ["mode:architect", "card:explore-phase"] },
+          { id: "step-parent-2", title: "Another parent step", description: "More orchestration", labels: ["action:parent"] },
+        ],
       });
 
-      const stdoutChunks: string[] = [];
-      const stdoutSpy = vi
-        .spyOn(process.stdout, "write")
-        .mockImplementation((chunk: string | Uint8Array) => {
-          stdoutChunks.push(String(chunk));
-          return true;
-        });
+      const runSingleDispatchFn = mockSuccessfulDispatches(2, "sess-skip");
+
+      const stdout = captureStdout();
 
       try {
         const code = await runDispatch(config, stack.mockFetch, {
@@ -488,28 +377,22 @@ describe("MoleculeDispatch E2E Integration", () => {
         expect(code).toBe(ExitCode.SUCCESS);
         expect(runSingleDispatchFn).toHaveBeenCalledTimes(2); // Only non-parent steps
 
-        const output = JSON.parse(stdoutChunks.join("")) as MoleculeDispatchResult;
+        const output = stdout.json();
         expect(output.total_steps).toBe(4);
         expect(output.dispatched_steps).toBe(2);
         expect(output.skipped_steps).toBe(2);
 
         // Verify the dispatched steps have correct modes
-        const codeStep = output.steps.find((s) => s.step_id === "step-code-1");
-        expect(codeStep?.status).toBe("completed");
-        expect(codeStep?.mode).toBe("code");
-
-        const architectStep = output.steps.find((s) => s.step_id === "step-architect-1");
-        expect(architectStep?.status).toBe("completed");
-        expect(architectStep?.mode).toBe("architect");
+        expect(output.steps.find((s) => s.step_id === "step-code-1")?.status).toBe("completed");
+        expect(output.steps.find((s) => s.step_id === "step-code-1")?.mode).toBe("code");
+        expect(output.steps.find((s) => s.step_id === "step-architect-1")?.status).toBe("completed");
+        expect(output.steps.find((s) => s.step_id === "step-architect-1")?.mode).toBe("architect");
 
         // Verify parent steps are skipped
-        const parent1 = output.steps.find((s) => s.step_id === "step-parent-1");
-        expect(parent1?.status).toBe("skipped");
-
-        const parent2 = output.steps.find((s) => s.step_id === "step-parent-2");
-        expect(parent2?.status).toBe("skipped");
+        expect(output.steps.find((s) => s.step_id === "step-parent-1")?.status).toBe("skipped");
+        expect(output.steps.find((s) => s.step_id === "step-parent-2")?.status).toBe("skipped");
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });
@@ -518,26 +401,18 @@ describe("MoleculeDispatch E2E Integration", () => {
   describe("MoleculeDispatchResult accuracy", () => {
     it("correctly tracks mixed outcomes: completed, failed, and skipped", async () => {
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "mixed-outcome",
-        promptArg: "",
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
-      });
+      const config = moleculeTestConfig(stack, { formula: "mixed-outcome" });
 
-      const execBdFn = vi
-        .fn()
-        .mockResolvedValueOnce({ id: "proto-mix" })
-        .mockResolvedValueOnce({ molecule_id: "mol-mix" })
-        .mockResolvedValueOnce({
-          steps: [
-            { id: "step-ok", title: "Ok step", description: "P1", labels: ["mode:code"] },
-            { id: "step-fail", title: "Fail step", description: "P2", labels: ["mode:code"] },
-            { id: "step-parent", title: "Parent", description: "P3", labels: ["action:parent"] },
-            { id: "step-ok2", title: "Ok2", description: "P4", labels: ["mode:architect"] },
-          ],
-        });
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-mix",
+        moleculeId: "mol-mix",
+        steps: [
+          { id: "step-ok", title: "Ok step", description: "P1", labels: ["mode:code"] },
+          { id: "step-fail", title: "Fail step", description: "P2", labels: ["mode:code"] },
+          { id: "step-parent", title: "Parent", description: "P3", labels: ["action:parent"] },
+          { id: "step-ok2", title: "Ok2", description: "P4", labels: ["mode:architect"] },
+        ],
+      });
 
       const runSingleDispatchFn = vi
         .fn()
@@ -555,13 +430,7 @@ describe("MoleculeDispatch E2E Integration", () => {
           elapsed_seconds: 8,
         });
 
-      const stdoutChunks: string[] = [];
-      const stdoutSpy = vi
-        .spyOn(process.stdout, "write")
-        .mockImplementation((chunk: string | Uint8Array) => {
-          stdoutChunks.push(String(chunk));
-          return true;
-        });
+      const stdout = captureStdout();
 
       try {
         const code = await runDispatch(config, stack.mockFetch, {
@@ -569,10 +438,10 @@ describe("MoleculeDispatch E2E Integration", () => {
           runSingleDispatchFn,
         });
 
-        // Mixed outcome with at least one success -> SUCCESS
-        expect(code).toBe(ExitCode.SUCCESS);
+        // Any failed dispatched step should return GENERAL_ERROR
+        expect(code).toBe(ExitCode.GENERAL_ERROR);
 
-        const output = JSON.parse(stdoutChunks.join("")) as MoleculeDispatchResult;
+        const output = stdout.json();
         expect(output.total_steps).toBe(4);
         expect(output.dispatched_steps).toBe(2); // 2 successful
         expect(output.failed_steps).toBe(1);     // 1 failed
@@ -594,31 +463,23 @@ describe("MoleculeDispatch E2E Integration", () => {
         const failStep = output.steps.find((s) => s.step_id === "step-fail");
         expect(failStep?.error).toContain("dispatch exit code");
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });
 
     it("handles exception during step dispatch gracefully", async () => {
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "exception-test",
-        promptArg: "",
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
-      });
+      const config = moleculeTestConfig(stack, { formula: "exception-test" });
 
-      const execBdFn = vi
-        .fn()
-        .mockResolvedValueOnce({ id: "proto-exc" })
-        .mockResolvedValueOnce({ molecule_id: "mol-exc" })
-        .mockResolvedValueOnce({
-          steps: [
-            { id: "step-throw", title: "Throw step", description: "P1", labels: ["mode:code"] },
-            { id: "step-ok", title: "Ok step", description: "P2", labels: ["mode:code"] },
-          ],
-        });
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-exc",
+        moleculeId: "mol-exc",
+        steps: [
+          { id: "step-throw", title: "Throw step", description: "P1", labels: ["mode:code"] },
+          { id: "step-ok", title: "Ok step", description: "P2", labels: ["mode:code"] },
+        ],
+      });
 
       const runSingleDispatchFn = vi
         .fn()
@@ -630,13 +491,7 @@ describe("MoleculeDispatch E2E Integration", () => {
           elapsed_seconds: 2,
         });
 
-      const stdoutChunks: string[] = [];
-      const stdoutSpy = vi
-        .spyOn(process.stdout, "write")
-        .mockImplementation((chunk: string | Uint8Array) => {
-          stdoutChunks.push(String(chunk));
-          return true;
-        });
+      const stdout = captureStdout();
 
       try {
         const code = await runDispatch(config, stack.mockFetch, {
@@ -644,10 +499,10 @@ describe("MoleculeDispatch E2E Integration", () => {
           runSingleDispatchFn,
         });
 
-        // One success, one exception -> SUCCESS (not all failed)
-        expect(code).toBe(ExitCode.SUCCESS);
+        // Any failed dispatched step should return GENERAL_ERROR
+        expect(code).toBe(ExitCode.GENERAL_ERROR);
 
-        const output = JSON.parse(stdoutChunks.join("")) as MoleculeDispatchResult;
+        const output = stdout.json();
         expect(output.failed_steps).toBe(1);
         expect(output.dispatched_steps).toBe(1);
 
@@ -658,7 +513,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         const okStep = output.steps.find((s) => s.step_id === "step-ok");
         expect(okStep?.status).toBe("completed");
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });
@@ -707,23 +562,13 @@ describe("MoleculeDispatch E2E Integration", () => {
       const stack = await startHealthyStack();
 
       // First: molecule dispatch
-      const moleculeConfig = makeTestConfig({
-        formula: "simple-formula",
-        promptArg: "",
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
-      });
+      const moleculeConfig = moleculeTestConfig(stack, { formula: "simple-formula" });
 
-      const moleculeExecBd = vi
-        .fn()
-        .mockResolvedValueOnce({ id: "proto-compat" })
-        .mockResolvedValueOnce({ molecule_id: "mol-compat" })
-        .mockResolvedValueOnce({
-          steps: [
-            { id: "step-1", title: "S1", description: "Do thing", labels: ["mode:code"] },
-          ],
-        });
+      const moleculeExecBd = mockBdPipeline({
+        protoId: "proto-compat",
+        moleculeId: "mol-compat",
+        steps: [{ id: "step-1", title: "S1", description: "Do thing", labels: ["mode:code"] }],
+      });
 
       const moleculeRunSingle = vi.fn().mockResolvedValue({
         code: ExitCode.SUCCESS,
@@ -732,7 +577,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         elapsed_seconds: 3,
       });
 
-      const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const stdout = captureStdout();
 
       try {
         await runDispatch(moleculeConfig, stack.mockFetch, {
@@ -775,13 +620,15 @@ describe("MoleculeDispatch E2E Integration", () => {
         expect(molCallArgs[0]).toHaveProperty("baseUrl");
         expect(molCallArgs[0]).toHaveProperty("log");
         expect(molCallArgs[0]).toHaveProperty("fetchFn");
+        expect(molCallArgs[0]).toHaveProperty("suppressOutput", true);
 
         expect(rawCallArgs[0]).toHaveProperty("config");
         expect(rawCallArgs[0]).toHaveProperty("baseUrl");
         expect(rawCallArgs[0]).toHaveProperty("log");
         expect(rawCallArgs[0]).toHaveProperty("fetchFn");
+        expect(rawCallArgs[0]).not.toHaveProperty("suppressOutput");
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });
@@ -790,31 +637,23 @@ describe("MoleculeDispatch E2E Integration", () => {
   describe("formula_id metadata plumbing for DSPy compiled prompt keying", () => {
     it("verifies beadId from molecule steps is set on dispatch config for formula_id lookup", async () => {
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "decompose_epic",
+      const config = moleculeTestConfig(stack, {
+        formula: "decompose-epic",
         vars: ["epic_id=repomap-core-638"],
-        promptArg: "",
         mode: "process-orchestrator",
         beadId: "repomap-core-638",  // Parent bead ID
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
       });
 
-      const execBdFn = vi
-        .fn()
-        .mockResolvedValueOnce({ id: "proto-dspy" })
-        .mockResolvedValueOnce({ molecule_id: "mol-dspy" })
-        .mockResolvedValueOnce({
-          steps: [
-            {
-              id: "repomap-core-mol-dspy.1",
-              title: "Discover",
-              description: "discover prompt",
-              labels: ["mode:architect", "card:discover-phase"],
-            },
-          ],
-        });
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-dspy",
+        moleculeId: "mol-dspy",
+        steps: [{
+          id: "repomap-core-mol-dspy.1",
+          title: "Discover",
+          description: "discover prompt",
+          labels: ["mode:architect", "card:discover-phase"],
+        }],
+      });
 
       const runSingleDispatchFn = vi.fn().mockResolvedValue({
         code: ExitCode.SUCCESS,
@@ -823,7 +662,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         elapsed_seconds: 1,
       });
 
-      const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const stdout = captureStdout();
 
       try {
         await runDispatch(config, stack.mockFetch, { execBdFn, runSingleDispatchFn });
@@ -843,7 +682,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         // mode from labels flows through
         expect(calls[0][0].config.mode).toBe("architect");
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });
@@ -865,30 +704,21 @@ describe("MoleculeDispatch E2E Integration", () => {
       //   6. readCardExitPrompt(candidates) finds the most specific compiled prompt
 
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "decompose_epic",
-        vars: [],
-        promptArg: "",
+      const config = moleculeTestConfig(stack, {
+        formula: "decompose-epic",
         mode: "architect",
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
       });
 
-      const execBdFn = vi
-        .fn()
-        .mockResolvedValueOnce({ id: "proto-chain" })
-        .mockResolvedValueOnce({ molecule_id: "mol-chain" })
-        .mockResolvedValueOnce({
-          steps: [
-            {
-              id: "repomap-core-mol-chain.1",
-              title: "Step with card",
-              description: "test prompt",
-              labels: ["mode:architect", "card:discover-phase", "phase:1"],
-            },
-          ],
-        });
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-chain",
+        moleculeId: "mol-chain",
+        steps: [{
+          id: "repomap-core-mol-chain.1",
+          title: "Step with card",
+          description: "test prompt",
+          labels: ["mode:architect", "card:discover-phase", "phase:1"],
+        }],
+      });
 
       const capturedConfigs: FactoryDispatchConfig[] = [];
       const runSingleDispatchFn = vi.fn().mockImplementation(async (params: { config: FactoryDispatchConfig }) => {
@@ -901,7 +731,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         };
       });
 
-      const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const stdout = captureStdout();
 
       try {
         await runDispatch(config, stack.mockFetch, { execBdFn, runSingleDispatchFn });
@@ -922,116 +752,22 @@ describe("MoleculeDispatch E2E Integration", () => {
         // The bead_id follows the depth convention: "repomap-core-mol-chain.1" -> depth 2
         // This would be used in the prompt candidate: card-exit:discover-phase:depth-2
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
-    });
-  });
-
-  describe("step label parsing with realistic formula labels", () => {
-    it("correctly parses all label types from decompose-epic formula", () => {
-      // Step 1: discover
-      const discoverLabels = ["mode:architect", "card:discover-phase", "phase:1"];
-      expect(parseLabelValue(discoverLabels, "mode")).toBe("architect");
-      expect(parseLabelValue(discoverLabels, "card")).toBe("discover-phase");
-      expect(parseLabelValue(discoverLabels, "phase")).toBe("1");
-      expect(isParentOnlyStep(discoverLabels)).toBe(false);
-
-      const discoverConfig = extractStepConfig(discoverLabels);
-      expect(discoverConfig).toEqual({
-        mode: "architect",
-        card: "discover-phase",
-        isParent: false,
-      });
-
-      // Step 4: mint-beads (parent-only)
-      const mintLabels = ["action:parent", "card:decompose-epic", "phase:4"];
-      expect(parseLabelValue(mintLabels, "action")).toBe("parent");
-      expect(parseLabelValue(mintLabels, "card")).toBe("decompose-epic");
-      expect(isParentOnlyStep(mintLabels)).toBe(true);
-
-      const mintConfig = extractStepConfig(mintLabels);
-      expect(mintConfig).toEqual({
-        mode: undefined,
-        card: "decompose-epic",
-        isParent: true,
-      });
-    });
-
-    it("handles edge cases in label parsing", () => {
-      // Empty labels
-      expect(extractStepConfig([])).toEqual({
-        mode: undefined,
-        card: undefined,
-        isParent: false,
-      });
-
-      // Label with empty value after colon
-      expect(parseLabelValue(["mode:", "card:valid"], "mode")).toBeUndefined();
-      expect(parseLabelValue(["mode:", "card:valid"], "card")).toBe("valid");
-
-      // Label with spaces in value
-      expect(parseLabelValue(["mode: architect "], "mode")).toBe("architect");
-
-      // Multiple mode labels — first wins
-      expect(parseLabelValue(["mode:first", "mode:second"], "mode")).toBe("first");
-    });
-
-    it("correctly constructs cook and pour commands from formula config", () => {
-      // Matching actual decompose_epic invocation pattern
-      expect(buildCookCommand("decompose_epic", ["epic_id=repomap-core-638"])).toEqual([
-        "cook",
-        "decompose_epic",
-        "--var",
-        "epic_id=repomap-core-638",
-        "--json",
-      ]);
-
-      expect(buildPourCommand("proto-decompose-638", ["epic_id=repomap-core-638"])).toEqual([
-        "mol",
-        "pour",
-        "proto-decompose-638",
-        "--var",
-        "epic_id=repomap-core-638",
-        "--json",
-      ]);
-
-      // Multiple vars
-      expect(
-        buildCookCommand("decompose_epic", [
-          "epic_id=repomap-core-638",
-          "depth=3",
-          "mode=thorough",
-        ]),
-      ).toEqual([
-        "cook",
-        "decompose_epic",
-        "--var",
-        "epic_id=repomap-core-638",
-        "--var",
-        "depth=3",
-        "--var",
-        "mode=thorough",
-        "--json",
-      ]);
     });
   });
 
   describe("bd output normalization resilience", () => {
     it("handles alternative field names in bd cook output", async () => {
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "alt-format",
-        promptArg: "",
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
-      });
+      const config = moleculeTestConfig(stack, { formula: "alt-format" });
 
       // Use alternative field names that normalization should handle
       const execBdFn = vi
         .fn()
         // cook returns proto_id instead of id
+        .mockResolvedValueOnce({ proto_id: "proto-alt" })
         .mockResolvedValueOnce({ proto_id: "proto-alt" })
         // pour returns nested molecule.id
         .mockResolvedValueOnce({ molecule: { id: "mol-alt" } })
@@ -1054,13 +790,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         elapsed_seconds: 1,
       });
 
-      const stdoutChunks: string[] = [];
-      const stdoutSpy = vi
-        .spyOn(process.stdout, "write")
-        .mockImplementation((chunk: string | Uint8Array) => {
-          stdoutChunks.push(String(chunk));
-          return true;
-        });
+      const stdout = captureStdout();
 
       try {
         const code = await runDispatch(config, stack.mockFetch, {
@@ -1071,7 +801,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         expect(code).toBe(ExitCode.SUCCESS);
         expect(runSingleDispatchFn).toHaveBeenCalledTimes(1);
 
-        const output = JSON.parse(stdoutChunks.join("")) as MoleculeDispatchResult;
+        const output = stdout.json();
         expect(output.molecule_id).toBe("mol-alt");
         expect(output.total_steps).toBe(1);
         expect(output.dispatched_steps).toBe(1);
@@ -1088,23 +818,18 @@ describe("MoleculeDispatch E2E Integration", () => {
         expect(callArgs[0].config.beadId).toBe("alt-step-1");
         expect(callArgs[0].config.promptArg).toBe("Alt prompt body");
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });
 
     it("falls back to pour output when show returns empty steps", async () => {
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "fallback-test",
-        promptArg: "",
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
-      });
+      const config = moleculeTestConfig(stack, { formula: "fallback-test" });
 
       const execBdFn = vi
         .fn()
+        .mockResolvedValueOnce({ id: "proto-fb" })
         .mockResolvedValueOnce({ id: "proto-fb" })
         // pour includes steps in its response
         .mockResolvedValueOnce({
@@ -1123,13 +848,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         elapsed_seconds: 1,
       });
 
-      const stdoutChunks: string[] = [];
-      const stdoutSpy = vi
-        .spyOn(process.stdout, "write")
-        .mockImplementation((chunk: string | Uint8Array) => {
-          stdoutChunks.push(String(chunk));
-          return true;
-        });
+      const stdout = captureStdout();
 
       try {
         const code = await runDispatch(config, stack.mockFetch, {
@@ -1140,12 +859,12 @@ describe("MoleculeDispatch E2E Integration", () => {
         expect(code).toBe(ExitCode.SUCCESS);
         expect(runSingleDispatchFn).toHaveBeenCalledTimes(1);
 
-        const output = JSON.parse(stdoutChunks.join("")) as MoleculeDispatchResult;
+        const output = stdout.json();
         expect(output.total_steps).toBe(1);
         expect(output.dispatched_steps).toBe(1);
         expect(output.steps[0].step_id).toBe("fb-step-1");
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });
@@ -1154,42 +873,21 @@ describe("MoleculeDispatch E2E Integration", () => {
   describe("mode and card override from labels vs config defaults", () => {
     it("step labels override config defaults; steps without labels use config defaults", async () => {
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
+      const config = moleculeTestConfig(stack, {
         formula: "override-test",
-        promptArg: "",
         mode: "process-orchestrator",
         cardId: "default-card",
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
       });
 
-      const execBdFn = vi
-        .fn()
-        .mockResolvedValueOnce({ id: "proto-ov" })
-        .mockResolvedValueOnce({ molecule_id: "mol-ov" })
-        .mockResolvedValueOnce({
-          steps: [
-            {
-              id: "labeled-step",
-              title: "With labels",
-              description: "P1",
-              labels: ["mode:architect", "card:explore-phase"],
-            },
-            {
-              id: "unlabeled-step",
-              title: "No labels",
-              description: "P2",
-              labels: [],
-            },
-            {
-              id: "partial-step",
-              title: "Mode only",
-              description: "P3",
-              labels: ["mode:code"],
-            },
-          ],
-        });
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-ov",
+        moleculeId: "mol-ov",
+        steps: [
+          { id: "labeled-step", title: "With labels", description: "P1", labels: ["mode:architect", "card:explore-phase"] },
+          { id: "unlabeled-step", title: "No labels", description: "P2", labels: [] },
+          { id: "partial-step", title: "Mode only", description: "P3", labels: ["mode:code"] },
+        ],
+      });
 
       const capturedConfigs: FactoryDispatchConfig[] = [];
       const runSingleDispatchFn = vi.fn().mockImplementation(async (params: { config: FactoryDispatchConfig }) => {
@@ -1197,7 +895,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         return { code: ExitCode.SUCCESS, session_id: "sess-ov", result: "ok", elapsed_seconds: 1 };
       });
 
-      const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const stdout = captureStdout();
 
       try {
         await runDispatch(config, stack.mockFetch, { execBdFn, runSingleDispatchFn });
@@ -1216,7 +914,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         expect(capturedConfigs[2].mode).toBe("code");
         expect(capturedConfigs[2].cardId).toBe("default-card");
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });
@@ -1225,24 +923,16 @@ describe("MoleculeDispatch E2E Integration", () => {
   describe("no-monitor mode with molecule dispatch", () => {
     it("reports 'dispatched' status instead of 'completed' for non-monitored steps", async () => {
       const stack = await startHealthyStack();
-      const config = makeTestConfig({
+      const config = moleculeTestConfig(stack, {
         formula: "no-monitor-formula",
-        promptArg: "",
         noMonitor: true,
-        jsonOutput: true,
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
       });
 
-      const execBdFn = vi
-        .fn()
-        .mockResolvedValueOnce({ id: "proto-nm" })
-        .mockResolvedValueOnce({ molecule_id: "mol-nm" })
-        .mockResolvedValueOnce({
-          steps: [
-            { id: "nm-step-1", title: "NM step", description: "P1", labels: ["mode:code"] },
-          ],
-        });
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-nm",
+        moleculeId: "mol-nm",
+        steps: [{ id: "nm-step-1", title: "NM step", description: "P1", labels: ["mode:code"] }],
+      });
 
       const runSingleDispatchFn = vi.fn().mockResolvedValue({
         code: ExitCode.SUCCESS,
@@ -1251,13 +941,7 @@ describe("MoleculeDispatch E2E Integration", () => {
         elapsed_seconds: 0,
       });
 
-      const stdoutChunks: string[] = [];
-      const stdoutSpy = vi
-        .spyOn(process.stdout, "write")
-        .mockImplementation((chunk: string | Uint8Array) => {
-          stdoutChunks.push(String(chunk));
-          return true;
-        });
+      const stdout = captureStdout();
 
       try {
         const code = await runDispatch(config, stack.mockFetch, {
@@ -1267,12 +951,12 @@ describe("MoleculeDispatch E2E Integration", () => {
 
         expect(code).toBe(ExitCode.SUCCESS);
 
-        const output = JSON.parse(stdoutChunks.join("")) as MoleculeDispatchResult;
+        const output = stdout.json();
         expect(output.dispatched_steps).toBe(1);
         // In no-monitor mode, status is "dispatched" not "completed"
         expect(output.steps[0].status).toBe("dispatched");
       } finally {
-        stdoutSpy.mockRestore();
+        stdout.spy.mockRestore();
         await stack.cleanup();
       }
     });

@@ -728,18 +728,25 @@ function isObjectLike(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
-async function runMoleculeDispatch(
+// ── BD pipeline helpers (reduce cognitive complexity) ────────────────────
+
+interface BdPipelineResult {
+  cookedOutput: unknown;
+  pouredOutput: unknown;
+  showedOutput: Record<string, unknown>;
+  protoId: string;
+  moleculeId: string;
+}
+
+async function runBdPipeline(
   config: FactoryDispatchConfig,
-  baseUrl: string,
   log: Logger,
-  fetchFn: typeof fetch,
-  deps: DispatchDependencies,
-): Promise<ExitCodeValue> {
-  // Two-phase cook: ephemeral (get steps with labels) then persist (get proto_id)
+  execBdFn: DispatchDependencies["execBdFn"],
+): Promise<BdPipelineResult | ExitCodeValue> {
   let cookedOutput: unknown;
   try {
     log(`${timestamp()} Cooking formula: ${config.formula}`);
-    cookedOutput = await deps.execBdFn(buildCookCommand(config.formula, config.vars, false));
+    cookedOutput = await execBdFn(buildCookCommand(config.formula, config.vars, false));
   } catch (e) {
     process.stderr.write(`ERROR: ${(e as Error).message}\n`);
     return ExitCode.GENERAL_ERROR;
@@ -747,7 +754,7 @@ async function runMoleculeDispatch(
 
   let persistedOutput: unknown;
   try {
-    persistedOutput = await deps.execBdFn(buildCookCommand(config.formula, config.vars, true));
+    persistedOutput = await execBdFn(buildCookCommand(config.formula, config.vars, true));
   } catch (e) {
     process.stderr.write(`ERROR: ${(e as Error).message}\n`);
     return ExitCode.GENERAL_ERROR;
@@ -762,7 +769,7 @@ async function runMoleculeDispatch(
   let pouredOutput: unknown;
   try {
     log(`${timestamp()} Pouring proto: ${protoId}`);
-    pouredOutput = await deps.execBdFn(buildPourCommand(protoId, config.vars));
+    pouredOutput = await execBdFn(buildPourCommand(protoId, config.vars));
   } catch (e) {
     process.stderr.write(`ERROR: ${(e as Error).message}\n`);
     return ExitCode.GENERAL_ERROR;
@@ -776,7 +783,7 @@ async function runMoleculeDispatch(
 
   let showedOutput: unknown;
   try {
-    showedOutput = await deps.execBdFn(buildShowCommand(moleculeId));
+    showedOutput = await execBdFn(buildShowCommand(moleculeId));
   } catch (e) {
     process.stderr.write(`ERROR: ${(e as Error).message}\n`);
     return ExitCode.GENERAL_ERROR;
@@ -787,22 +794,59 @@ async function runMoleculeDispatch(
     return ExitCode.GENERAL_ERROR;
   }
 
-  // Primary: merge cooked formula steps (with labels) + pour id_mapping (with bead IDs)
-  // Fallback: try bd mol show output, then pour output directly
-  const cookedSteps = buildStepsFromCookAndPour(cookedOutput, pouredOutput, protoId);
-  const showSteps = normalizeMoleculeSteps(showedOutput);
-  const pourSteps = normalizeMoleculeSteps(pouredOutput);
-  const effectiveSteps = cookedSteps.length > 0 ? cookedSteps : showSteps.length > 0 ? showSteps : pourSteps;
-  const result: MoleculeDispatchResult = {
-    molecule_id: moleculeId,
-    formula: config.formula,
-    steps: [],
-    total_steps: effectiveSteps.length,
-    dispatched_steps: 0,
-    skipped_steps: 0,
-    failed_steps: 0,
-  };
+  return { cookedOutput, pouredOutput, showedOutput, protoId, moleculeId };
+}
 
+function extractOutcomeDetails(
+  outcome: ExitCodeValue | MoleculeStepDispatchOutcome,
+): { code: ExitCodeValue; details: Record<string, unknown> } {
+  if (typeof outcome === "number") {
+    return { code: outcome, details: {} };
+  }
+  const details: Record<string, unknown> = {};
+  if (outcome.session_id) details.session_id = outcome.session_id;
+  if (outcome.result) details.result = outcome.result;
+  if (typeof outcome.elapsed_seconds === "number") details.elapsed_seconds = outcome.elapsed_seconds;
+  return { code: outcome.code, details };
+}
+
+function resolveEffectiveSteps(
+  cookedOutput: unknown,
+  pouredOutput: unknown,
+  showedOutput: unknown,
+  protoId: string,
+): MoleculeStep[] {
+  const cookedSteps = buildStepsFromCookAndPour(cookedOutput, pouredOutput, protoId);
+  if (cookedSteps.length > 0) return cookedSteps;
+  const showSteps = normalizeMoleculeSteps(showedOutput);
+  if (showSteps.length > 0) return showSteps;
+  return normalizeMoleculeSteps(pouredOutput);
+}
+
+type MoleculeStepEntry = MoleculeDispatchResult["steps"][number];
+
+function buildStepBase(
+  stepId: string,
+  mode: string,
+  card: string | undefined,
+): Pick<MoleculeStepEntry, "step_id" | "bead_id" | "mode"> & { card?: string } {
+  return {
+    step_id: stepId,
+    bead_id: stepId,
+    mode,
+    ...(card ? { card } : {}),
+  };
+}
+
+async function dispatchMoleculeSteps(
+  effectiveSteps: MoleculeStep[],
+  config: FactoryDispatchConfig,
+  baseUrl: string,
+  log: Logger,
+  fetchFn: typeof fetch,
+  deps: DispatchDependencies,
+  result: MoleculeDispatchResult,
+): Promise<void> {
   for (const step of effectiveSteps) {
     const parsed = extractStepConfig(step.labels);
     const mode = parsed.mode ?? config.mode;
@@ -811,13 +855,7 @@ async function runMoleculeDispatch(
     if (parsed.isParent) {
       log(`${timestamp()} Skipping parent-only step: ${step.id}`);
       result.skipped_steps += 1;
-      result.steps.push({
-        step_id: step.id,
-        bead_id: step.id,
-        mode,
-        ...(card ? { card } : {}),
-        status: "skipped",
-      });
+      result.steps.push({ ...buildStepBase(step.id, mode, card), status: "skipped" });
       continue;
     }
 
@@ -831,45 +869,29 @@ async function runMoleculeDispatch(
     };
 
     try {
-      const dispatchOutcome = await deps.runSingleDispatchFn({
+      const outcome = await deps.runSingleDispatchFn({
         config: stepConfig,
         baseUrl,
         log,
         fetchFn,
+        suppressOutput: true,
       });
-      const code =
-        typeof dispatchOutcome === "number" ? dispatchOutcome : dispatchOutcome.code;
-      const stepDetails =
-        typeof dispatchOutcome === "number"
-          ? {}
-          : {
-              ...(dispatchOutcome.session_id ? { session_id: dispatchOutcome.session_id } : {}),
-              ...(dispatchOutcome.result ? { result: dispatchOutcome.result } : {}),
-              ...(typeof dispatchOutcome.elapsed_seconds === "number"
-                ? { elapsed_seconds: dispatchOutcome.elapsed_seconds }
-                : {}),
-            };
+      const { code, details } = extractOutcomeDetails(outcome);
 
       if (code === ExitCode.SUCCESS) {
         result.dispatched_steps += 1;
         result.steps.push({
-          step_id: step.id,
-          bead_id: step.id,
-          mode,
-          ...(card ? { card } : {}),
+          ...buildStepBase(step.id, mode, card),
           status: config.noMonitor ? "dispatched" : "completed",
-          ...stepDetails,
+          ...details,
         });
       } else {
         result.failed_steps += 1;
         result.steps.push({
-          step_id: step.id,
-          bead_id: step.id,
-          mode,
-          ...(card ? { card } : {}),
+          ...buildStepBase(step.id, mode, card),
           status: "failed",
           error: `dispatch exit code ${code}`,
-          ...stepDetails,
+          ...details,
         });
         if (!config.noMonitor) {
           log(`${timestamp()} Step failed: ${step.id} (exit=${code}); continuing`);
@@ -879,10 +901,7 @@ async function runMoleculeDispatch(
       result.failed_steps += 1;
       const message = (e as Error).message;
       result.steps.push({
-        step_id: step.id,
-        bead_id: step.id,
-        mode,
-        ...(card ? { card } : {}),
+        ...buildStepBase(step.id, mode, card),
         status: "failed",
         error: message,
       });
@@ -891,6 +910,36 @@ async function runMoleculeDispatch(
       }
     }
   }
+}
+
+async function runMoleculeDispatch(
+  config: FactoryDispatchConfig,
+  baseUrl: string,
+  log: Logger,
+  fetchFn: typeof fetch,
+  deps: DispatchDependencies,
+): Promise<ExitCodeValue> {
+  const pipeline = await runBdPipeline(config, log, deps.execBdFn);
+  if (typeof pipeline === "number") return pipeline;
+
+  const effectiveSteps = resolveEffectiveSteps(
+    pipeline.cookedOutput,
+    pipeline.pouredOutput,
+    pipeline.showedOutput,
+    pipeline.protoId,
+  );
+
+  const result: MoleculeDispatchResult = {
+    molecule_id: pipeline.moleculeId,
+    formula: config.formula,
+    steps: [],
+    total_steps: effectiveSteps.length,
+    dispatched_steps: 0,
+    skipped_steps: 0,
+    failed_steps: 0,
+  };
+
+  await dispatchMoleculeSteps(effectiveSteps, config, baseUrl, log, fetchFn, deps, result);
 
   if (config.jsonOutput) {
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");
@@ -901,7 +950,7 @@ async function runMoleculeDispatch(
   }
 
   const attemptedSteps = result.total_steps - result.skipped_steps;
-  if (attemptedSteps > 0 && result.failed_steps === attemptedSteps) {
+  if (attemptedSteps > 0 && result.failed_steps > 0) {
     return ExitCode.GENERAL_ERROR;
   }
   return ExitCode.SUCCESS;
@@ -938,6 +987,7 @@ export interface RunSingleDispatchParams {
   baseUrl: string;
   log: Logger;
   fetchFn?: typeof fetch;
+  suppressOutput?: boolean;
 }
 
 export async function runSingleDispatch({
@@ -945,7 +995,8 @@ export async function runSingleDispatch({
   baseUrl,
   log,
   fetchFn = fetch,
-}: RunSingleDispatchParams): Promise<ExitCodeValue> {
+  suppressOutput = false,
+}: RunSingleDispatchParams): Promise<ExitCodeValue | MoleculeStepDispatchOutcome> {
   // Phase 2: Build prompt payload
   const resolvedPayload = resolvePayload(config, log);
   if (typeof resolvedPayload === "number") {
@@ -991,6 +1042,9 @@ export async function runSingleDispatch({
 
   // Phase 5: No-monitor early exit
   if (config.noMonitor) {
+    if (suppressOutput) {
+      return { code: ExitCode.SUCCESS, session_id: sessionId };
+    }
     return outputNoMonitorResult(config, sessionId, title);
   }
 
@@ -1040,7 +1094,9 @@ export async function runSingleDispatch({
   }
 
   // Phase 8: Output
-  writeDispatchResultOutput(config, sessionId, title, monitor, result, childIds, audit);
+  if (!suppressOutput) {
+    writeDispatchResultOutput(config, sessionId, title, monitor, result, childIds, audit);
+  }
 
   // Phase 9: Child session ID capture
   logChildSessionIds(log, childIds);
@@ -1051,6 +1107,15 @@ export async function runSingleDispatch({
   log(
     `${timestamp()} Handoff: use --parent-session ${sessionId} with punch_engine for deterministic child ID resolution`,
   );
+
+  if (suppressOutput) {
+    return {
+      code: ExitCode.SUCCESS,
+      session_id: sessionId,
+      result,
+      elapsed_seconds: monitor.elapsed,
+    };
+  }
 
   return ExitCode.SUCCESS;
 }

@@ -32,7 +32,9 @@
  */
 
 import { defaultConfig, runDispatch } from "./factory-dispatch.js";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 function showHelp(): void {
   console.log(`Usage: npx tsx daemon/src/infra/factory-dispatch.cli.ts [OPTIONS] [<prompt>]
@@ -71,68 +73,34 @@ export function parseArgs(argv: string[]): ReturnType<typeof defaultConfig> {
   const args = argv.slice(2); // skip node and script path
 
   let i = 0;
+  function nextVal(flag: string): string {
+    if (i + 1 >= args.length) throw new Error(`Missing value for ${flag}`);
+    return args[++i];
+  }
+
   while (i < args.length) {
     const arg = args[i];
     switch (arg) {
       case "-m":
-      case "--mode":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.mode = args[++i];
-        break;
+      case "--mode":       config.mode = nextVal(arg); break;
       case "-t":
-      case "--title":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.title = args[++i];
-        break;
+      case "--title":      config.title = nextVal(arg); break;
       case "-h":
-      case "--host":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.host = args[++i];
-        break;
+      case "--host":       config.host = nextVal(arg); break;
       case "-p":
-      case "--port":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.port = Number(args[++i]);
-        break;
+      case "--port":       config.port = Number(nextVal(arg)); break;
       case "-w":
-      case "--wait":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.maxWait = Number(args[++i]);
-        break;
+      case "--wait":       config.maxWait = Number(nextVal(arg)); break;
       case "-q":
-      case "--quiet":
-        config.quiet = true;
-        break;
-      case "--poll":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.pollInterval = Number(args[++i]);
-        break;
-      case "--card":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.cardId = args[++i];
-        break;
-      case "--bead-id":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.beadId = args[++i];
-        break;
-      case "--formula":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.formula = args[++i];
-        break;
-      case "--var":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.vars.push(args[++i]);
-        break;
-      case "--no-monitor":
-        config.noMonitor = true;
-        break;
-      case "--json":
-        config.jsonOutput = true;
-        break;
-      case "--help":
-        showHelp();
-        process.exit(0);
-        break;
+      case "--quiet":      config.quiet = true; break;
+      case "--poll":       config.pollInterval = Number(nextVal(arg)); break;
+      case "--card":       config.cardId = nextVal(arg); break;
+      case "--bead-id":    config.beadId = nextVal(arg); break;
+      case "--formula":    config.formula = nextVal(arg); break;
+      case "--var":        config.vars.push(nextVal(arg)); break;
+      case "--no-monitor": config.noMonitor = true; break;
+      case "--json":       config.jsonOutput = true; break;
+      case "--help":       showHelp(); process.exit(0); break;
       default:
         if (arg.startsWith("-")) {
           console.error(`ERROR: Unknown option: ${arg}`);
@@ -158,7 +126,16 @@ async function main(): Promise<number> {
 }
 
 const shouldRunAsCli =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+  process.argv[1] !== undefined &&
+  (() => {
+    try {
+      const modulePath = realpathSync(fileURLToPath(import.meta.url));
+      const scriptPath = realpathSync(resolve(process.argv[1]));
+      return modulePath === scriptPath;
+    } catch {
+      return false;
+    }
+  })();
 
 if (shouldRunAsCli) {
   const code = await main();
