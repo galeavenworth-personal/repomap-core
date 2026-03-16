@@ -148,7 +148,7 @@ _PUNCH_AGGREGATE_SQL = """
         SUM(CASE WHEN punch_type = 'tool_call' AND LOWER(punch_key) = 'bash' THEN 1 ELSE 0 END) AS bash_count
     FROM punches
     GROUP BY task_id
-    ORDER BY task_id
+    ORDER BY MAX(observed_at) DESC
 """
 
 
