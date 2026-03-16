@@ -3,7 +3,7 @@
  * CLI entry point for Factory Dispatch.
  *
  * Usage:
- *   npx tsx daemon/src/infra/factory-dispatch.cli.ts [OPTIONS] <prompt-file-or-string>
+ *   npx tsx daemon/src/infra/factory-dispatch.cli.ts [OPTIONS] [<prompt-file-or-string>]
  *
  * Options:
  *   -m, --mode MODE        Agent mode to dispatch to (default: plant-manager)
@@ -14,6 +14,8 @@
  *   -q, --quiet            Suppress progress output
  *   --card CARD_ID         Override punch card ID (bypasses mode-card-map)
  *   --bead-id BEAD_ID      Optional bead ID to thread into payload metadata
+ *   --formula NAME         Formula name or path to cook and pour as a molecule
+ *   --var KEY=VALUE        Variable for formula cooking (repeatable)
  *   --poll SECONDS         Poll interval (default: 10)
  *   --no-monitor           Fire and forget — print session ID and exit
  *   --json                 Output final result as JSON instead of text
@@ -30,9 +32,13 @@
  */
 
 import { defaultConfig, runDispatch } from "./factory-dispatch.js";
+import { pathToFileURL } from "node:url";
 
 function showHelp(): void {
-  console.log(`Usage: npx tsx daemon/src/infra/factory-dispatch.cli.ts [OPTIONS] <prompt>
+  console.log(`Usage: npx tsx daemon/src/infra/factory-dispatch.cli.ts [OPTIONS] [<prompt>]
+
+Prompt:
+  <prompt>               Prompt string or .json payload file (optional with --formula)
 
 Options:
   -m, --mode MODE        Agent mode to dispatch to (default: plant-manager)
@@ -43,6 +49,8 @@ Options:
   -q, --quiet            Suppress progress output
   --card CARD_ID         Override punch card ID (bypasses mode-card-map)
   --bead-id BEAD_ID      Optional bead ID to thread into payload metadata
+  --formula <name>       Formula name or path to cook and pour as a molecule
+  --var <key=value>      Variable for formula cooking (repeatable)
   --poll SECONDS         Poll interval (default: 10)
   --no-monitor           Fire and forget — print session ID and exit
   --json                 Output final result as JSON instead of text
@@ -58,7 +66,7 @@ Exit codes:
   6  No assistant response found`);
 }
 
-function parseArgs(argv: string[]): ReturnType<typeof defaultConfig> {
+export function parseArgs(argv: string[]): ReturnType<typeof defaultConfig> {
   const config = defaultConfig();
   const args = argv.slice(2); // skip node and script path
 
@@ -107,6 +115,14 @@ function parseArgs(argv: string[]): ReturnType<typeof defaultConfig> {
         if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
         config.beadId = args[++i];
         break;
+      case "--formula":
+        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
+        config.formula = args[++i];
+        break;
+      case "--var":
+        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
+        config.vars.push(args[++i]);
+        break;
       case "--no-monitor":
         config.noMonitor = true;
         break;
@@ -128,8 +144,8 @@ function parseArgs(argv: string[]): ReturnType<typeof defaultConfig> {
     i++;
   }
 
-  if (!config.promptArg) {
-    console.error("ERROR: No prompt provided. Use --help for usage.");
+  if (!config.promptArg && !config.formula) {
+    console.error("ERROR: No prompt or formula provided. Use --help for usage.");
     process.exit(1);
   }
 
@@ -141,5 +157,10 @@ async function main(): Promise<number> {
   return runDispatch(config);
 }
 
-const code = await main();
-process.exit(code);
+const shouldRunAsCli =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (shouldRunAsCli) {
+  const code = await main();
+  process.exit(code);
+}

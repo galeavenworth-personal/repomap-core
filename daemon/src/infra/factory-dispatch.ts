@@ -10,6 +10,8 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
+import * as childProcess from "node:child_process";
+import { promisify } from "node:util";
 import { createConnection as createMysqlConnection } from "mysql2/promise";
 import { findRepoRoot, timestamp } from "./utils.js";
 import { withPm2Connection, isAppOnline } from "./pm2-client.js";
@@ -38,6 +40,8 @@ export interface FactoryDispatchConfig {
   noMonitor: boolean;
   jsonOutput: boolean;
   promptArg: string;
+  formula: string;
+  vars: string[];
   idleConfirm: number;
   doltPort: number;
   temporalPort: number;
@@ -59,6 +63,8 @@ export function defaultConfig(): FactoryDispatchConfig {
     noMonitor: false,
     jsonOutput: false,
     promptArg: "",
+    formula: "",
+    vars: [],
     idleConfirm: Number(process.env.IDLE_CONFIRM ?? "3"),
     doltPort: Number(process.env.DOLT_PORT ?? "3307"),
     temporalPort: Number(process.env.TEMPORAL_PORT ?? "7233"),
@@ -103,8 +109,39 @@ export interface DispatchResult {
   audit?: AuditResult;
 }
 
+// Formula step as parsed from bd mol show output
+interface MoleculeStep {
+  id: string;
+  title: string;
+  description: string;
+  labels: string[];
+  status?: string;
+}
+
+// Aggregate result for molecule dispatch
+export interface MoleculeDispatchResult {
+  molecule_id: string;
+  formula: string;
+  steps: Array<{
+    step_id: string;
+    bead_id: string;
+    mode: string;
+    card?: string;
+    session_id?: string;
+    status: "dispatched" | "skipped" | "failed" | "completed";
+    result?: string;
+    elapsed_seconds?: number;
+    error?: string;
+  }>;
+  total_steps: number;
+  dispatched_steps: number;
+  skipped_steps: number;
+  failed_steps: number;
+}
+
 export const ExitCode = {
   SUCCESS: 0,
+  GENERAL_ERROR: 1,
   USAGE_ERROR: 1,
   HEALTH_CHECK_FAILED: 2,
   SESSION_CREATION_FAILED: 3,
@@ -135,6 +172,8 @@ export { runPostSessionAudit } from "./punch-card-audit.js";
 export type { AuditResult } from "./punch-card-audit.js";
 
 export type Logger = (msg: string) => void;
+
+const execFileAsync = promisify(childProcess.execFile);
 
 function makeLogger(quiet: boolean): Logger {
   return (msg: string) => {
@@ -494,6 +533,333 @@ function logChildSessionIds(log: Logger, childIds: string[]): void {
   }
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function getStringField(data: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = data[key];
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function getArrayField(data: Record<string, unknown>, keys: string[]): unknown[] {
+  for (const key of keys) {
+    const value = data[key];
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+  return [];
+}
+
+function normalizeMoleculeSteps(raw: unknown): MoleculeStep[] {
+  const data = asRecord(raw);
+  const rawSteps = getArrayField(data, ["steps", "poured_steps", "pouredSteps"]);
+
+  return rawSteps
+    .map((item) => {
+      const step = asRecord(item);
+      const id = getStringField(step, ["bead_id", "beadId", "id"]);
+      if (!id) {
+        return null;
+      }
+
+      const title = getStringField(step, ["title", "name"]) ?? id;
+      const description = getStringField(step, ["description", "prompt", "body"]) ?? "";
+      const rawLabels = Array.isArray(step.labels) ? step.labels : [];
+      const labels = rawLabels.filter((label): label is string => typeof label === "string");
+      const status = getStringField(step, ["status"]);
+      return { id, title, description, labels, ...(status ? { status } : {}) };
+    })
+    .filter((step): step is MoleculeStep => step !== null);
+}
+
+function parseCookProtoId(raw: unknown): string | undefined {
+  const data = asRecord(raw);
+  const nestedProto = asRecord(data.proto);
+  return (
+    getStringField(data, ["id", "proto_id", "protoId"]) ??
+    getStringField(nestedProto, ["id", "proto_id", "protoId"])
+  );
+}
+
+function parseMoleculeId(raw: unknown): string | undefined {
+  const data = asRecord(raw);
+  const nestedMolecule = asRecord(data.molecule);
+  return (
+    getStringField(data, ["molecule_id", "moleculeId", "id", "new_epic_id"]) ??
+    getStringField(nestedMolecule, ["id", "molecule_id", "moleculeId"])
+  );
+}
+
+// Extract value from label like "mode:architect" → "architect"
+export function parseLabelValue(labels: string[], prefix: string): string | undefined {
+  const needle = `${prefix}:`;
+  for (const label of labels) {
+    if (label.startsWith(needle)) {
+      const value = label.slice(needle.length).trim();
+      return value.length > 0 ? value : undefined;
+    }
+  }
+  return undefined;
+}
+
+// Check if step has action:parent label
+export function isParentOnlyStep(labels: string[]): boolean {
+  return labels.includes("action:parent");
+}
+
+// Extract dispatch config overrides from step labels
+export function extractStepConfig(labels: string[]): { mode?: string; card?: string; isParent: boolean } {
+  return {
+    mode: parseLabelValue(labels, "mode"),
+    card: parseLabelValue(labels, "card"),
+    isParent: isParentOnlyStep(labels),
+  };
+}
+
+// Build bd cook command args
+export function buildCookCommand(formula: string, vars: string[]): string[] {
+  const args = ["cook", formula];
+  for (const variable of vars) {
+    args.push("--var", variable);
+  }
+  args.push("--json");
+  return args;
+}
+
+// Build bd mol pour command args
+export function buildPourCommand(protoId: string, vars: string[]): string[] {
+  const args = ["mol", "pour", protoId];
+  for (const variable of vars) {
+    args.push("--var", variable);
+  }
+  args.push("--json");
+  return args;
+}
+
+function buildShowCommand(moleculeId: string): string[] {
+  return ["mol", "show", moleculeId, "--json"];
+}
+
+// Execute a bd command and parse JSON output
+export async function execBd(args: string[]): Promise<unknown> {
+  const repoRoot = findRepoRoot();
+  const bdPath = `${repoRoot}/.kilocode/tools/bd`;
+
+  try {
+    const { stdout } = await execFileAsync(bdPath, args, {
+      cwd: repoRoot,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+
+    if (!stdout || stdout.trim().length === 0) {
+      throw new Error("bd command returned empty output");
+    }
+
+    return JSON.parse(stdout) as unknown;
+  } catch (e) {
+    const err = e as Error & { stderr?: string };
+    const stderr = err.stderr?.trim();
+    const detail = stderr && stderr.length > 0 ? `: ${stderr}` : "";
+    throw new Error(`bd ${args.join(" ")} failed${detail}`);
+  }
+}
+
+export interface DispatchDependencies {
+  execBdFn: (args: string[]) => Promise<unknown>;
+  runSingleDispatchFn: (
+    params: RunSingleDispatchParams,
+  ) => Promise<ExitCodeValue | MoleculeStepDispatchOutcome>;
+}
+
+export interface MoleculeStepDispatchOutcome {
+  code: ExitCodeValue;
+  session_id?: string;
+  result?: string;
+  elapsed_seconds?: number;
+}
+
+const defaultDispatchDependencies: DispatchDependencies = {
+  execBdFn: execBd,
+  runSingleDispatchFn: runSingleDispatch,
+};
+
+function isObjectLike(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+async function runMoleculeDispatch(
+  config: FactoryDispatchConfig,
+  baseUrl: string,
+  log: Logger,
+  fetchFn: typeof fetch,
+  deps: DispatchDependencies,
+): Promise<ExitCodeValue> {
+  let cookedOutput: unknown;
+  try {
+    log(`${timestamp()} Cooking formula: ${config.formula}`);
+    cookedOutput = await deps.execBdFn(buildCookCommand(config.formula, config.vars));
+  } catch (e) {
+    process.stderr.write(`ERROR: ${(e as Error).message}\n`);
+    return ExitCode.GENERAL_ERROR;
+  }
+
+  const protoId = parseCookProtoId(cookedOutput);
+  if (!protoId) {
+    process.stderr.write("ERROR: Failed to parse proto id from bd cook output\n");
+    return ExitCode.GENERAL_ERROR;
+  }
+
+  let pouredOutput: unknown;
+  try {
+    log(`${timestamp()} Pouring proto: ${protoId}`);
+    pouredOutput = await deps.execBdFn(buildPourCommand(protoId, config.vars));
+  } catch (e) {
+    process.stderr.write(`ERROR: ${(e as Error).message}\n`);
+    return ExitCode.GENERAL_ERROR;
+  }
+
+  const moleculeId = parseMoleculeId(pouredOutput);
+  if (!moleculeId) {
+    process.stderr.write("ERROR: Failed to parse molecule id from bd mol pour output\n");
+    return ExitCode.GENERAL_ERROR;
+  }
+
+  let showedOutput: unknown;
+  try {
+    showedOutput = await deps.execBdFn(buildShowCommand(moleculeId));
+  } catch (e) {
+    process.stderr.write(`ERROR: ${(e as Error).message}\n`);
+    return ExitCode.GENERAL_ERROR;
+  }
+
+  if (!isObjectLike(showedOutput)) {
+    process.stderr.write("ERROR: Failed to parse molecule steps from bd mol show output\n");
+    return ExitCode.GENERAL_ERROR;
+  }
+
+  const steps = normalizeMoleculeSteps(showedOutput);
+  const effectiveSteps = steps.length > 0 ? steps : normalizeMoleculeSteps(pouredOutput);
+  const result: MoleculeDispatchResult = {
+    molecule_id: moleculeId,
+    formula: config.formula,
+    steps: [],
+    total_steps: effectiveSteps.length,
+    dispatched_steps: 0,
+    skipped_steps: 0,
+    failed_steps: 0,
+  };
+
+  for (const step of effectiveSteps) {
+    const parsed = extractStepConfig(step.labels);
+    const mode = parsed.mode ?? config.mode;
+    const card = parsed.card ?? config.cardId;
+
+    if (parsed.isParent) {
+      log(`${timestamp()} Skipping parent-only step: ${step.id}`);
+      result.skipped_steps += 1;
+      result.steps.push({
+        step_id: step.id,
+        bead_id: step.id,
+        mode,
+        ...(card ? { card } : {}),
+        status: "skipped",
+      });
+      continue;
+    }
+
+    const stepConfig: FactoryDispatchConfig = {
+      ...config,
+      mode,
+      cardId: card ?? "",
+      beadId: step.id,
+      promptArg: step.description,
+      title: step.title,
+    };
+
+    try {
+      const dispatchOutcome = await deps.runSingleDispatchFn({
+        config: stepConfig,
+        baseUrl,
+        log,
+        fetchFn,
+      });
+      const code =
+        typeof dispatchOutcome === "number" ? dispatchOutcome : dispatchOutcome.code;
+      const stepDetails =
+        typeof dispatchOutcome === "number"
+          ? {}
+          : {
+              ...(dispatchOutcome.session_id ? { session_id: dispatchOutcome.session_id } : {}),
+              ...(dispatchOutcome.result ? { result: dispatchOutcome.result } : {}),
+              ...(typeof dispatchOutcome.elapsed_seconds === "number"
+                ? { elapsed_seconds: dispatchOutcome.elapsed_seconds }
+                : {}),
+            };
+
+      if (code === ExitCode.SUCCESS) {
+        result.dispatched_steps += 1;
+        result.steps.push({
+          step_id: step.id,
+          bead_id: step.id,
+          mode,
+          ...(card ? { card } : {}),
+          status: config.noMonitor ? "dispatched" : "completed",
+          ...stepDetails,
+        });
+      } else {
+        result.failed_steps += 1;
+        result.steps.push({
+          step_id: step.id,
+          bead_id: step.id,
+          mode,
+          ...(card ? { card } : {}),
+          status: "failed",
+          error: `dispatch exit code ${code}`,
+          ...stepDetails,
+        });
+        if (!config.noMonitor) {
+          log(`${timestamp()} Step failed: ${step.id} (exit=${code}); continuing`);
+        }
+      }
+    } catch (e) {
+      result.failed_steps += 1;
+      const message = (e as Error).message;
+      result.steps.push({
+        step_id: step.id,
+        bead_id: step.id,
+        mode,
+        ...(card ? { card } : {}),
+        status: "failed",
+        error: message,
+      });
+      if (!config.noMonitor) {
+        log(`${timestamp()} Step failed: ${step.id} (${message}); continuing`);
+      }
+    }
+  }
+
+  if (config.jsonOutput) {
+    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+  } else {
+    process.stdout.write(
+      `Molecule ${result.molecule_id}: total=${result.total_steps}, dispatched=${result.dispatched_steps}, skipped=${result.skipped_steps}, failed=${result.failed_steps}\n`,
+    );
+  }
+
+  const attemptedSteps = result.total_steps - result.skipped_steps;
+  if (attemptedSteps > 0 && result.failed_steps === attemptedSteps) {
+    return ExitCode.GENERAL_ERROR;
+  }
+  return ExitCode.SUCCESS;
+}
+
 function writeDispatchResultOutput(
   config: FactoryDispatchConfig,
   sessionId: string,
@@ -520,19 +886,19 @@ function writeDispatchResultOutput(
   process.stdout.write(result + "\n");
 }
 
-export async function runDispatch(
-  config: FactoryDispatchConfig,
-  fetchFn: typeof fetch = fetch,
-): Promise<ExitCodeValue> {
-  const log = makeLogger(config.quiet);
-  const baseUrl = `http://${config.host}:${config.port}`;
+export interface RunSingleDispatchParams {
+  config: FactoryDispatchConfig;
+  baseUrl: string;
+  log: Logger;
+  fetchFn?: typeof fetch;
+}
 
-  // Phase 1: Pre-flight
-  const pf = await preflight(config, log, fetchFn);
-  if (!pf.ok) {
-    return reportPreflightFailure(pf.components.filter((c) => !c.ok));
-  }
-
+export async function runSingleDispatch({
+  config,
+  baseUrl,
+  log,
+  fetchFn = fetch,
+}: RunSingleDispatchParams): Promise<ExitCodeValue> {
   // Phase 2: Build prompt payload
   const resolvedPayload = resolvePayload(config, log);
   if (typeof resolvedPayload === "number") {
@@ -541,7 +907,8 @@ export async function runDispatch(
   const payload = resolvedPayload;
 
   // Phase 3: Create session
-  const title = config.title || `factory: ${config.mode} @ ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
+  const title =
+    config.title || `factory: ${config.mode} @ ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
 
   const sessionId = await resolveSessionId(baseUrl, title, fetchFn);
   if (!sessionId) {
@@ -639,6 +1006,33 @@ export async function runDispatch(
   );
 
   return ExitCode.SUCCESS;
+}
+
+export async function runDispatch(
+  config: FactoryDispatchConfig,
+  fetchFn: typeof fetch = fetch,
+  deps: DispatchDependencies = defaultDispatchDependencies,
+): Promise<ExitCodeValue> {
+  const log = makeLogger(config.quiet);
+  const baseUrl = `http://${config.host}:${config.port}`;
+
+  // Phase 1: Pre-flight
+  const pf = await preflight(config, log, fetchFn);
+  if (!pf.ok) {
+    return reportPreflightFailure(pf.components.filter((c) => !c.ok));
+  }
+
+  if (config.formula) {
+    return runMoleculeDispatch(config, baseUrl, log, fetchFn, deps);
+  }
+
+  const singleOutcome = await deps.runSingleDispatchFn({
+    config,
+    baseUrl,
+    log,
+    fetchFn,
+  });
+  return typeof singleOutcome === "number" ? singleOutcome : singleOutcome.code;
 }
 
 export function writePromptFile(payload: PromptPayload, path: string): void {
