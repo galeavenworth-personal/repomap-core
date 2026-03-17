@@ -42,7 +42,11 @@ import {
   startHealthyStack,
   mockBdPipeline,
   captureStdout,
+  captureStderr,
+  mockSuccessDispatch,
   moleculeTestConfig,
+  withMoleculeTest,
+  withErrorMoleculeTest,
 } from "./helpers/factory-dispatch-helpers.js";
 import { writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -926,12 +930,6 @@ describe("FactoryDispatch", () => {
     });
 
     it("marks parent-only-only formulas as skipped with zero dispatches", async () => {
-      const stack = await startHealthyStack();
-      const config = moleculeTestConfig(stack, {
-        formula: "demo-formula",
-        mode: "code",
-        cardId: "default-card",
-      });
       const execBdFn = mockBdPipeline({
         protoId: "proto-123",
         moleculeId: "mol-123",
@@ -942,32 +940,24 @@ describe("FactoryDispatch", () => {
       });
       const runSingleDispatchFn = vi.fn();
 
-      const stdout = captureStdout();
+      await withMoleculeTest(
+        { formula: "demo-formula", mode: "code", cardId: "default-card" },
+        { execBdFn, runSingleDispatchFn },
+        ({ stdout }, code) => {
+          expect(code).toBe(ExitCode.SUCCESS);
+          expect(runSingleDispatchFn).not.toHaveBeenCalled();
 
-      try {
-        const code = await runDispatch(config, stack.mockFetch, {
-          execBdFn,
-          runSingleDispatchFn,
-        });
-
-        expect(code).toBe(ExitCode.SUCCESS);
-        expect(runSingleDispatchFn).not.toHaveBeenCalled();
-
-        const output = stdout.json();
-        expect(output.total_steps).toBe(2);
-        expect(output.dispatched_steps).toBe(0);
-        expect(output.skipped_steps).toBe(2);
-        expect(output.failed_steps).toBe(0);
-        expect(output.steps.every((step) => step.status === "skipped")).toBe(true);
-      } finally {
-        stdout.spy.mockRestore();
-        await stack.cleanup();
-      }
+          const output = stdout.json();
+          expect(output.total_steps).toBe(2);
+          expect(output.dispatched_steps).toBe(0);
+          expect(output.skipped_steps).toBe(2);
+          expect(output.failed_steps).toBe(0);
+          expect(output.steps.every((step) => step.status === "skipped")).toBe(true);
+        },
+      );
     });
 
     it("continues after step failure and returns GENERAL_ERROR for mixed outcomes", async () => {
-      const stack = await startHealthyStack();
-      const config = moleculeTestConfig(stack, { formula: "demo-formula" });
       const execBdFn = mockBdPipeline({
         protoId: "proto-123",
         moleculeId: "mol-123",
@@ -976,118 +966,74 @@ describe("FactoryDispatch", () => {
           { id: "bead-bad", title: "Bad", description: "two", labels: [] },
         ],
       });
-      const runSingleDispatchFn = vi
-        .fn()
+      const runSingleDispatchFn = vi.fn()
         .mockResolvedValueOnce({ code: ExitCode.SUCCESS, session_id: "sess-ok", result: "ok", elapsed_seconds: 1 })
         .mockResolvedValueOnce(ExitCode.PROMPT_DISPATCH_FAILED);
 
-      const stdout = captureStdout();
+      await withMoleculeTest(
+        { formula: "demo-formula" },
+        { execBdFn, runSingleDispatchFn },
+        ({ stdout }, code) => {
+          expect(code).toBe(ExitCode.GENERAL_ERROR);
 
-      try {
-        const code = await runDispatch(config, stack.mockFetch, {
-          execBdFn,
-          runSingleDispatchFn,
-        });
-
-        expect(code).toBe(ExitCode.GENERAL_ERROR);
-
-        const output = stdout.json();
-        expect(output.dispatched_steps).toBe(1);
-        expect(output.failed_steps).toBe(1);
-        expect(output.steps.find((step) => step.step_id === "bead-ok")?.status).toBe("completed");
-        expect(output.steps.find((step) => step.step_id === "bead-bad")?.status).toBe("failed");
-      } finally {
-        stdout.spy.mockRestore();
-        await stack.cleanup();
-      }
+          const output = stdout.json();
+          expect(output.dispatched_steps).toBe(1);
+          expect(output.failed_steps).toBe(1);
+          expect(output.steps.find((step) => step.step_id === "bead-ok")?.status).toBe("completed");
+          expect(output.steps.find((step) => step.step_id === "bead-bad")?.status).toBe("failed");
+        },
+      );
     });
 
     it("returns GENERAL_ERROR when bd cook fails", async () => {
-      const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "demo-formula",
-        promptArg: "",
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
-      });
       const execBdFn = vi.fn().mockRejectedValue(new Error("cook failed"));
       const runSingleDispatchFn = vi.fn();
-      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-      try {
-        const code = await runDispatch(config, stack.mockFetch, {
-          execBdFn,
-          runSingleDispatchFn,
-        });
-        expect(code).toBe(ExitCode.GENERAL_ERROR);
-        expect(runSingleDispatchFn).not.toHaveBeenCalled();
-      } finally {
-        stderrSpy.mockRestore();
-        await stack.cleanup();
-      }
+      await withErrorMoleculeTest(
+        { formula: "demo-formula" },
+        { execBdFn, runSingleDispatchFn },
+        (code) => {
+          expect(code).toBe(ExitCode.GENERAL_ERROR);
+          expect(runSingleDispatchFn).not.toHaveBeenCalled();
+        },
+      );
     });
 
     it("returns GENERAL_ERROR when bd mol pour fails", async () => {
-      const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "demo-formula",
-        promptArg: "",
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
-      });
-      const execBdFn = vi
-        .fn()
+      const execBdFn = vi.fn()
         .mockResolvedValueOnce({ id: "proto-123" })
         .mockRejectedValueOnce(new Error("pour failed"));
       const runSingleDispatchFn = vi.fn();
-      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-      try {
-        const code = await runDispatch(config, stack.mockFetch, {
-          execBdFn,
-          runSingleDispatchFn,
-        });
-        expect(code).toBe(ExitCode.GENERAL_ERROR);
-        expect(runSingleDispatchFn).not.toHaveBeenCalled();
-      } finally {
-        stderrSpy.mockRestore();
-        await stack.cleanup();
-      }
+      await withErrorMoleculeTest(
+        { formula: "demo-formula" },
+        { execBdFn, runSingleDispatchFn },
+        (code) => {
+          expect(code).toBe(ExitCode.GENERAL_ERROR);
+          expect(runSingleDispatchFn).not.toHaveBeenCalled();
+        },
+      );
     });
 
     it("returns GENERAL_ERROR when bd mol show output is malformed", async () => {
-      const stack = await startHealthyStack();
-      const config = makeTestConfig({
-        formula: "demo-formula",
-        promptArg: "",
-        doltPort: stack.doltPort,
-        temporalPort: stack.temporalPort,
-      });
-      const execBdFn = vi
-        .fn()
+      const execBdFn = vi.fn()
         .mockResolvedValueOnce({ id: "proto-123" })
         .mockResolvedValueOnce({ id: "proto-123" })
         .mockResolvedValueOnce({ molecule_id: "mol-123" })
         .mockResolvedValueOnce("not-json");
       const runSingleDispatchFn = vi.fn();
-      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-      try {
-        const code = await runDispatch(config, stack.mockFetch, {
-          execBdFn,
-          runSingleDispatchFn,
-        });
-        expect(code).toBe(ExitCode.GENERAL_ERROR);
-        expect(runSingleDispatchFn).not.toHaveBeenCalled();
-      } finally {
-        stderrSpy.mockRestore();
-        await stack.cleanup();
-      }
+      await withErrorMoleculeTest(
+        { formula: "demo-formula" },
+        { execBdFn, runSingleDispatchFn },
+        (code) => {
+          expect(code).toBe(ExitCode.GENERAL_ERROR);
+          expect(runSingleDispatchFn).not.toHaveBeenCalled();
+        },
+      );
     });
 
     it("returns GENERAL_ERROR when all dispatched molecule steps fail", async () => {
-      const stack = await startHealthyStack();
-      const config = moleculeTestConfig(stack, { formula: "demo-formula" });
       const execBdFn = mockBdPipeline({
         protoId: "proto-123",
         moleculeId: "mol-123",
@@ -1096,95 +1042,47 @@ describe("FactoryDispatch", () => {
           { id: "bead-2", title: "S2", description: "Prompt 2", labels: [] },
         ],
       });
-      const runSingleDispatchFn = vi
-        .fn()
+      const runSingleDispatchFn = vi.fn()
         .mockResolvedValueOnce(ExitCode.PROMPT_DISPATCH_FAILED)
         .mockResolvedValueOnce(ExitCode.TIMEOUT);
 
-      const stdout = captureStdout();
-      try {
-        const code = await runDispatch(config, stack.mockFetch, {
-          execBdFn,
-          runSingleDispatchFn,
-        });
-        expect(code).toBe(ExitCode.GENERAL_ERROR);
-      } finally {
-        stdout.spy.mockRestore();
-        await stack.cleanup();
-      }
+      await withMoleculeTest(
+        { formula: "demo-formula" },
+        { execBdFn, runSingleDispatchFn },
+        (_ctx, code) => {
+          expect(code).toBe(ExitCode.GENERAL_ERROR);
+        },
+      );
     });
 
     it("passes vars through cook/pour commands for empty and multi-var cases", async () => {
-      const stack = await startHealthyStack();
-      const execBdEmptyVars = mockBdPipeline({
-        protoId: "proto-empty",
-        moleculeId: "mol-empty",
-        steps: [],
-      });
+      const execBdEmptyVars = mockBdPipeline({ protoId: "proto-empty", moleculeId: "mol-empty", steps: [] });
       const runSingleDispatchFn = vi.fn();
 
-      const stdout = captureStdout();
-      try {
-        await runDispatch(
-          moleculeTestConfig(stack, { formula: "demo-formula", vars: [] }),
-          stack.mockFetch,
-          { execBdFn: execBdEmptyVars, runSingleDispatchFn },
-        );
-        expect(execBdEmptyVars).toHaveBeenNthCalledWith(1, ["cook", "demo-formula", "--json"]);
-        expect(execBdEmptyVars).toHaveBeenNthCalledWith(2, [
-          "cook",
-          "demo-formula",
-          "--persist",
-          "--force",
-          "--json",
-        ]);
-        expect(execBdEmptyVars).toHaveBeenNthCalledWith(3, ["mol", "pour", "proto-empty", "--json"]);
+      await withMoleculeTest(
+        { formula: "demo-formula", vars: [] },
+        { execBdFn: execBdEmptyVars, runSingleDispatchFn },
+        async ({ stack }) => {
+          expect(execBdEmptyVars).toHaveBeenNthCalledWith(1, ["cook", "demo-formula", "--json"]);
+          expect(execBdEmptyVars).toHaveBeenNthCalledWith(2, ["cook", "demo-formula", "--persist", "--force", "--json"]);
+          expect(execBdEmptyVars).toHaveBeenNthCalledWith(3, ["mol", "pour", "proto-empty", "--json"]);
 
-        const execBdWithVars = mockBdPipeline({
-          protoId: "proto-vars",
-          moleculeId: "mol-vars",
-          steps: [],
-        });
-
-        await runDispatch(
-          moleculeTestConfig(stack, { formula: "demo-formula", vars: ["foo=bar", "baz=qux"] }),
-          stack.mockFetch,
-          { execBdFn: execBdWithVars, runSingleDispatchFn },
-        );
-        expect(execBdWithVars).toHaveBeenNthCalledWith(1, [
-          "cook",
-          "demo-formula",
-          "--var",
-          "foo=bar",
-          "--var",
-          "baz=qux",
-          "--json",
-        ]);
-        expect(execBdWithVars).toHaveBeenNthCalledWith(2, [
-          "cook",
-          "demo-formula",
-          "--persist",
-          "--force",
-          "--var",
-          "foo=bar",
-          "--var",
-          "baz=qux",
-          "--json",
-        ]);
-        expect(execBdWithVars).toHaveBeenNthCalledWith(3, [
-          "mol",
-          "pour",
-          "proto-vars",
-          "--var",
-          "foo=bar",
-          "--var",
-          "baz=qux",
-          "--json",
-        ]);
-      } finally {
-        stdout.spy.mockRestore();
-        await stack.cleanup();
-      }
+          const execBdWithVars = mockBdPipeline({ protoId: "proto-vars", moleculeId: "mol-vars", steps: [] });
+          const stdout2 = captureStdout();
+          try {
+            await runDispatch(
+              moleculeTestConfig(stack, { formula: "demo-formula", vars: ["foo=bar", "baz=qux"] }),
+              stack.mockFetch,
+              { execBdFn: execBdWithVars, runSingleDispatchFn },
+            );
+            expect(execBdWithVars).toHaveBeenNthCalledWith(1, ["cook", "demo-formula", "--var", "foo=bar", "--var", "baz=qux", "--json"]);
+            expect(execBdWithVars).toHaveBeenNthCalledWith(2, ["cook", "demo-formula", "--persist", "--force", "--var", "foo=bar", "--var", "baz=qux", "--json"]);
+            expect(execBdWithVars).toHaveBeenNthCalledWith(3, ["mol", "pour", "proto-vars", "--var", "foo=bar", "--var", "baz=qux", "--json"]);
+          } finally {
+            stdout2.spy.mockRestore();
+          }
+        },
+      );
     });
   });
 

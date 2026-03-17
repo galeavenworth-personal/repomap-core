@@ -10,7 +10,9 @@ import type { Mock } from "vitest";
 import {
   type FactoryDispatchConfig,
   type MoleculeDispatchResult,
+  type DispatchDependencies,
   defaultConfig,
+  runDispatch,
   ExitCode,
 } from "../../src/infra/factory-dispatch.js";
 import * as pm2Client from "../../src/infra/pm2-client.js";
@@ -154,6 +156,34 @@ export function captureStdout(): StdoutCapture {
   };
 }
 
+// ── Stderr capture ──────────────────────────────────────────────────────
+
+export interface StderrCapture {
+  spy: ReturnType<typeof vi.spyOn>;
+}
+
+export function captureStderr(): StderrCapture {
+  const spy = vi
+    .spyOn(process.stderr, "write")
+    .mockImplementation(() => true);
+  return { spy };
+}
+
+// ── Single success dispatch mock ────────────────────────────────────────
+
+export function mockSuccessDispatch(
+  sessionId = "sess-test",
+  result = "done",
+  elapsed = 1,
+): Mock {
+  return vi.fn().mockResolvedValue({
+    code: ExitCode.SUCCESS,
+    session_id: sessionId,
+    result,
+    elapsed_seconds: elapsed,
+  });
+}
+
 // ── Molecule test config shorthand ───────────────────────────────────────
 
 export function moleculeTestConfig(
@@ -168,4 +198,59 @@ export function moleculeTestConfig(
     temporalPort: stack.temporalPort,
     ...overrides,
   });
+}
+
+// ── Molecule test scaffold ──────────────────────────────────────────────
+
+export interface MoleculeTestContext {
+  stack: TestStack;
+  config: FactoryDispatchConfig;
+  stdout: StdoutCapture;
+}
+
+/**
+ * Runs a molecule dispatch test with full scaffold: stack → config → stdout → cleanup.
+ * Eliminates the repeated try/finally pattern across molecule tests.
+ */
+export async function withMoleculeTest(
+  configOverrides: Partial<FactoryDispatchConfig>,
+  deps: Partial<DispatchDependencies>,
+  body: (ctx: MoleculeTestContext, code: number) => void | Promise<void>,
+): Promise<void> {
+  const stack = await startHealthyStack();
+  const config = moleculeTestConfig(stack, configOverrides);
+  const stdout = captureStdout();
+  try {
+    const code = await runDispatch(config, stack.mockFetch, {
+      execBdFn: deps.execBdFn ?? vi.fn(),
+      runSingleDispatchFn: deps.runSingleDispatchFn ?? vi.fn(),
+    });
+    await body({ stack, config, stdout }, code);
+  } finally {
+    stdout.spy.mockRestore();
+    await stack.cleanup();
+  }
+}
+
+/**
+ * Runs an error-path molecule dispatch test with stderr capture + cleanup.
+ */
+export async function withErrorMoleculeTest(
+  configOverrides: Partial<FactoryDispatchConfig>,
+  deps: Partial<DispatchDependencies>,
+  body: (code: number) => void | Promise<void>,
+): Promise<void> {
+  const stack = await startHealthyStack();
+  const config = moleculeTestConfig(stack, configOverrides);
+  const stderr = captureStderr();
+  try {
+    const code = await runDispatch(config, stack.mockFetch, {
+      execBdFn: deps.execBdFn ?? vi.fn(),
+      runSingleDispatchFn: deps.runSingleDispatchFn ?? vi.fn(),
+    });
+    await body(code);
+  } finally {
+    stderr.spy.mockRestore();
+    await stack.cleanup();
+  }
 }
