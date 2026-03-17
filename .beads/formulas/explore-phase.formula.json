@@ -1,0 +1,41 @@
+{
+  "formula": "explore_phase",
+  "type": "workflow",
+  "description": "Architect child: semantic understanding, structural analysis, library doc verification, interface appendix, return exploration summary",
+  "steps": [
+    {
+      "id": "semantic-understanding",
+      "title": "Semantic understanding",
+      "labels": ["mode:architect", "card:explore-phase", "phase:1", "tool:codebase-retrieval", "gate:hard"],
+      "description": "Query codebase-retrieval for component interactions, call chains, data flows, test coverage, and downstream consumers relevant to {{task_id}}. Hard gate: must call codebase-retrieval at least once."
+    },
+    {
+      "id": "structural-analysis",
+      "title": "Structural analysis",
+      "depends_on": ["semantic-understanding"],
+      "labels": ["mode:architect", "card:explore-phase", "phase:2", "tool:read-file"],
+      "description": "Read implementation details of key files (up to 5) and search for all references to components that will be modified for {{task_id}}."
+    },
+    {
+      "id": "library-docs",
+      "title": "Library documentation verification",
+      "depends_on": ["structural-analysis"],
+      "labels": ["mode:architect", "card:explore-phase", "phase:3", "tool:context7"],
+      "description": "If external dependencies are involved in {{task_id}}, resolve library IDs and query docs via Context7 to verify API assumptions. Skip if purely internal."
+    },
+    {
+      "id": "interface-appendix",
+      "title": "Produce interface appendix",
+      "depends_on": ["library-docs"],
+      "labels": ["mode:architect", "card:explore-phase", "phase:4", "output:interface-appendix"],
+      "description": "Produce Interface Appendix for {{task_id}}: catalog every cross-boundary identifier (SDK methods, columns, API params, event names) with exact value, source, and citation. Omit only if purely internal with no external interfaces."
+    },
+    {
+      "id": "structured-output",
+      "title": "Return exploration summary",
+      "depends_on": ["interface-appendix"],
+      "labels": ["mode:architect", "card:explore-phase", "phase:5", "output:exploration-summary"],
+      "description": "Return structured exploration summary for {{task_id}}: architecture map, code patterns, test coverage, impact analysis, constraints, interface appendix, runtime attestation."
+    }
+  ]
+}

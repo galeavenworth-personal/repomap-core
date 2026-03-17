@@ -1,0 +1,34 @@
+{
+  "formula": "decompose_epic",
+  "type": "workflow",
+  "description": "Decompose an epic into implementable child beads: discover scope, explore codebase, prepare subtask plan, mint beads",
+  "steps": [
+    {
+      "id": "discover",
+      "title": "Discover epic scope",
+      "labels": ["mode:architect", "card:discover-phase", "phase:1"],
+      "description": "Dispatch architect child to understand the full scope of epic {{epic_id}}: read beads, gather strategic context, identify acceptance criteria, existing children, dependency context, and related architecture documents"
+    },
+    {
+      "id": "explore",
+      "title": "Explore codebase",
+      "depends_on": ["discover"],
+      "labels": ["mode:architect", "card:explore-phase", "phase:2"],
+      "description": "Dispatch architect child to perform deep structural and semantic analysis of the implementation surface for epic {{epic_id}}: map relevant code architecture, existing patterns, test infrastructure, files to create or modify, and risk assessment"
+    },
+    {
+      "id": "prepare",
+      "title": "Prepare subtask plan",
+      "depends_on": ["explore"],
+      "labels": ["mode:architect", "card:prepare-phase", "phase:3"],
+      "description": "Dispatch architect child to design the subtask decomposition for epic {{epic_id}} via sequential thinking: output an ordered subtask list where each subtask has title, type, priority, description, files, verification, and sibling dependencies"
+    },
+    {
+      "id": "mint-beads",
+      "title": "Mint child beads",
+      "depends_on": ["prepare"],
+      "labels": ["action:parent", "card:decompose-epic", "phase:4"],
+      "description": "Parent mints child beads from prepare output: bd create --parent {{epic_id}} for each subtask, wire sibling dependencies with bd dep add, verify graph with bd show {{epic_id}}, export with bd export"
+    }
+  ]
+}

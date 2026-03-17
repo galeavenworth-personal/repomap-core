@@ -23,37 +23,37 @@ import {
   monitorSession,
   createSession,
   dispatchPrompt,
+  runDispatch,
+  runSingleDispatch,
+  parseLabelValue,
+  isParentOnlyStep,
+  extractStepConfig,
+  buildCookCommand,
+  buildPourCommand,
   ExitCode,
   checkPort,
   isPm2AppOnline,
 } from "../src/infra/factory-dispatch.js";
+import { parseArgs } from "../src/infra/factory-dispatch.cli.ts";
 import * as pm2Client from "../src/infra/pm2-client.js";
+import {
+  makeTestConfig,
+  mockFetchResponse,
+  startHealthyStack,
+  mockBdPipeline,
+  captureStdout,
+  captureStderr,
+  mockSuccessDispatch,
+  moleculeTestConfig,
+  withMoleculeTest,
+  withErrorMoleculeTest,
+} from "./helpers/factory-dispatch-helpers.js";
 import { writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 
 type FetchInput = string | URL | Request;
-
-// ── Helpers ──────────────────────────────────────────────────────────────
-
-function makeTestConfig(overrides: Partial<FactoryDispatchConfig> = {}): FactoryDispatchConfig {
-  return {
-    ...defaultConfig(),
-    quiet: true,
-    pollInterval: 0.01, // fast polling for tests
-    maxWait: 1,
-    idleConfirm: 1,
-    ...overrides,
-  };
-}
-
-function mockFetchResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
 
 // ── Tests ────────────────────────────────────────────────────────────────
 
@@ -69,8 +69,126 @@ describe("FactoryDispatch", () => {
       expect(config.quiet).toBe(false);
       expect(config.noMonitor).toBe(false);
       expect(config.jsonOutput).toBe(false);
+      expect(config.formula).toBe("");
+      expect(config.vars).toEqual([]);
       expect(config.idleConfirm).toBeGreaterThan(0);
       expect(config.cardId).toBe("");
+    });
+  });
+
+  describe("parseArgs", () => {
+    it("sets formula from --formula", () => {
+      const config = parseArgs(["node", "script", "--formula", "my-formula"]);
+      expect(config.formula).toBe("my-formula");
+    });
+
+    it("accumulates repeated --var values", () => {
+      const config = parseArgs([
+        "node",
+        "script",
+        "--formula",
+        "my-formula",
+        "--var",
+        "foo=bar",
+        "--var",
+        "baz=qux",
+      ]);
+      expect(config.vars).toEqual(["foo=bar", "baz=qux"]);
+    });
+
+    it("does not error when formula is provided without positional prompt", () => {
+      const config = parseArgs(["node", "script", "--formula", "my-formula"]);
+      expect(config.formula).toBe("my-formula");
+      expect(config.promptArg).toBe("");
+    });
+
+    it("still errors when neither formula nor positional prompt is provided", () => {
+      const exitSpy = vi
+        .spyOn(process, "exit")
+        .mockImplementation(((code?: number | string | null) => {
+          throw new Error(`process.exit:${code ?? ""}`);
+        }) as never);
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      expect(() => parseArgs(["node", "script"]))
+        .toThrowError("process.exit:1");
+      expect(errorSpy).toHaveBeenCalledWith("ERROR: No prompt or formula provided. Use --help for usage.");
+
+      exitSpy.mockRestore();
+      errorSpy.mockRestore();
+    });
+
+    it("keeps legacy positional-prompt behavior and existing flags", () => {
+      const config = parseArgs([
+        "node",
+        "script",
+        "--mode",
+        "code",
+        "--wait",
+        "30",
+        "--poll",
+        "3",
+        "hello world",
+      ]);
+      expect(config.mode).toBe("code");
+      expect(config.maxWait).toBe(30);
+      expect(config.pollInterval).toBe(3);
+      expect(config.promptArg).toBe("hello world");
+      expect(config.formula).toBe("");
+      expect(config.vars).toEqual([]);
+    });
+
+    it("parses all legacy flags together", () => {
+      const config = parseArgs([
+        "node",
+        "script",
+        "--mode",
+        "code",
+        "--title",
+        "Legacy title",
+        "--card",
+        "execute-subtask",
+        "--bead-id",
+        "repomap-core-123",
+        "--quiet",
+        "--json",
+        "--no-monitor",
+        "--wait",
+        "45",
+        "--poll",
+        "2",
+        "legacy prompt",
+      ]);
+
+      expect(config.mode).toBe("code");
+      expect(config.title).toBe("Legacy title");
+      expect(config.cardId).toBe("execute-subtask");
+      expect(config.beadId).toBe("repomap-core-123");
+      expect(config.quiet).toBe(true);
+      expect(config.jsonOutput).toBe(true);
+      expect(config.noMonitor).toBe(true);
+      expect(config.maxWait).toBe(45);
+      expect(config.pollInterval).toBe(2);
+      expect(config.promptArg).toBe("legacy prompt");
+      expect(config.formula).toBe("");
+    });
+
+    it("accepts prompt without formula for legacy dispatch", () => {
+      const config = parseArgs(["node", "script", "prompt only"]);
+      expect(config.promptArg).toBe("prompt only");
+      expect(config.formula).toBe("");
+    });
+
+    it("accepts both formula and prompt, preserving both values", () => {
+      const config = parseArgs([
+        "node",
+        "script",
+        "--formula",
+        "my-formula",
+        "fallback prompt",
+      ]);
+      expect(config.formula).toBe("my-formula");
+      expect(config.promptArg).toBe("fallback prompt");
     });
   });
 
@@ -567,9 +685,448 @@ describe("FactoryDispatch", () => {
     });
   });
 
+  describe("runSingleDispatch", () => {
+    it("runs single-session lifecycle with mocked fetch dependencies", async () => {
+      const config = makeTestConfig({
+        promptArg: "Run diagnostic",
+        noMonitor: true,
+        host: "127.0.0.1",
+        doltPort: 1,
+      });
+      const log = vi.fn();
+
+      const mockFetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.endsWith("/session") && init?.method === "POST") {
+          return mockFetchResponse({ id: "sess-single-1" });
+        }
+        if (url.includes("/prompt_async") && init?.method === "POST") {
+          return new Response("", { status: 202 });
+        }
+        return new Response("Not found", { status: 404 });
+      });
+
+      const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        const code = await runSingleDispatch({
+          config,
+          baseUrl: "http://localhost:4096",
+          log,
+          fetchFn: mockFetch,
+        });
+
+        expect(code).toBe(ExitCode.SUCCESS);
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        const [, dispatchInit] = mockFetch.mock.calls[1] as [FetchInput, RequestInit];
+        const payload = JSON.parse((dispatchInit.body as string) || "{}") as PromptPayload;
+        expect(payload.parts[0].text).toContain("SESSION_ID: sess-single-1");
+      } finally {
+        stdoutSpy.mockRestore();
+      }
+    });
+
+    it("keeps legacy DispatchResult JSON shape for monitored single dispatch", async () => {
+      const config = makeTestConfig({
+        promptArg: "Run diagnostic",
+        noMonitor: false,
+        jsonOutput: true,
+        mode: "code",
+        cardId: "",
+      });
+      const log = vi.fn();
+
+      const mockFetch = vi.fn(async (input: FetchInput, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.endsWith("/session") && init?.method === "POST") {
+          return mockFetchResponse({ id: "sess-single-2" });
+        }
+        if (url.includes("/prompt_async") && init?.method === "POST") {
+          return new Response("", { status: 202 });
+        }
+        if (url.includes("/children")) {
+          return mockFetchResponse([]);
+        }
+        if (url.includes("/message")) {
+          return mockFetchResponse([
+            {
+              info: { role: "assistant" },
+              parts: [
+                { type: "step-finish", reason: "end_turn" },
+                { type: "text", text: "Legacy output" },
+              ],
+            },
+          ]);
+        }
+        return new Response("Not found", { status: 404 });
+      });
+
+      const stdoutChunks: string[] = [];
+      const stdoutSpy = vi
+        .spyOn(process.stdout, "write")
+        .mockImplementation((chunk: string | Uint8Array) => {
+          stdoutChunks.push(String(chunk));
+          return true;
+        });
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      try {
+        const code = await runSingleDispatch({
+          config,
+          baseUrl: "http://localhost:4096",
+          log,
+          fetchFn: mockFetch,
+        });
+
+        expect(code).toBe(ExitCode.SUCCESS);
+        const output = JSON.parse(stdoutChunks.join("")) as Record<string, unknown>;
+        expect(output).toMatchObject({
+          session_id: "sess-single-2",
+          mode: "code",
+          title: expect.any(String),
+          children: 0,
+          elapsed_seconds: expect.any(Number),
+          result: "Legacy output",
+          child_session_ids: [],
+        });
+        expect(output).toHaveProperty("session_id");
+        expect(output).toHaveProperty("mode");
+        expect(output).toHaveProperty("title");
+        expect(output).toHaveProperty("children");
+        expect(output).toHaveProperty("elapsed_seconds");
+        expect(output).toHaveProperty("result");
+        expect(output).toHaveProperty("child_session_ids");
+      } finally {
+        stdoutSpy.mockRestore();
+        stderrSpy.mockRestore();
+      }
+    });
+  });
+
+  describe("runDispatch", () => {
+    it("uses single-dispatch path when formula is empty", async () => {
+      const stack = await startHealthyStack();
+      const config = makeTestConfig({
+        promptArg: "legacy prompt",
+        mode: "code",
+        formula: "",
+        doltPort: stack.doltPort,
+        temporalPort: stack.temporalPort,
+      });
+      const execBdFn = vi.fn();
+      const runSingleDispatchFn = vi.fn().mockResolvedValue(ExitCode.SUCCESS);
+
+      try {
+        const code = await runDispatch(config, stack.mockFetch, {
+          execBdFn,
+          runSingleDispatchFn,
+        });
+
+        expect(code).toBe(ExitCode.SUCCESS);
+        expect(execBdFn).not.toHaveBeenCalled();
+        expect(runSingleDispatchFn).toHaveBeenCalledTimes(1);
+
+        const [call] = runSingleDispatchFn.mock.calls[0] as Array<[{ config: FactoryDispatchConfig; baseUrl: string }]>;
+        expect(call.config.promptArg).toBe("legacy prompt");
+        expect(call.baseUrl).toBe(`http://${config.host}:${config.port}`);
+      } finally {
+        await stack.cleanup();
+      }
+    });
+
+    it("takes formula branch, supports label overrides, and writes molecule JSON summary", async () => {
+      const stack = await startHealthyStack();
+      const config = moleculeTestConfig(stack, {
+        formula: "demo-formula",
+        promptArg: "legacy prompt should be ignored",
+        mode: "code",
+        cardId: "default-card",
+      });
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-123",
+        moleculeId: "mol-123",
+        steps: [
+          { id: "bead-1", title: "Step one", description: "First prompt", labels: ["mode:architect", "card:execute-subtask", "phase:1"] },
+          { id: "bead-parent", title: "Parent only", description: "Parent work", labels: ["action:parent", "phase:2"] },
+          { id: "bead-2", title: "Step two", description: "Second prompt", labels: ["phase:3"] },
+        ],
+      });
+
+      const runSingleDispatchFn = vi
+        .fn()
+        .mockResolvedValueOnce({
+          code: ExitCode.SUCCESS,
+          session_id: "sess-1",
+          result: "first done",
+          elapsed_seconds: 3,
+        })
+        .mockResolvedValueOnce({
+          code: ExitCode.SUCCESS,
+          session_id: "sess-2",
+          result: "second done",
+          elapsed_seconds: 5,
+        });
+
+      const stdout = captureStdout();
+
+      try {
+        const code = await runDispatch(config, stack.mockFetch, {
+          execBdFn,
+          runSingleDispatchFn,
+        });
+
+        expect(code).toBe(ExitCode.SUCCESS);
+        expect(execBdFn).toHaveBeenNthCalledWith(1, ["cook", "demo-formula", "--json"]);
+        expect(execBdFn).toHaveBeenNthCalledWith(2, [
+          "cook",
+          "demo-formula",
+          "--persist",
+          "--force",
+          "--json",
+        ]);
+        expect(execBdFn).toHaveBeenNthCalledWith(3, ["mol", "pour", "proto-123", "--json"]);
+        expect(execBdFn).toHaveBeenNthCalledWith(4, ["mol", "show", "mol-123", "--json"]);
+        expect(runSingleDispatchFn).toHaveBeenCalledTimes(2);
+
+        const [firstCall] = runSingleDispatchFn.mock.calls[0] as Array<{
+          config: FactoryDispatchConfig;
+          suppressOutput?: boolean;
+        }>;
+        expect(firstCall.config.mode).toBe("architect");
+        expect(firstCall.config.cardId).toBe("execute-subtask");
+        expect(firstCall.config.promptArg).toBe("First prompt");
+        expect(firstCall.suppressOutput).toBe(true);
+
+        const [secondCall] = runSingleDispatchFn.mock.calls[1] as Array<{
+          config: FactoryDispatchConfig;
+          suppressOutput?: boolean;
+        }>;
+        expect(secondCall.config.mode).toBe("code");
+        expect(secondCall.config.cardId).toBe("default-card");
+        expect(secondCall.config.promptArg).toBe("Second prompt");
+        expect(secondCall.suppressOutput).toBe(true);
+
+        const output = stdout.json();
+
+        expect(output.total_steps).toBe(3);
+        expect(output.dispatched_steps).toBe(2);
+        expect(output.skipped_steps).toBe(1);
+        expect(output.failed_steps).toBe(0);
+
+        const dispatched = output.steps.find((step) => step.step_id === "bead-1");
+        expect(dispatched).toMatchObject({
+          step_id: "bead-1",
+          bead_id: "bead-1",
+          mode: "architect",
+          card: "execute-subtask",
+          status: "completed",
+          session_id: "sess-1",
+          result: "first done",
+          elapsed_seconds: 3,
+        });
+      } finally {
+        stdout.spy.mockRestore();
+        await stack.cleanup();
+      }
+    });
+
+    it("marks parent-only-only formulas as skipped with zero dispatches", async () => {
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-123",
+        moleculeId: "mol-123",
+        steps: [
+          { id: "bead-parent-1", title: "Parent one", description: "P1", labels: ["action:parent"] },
+          { id: "bead-parent-2", title: "Parent two", description: "P2", labels: ["action:parent", "card:decompose-epic"] },
+        ],
+      });
+      const runSingleDispatchFn = vi.fn();
+
+      await withMoleculeTest(
+        { formula: "demo-formula", mode: "code", cardId: "default-card" },
+        { execBdFn, runSingleDispatchFn },
+        ({ stdout }, code) => {
+          expect(code).toBe(ExitCode.SUCCESS);
+          expect(runSingleDispatchFn).not.toHaveBeenCalled();
+
+          const output = stdout.json();
+          expect(output.total_steps).toBe(2);
+          expect(output.dispatched_steps).toBe(0);
+          expect(output.skipped_steps).toBe(2);
+          expect(output.failed_steps).toBe(0);
+          expect(output.steps.every((step) => step.status === "skipped")).toBe(true);
+        },
+      );
+    });
+
+    it("continues after step failure and returns GENERAL_ERROR for mixed outcomes", async () => {
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-123",
+        moleculeId: "mol-123",
+        steps: [
+          { id: "bead-ok", title: "Ok", description: "one", labels: [] },
+          { id: "bead-bad", title: "Bad", description: "two", labels: [] },
+        ],
+      });
+      const runSingleDispatchFn = vi.fn()
+        .mockResolvedValueOnce({ code: ExitCode.SUCCESS, session_id: "sess-ok", result: "ok", elapsed_seconds: 1 })
+        .mockResolvedValueOnce(ExitCode.PROMPT_DISPATCH_FAILED);
+
+      await withMoleculeTest(
+        { formula: "demo-formula" },
+        { execBdFn, runSingleDispatchFn },
+        ({ stdout }, code) => {
+          expect(code).toBe(ExitCode.GENERAL_ERROR);
+
+          const output = stdout.json();
+          expect(output.dispatched_steps).toBe(1);
+          expect(output.failed_steps).toBe(1);
+          expect(output.steps.find((step) => step.step_id === "bead-ok")?.status).toBe("completed");
+          expect(output.steps.find((step) => step.step_id === "bead-bad")?.status).toBe("failed");
+        },
+      );
+    });
+
+    it("returns GENERAL_ERROR when bd cook fails", async () => {
+      const execBdFn = vi.fn().mockRejectedValue(new Error("cook failed"));
+      const runSingleDispatchFn = vi.fn();
+
+      await withErrorMoleculeTest(
+        { formula: "demo-formula" },
+        { execBdFn, runSingleDispatchFn },
+        (code) => {
+          expect(code).toBe(ExitCode.GENERAL_ERROR);
+          expect(runSingleDispatchFn).not.toHaveBeenCalled();
+        },
+      );
+    });
+
+    it("returns GENERAL_ERROR when bd mol pour fails", async () => {
+      const execBdFn = vi.fn()
+        .mockResolvedValueOnce({ id: "proto-123" })
+        .mockRejectedValueOnce(new Error("pour failed"));
+      const runSingleDispatchFn = vi.fn();
+
+      await withErrorMoleculeTest(
+        { formula: "demo-formula" },
+        { execBdFn, runSingleDispatchFn },
+        (code) => {
+          expect(code).toBe(ExitCode.GENERAL_ERROR);
+          expect(runSingleDispatchFn).not.toHaveBeenCalled();
+        },
+      );
+    });
+
+    it("returns GENERAL_ERROR when bd mol show output is malformed", async () => {
+      const execBdFn = vi.fn()
+        .mockResolvedValueOnce({ id: "proto-123" })
+        .mockResolvedValueOnce({ id: "proto-123" })
+        .mockResolvedValueOnce({ molecule_id: "mol-123" })
+        .mockResolvedValueOnce("not-json");
+      const runSingleDispatchFn = vi.fn();
+
+      await withErrorMoleculeTest(
+        { formula: "demo-formula" },
+        { execBdFn, runSingleDispatchFn },
+        (code) => {
+          expect(code).toBe(ExitCode.GENERAL_ERROR);
+          expect(runSingleDispatchFn).not.toHaveBeenCalled();
+        },
+      );
+    });
+
+    it("returns GENERAL_ERROR when all dispatched molecule steps fail", async () => {
+      const execBdFn = mockBdPipeline({
+        protoId: "proto-123",
+        moleculeId: "mol-123",
+        steps: [
+          { id: "bead-1", title: "S1", description: "Prompt 1", labels: [] },
+          { id: "bead-2", title: "S2", description: "Prompt 2", labels: [] },
+        ],
+      });
+      const runSingleDispatchFn = vi.fn()
+        .mockResolvedValueOnce(ExitCode.PROMPT_DISPATCH_FAILED)
+        .mockResolvedValueOnce(ExitCode.TIMEOUT);
+
+      await withMoleculeTest(
+        { formula: "demo-formula" },
+        { execBdFn, runSingleDispatchFn },
+        (_ctx, code) => {
+          expect(code).toBe(ExitCode.GENERAL_ERROR);
+        },
+      );
+    });
+
+    it("passes vars through cook/pour commands for empty and multi-var cases", async () => {
+      const execBdEmptyVars = mockBdPipeline({ protoId: "proto-empty", moleculeId: "mol-empty", steps: [] });
+      const runSingleDispatchFn = vi.fn();
+
+      await withMoleculeTest(
+        { formula: "demo-formula", vars: [] },
+        { execBdFn: execBdEmptyVars, runSingleDispatchFn },
+        async ({ stack }) => {
+          expect(execBdEmptyVars).toHaveBeenNthCalledWith(1, ["cook", "demo-formula", "--json"]);
+          expect(execBdEmptyVars).toHaveBeenNthCalledWith(2, ["cook", "demo-formula", "--persist", "--force", "--json"]);
+          expect(execBdEmptyVars).toHaveBeenNthCalledWith(3, ["mol", "pour", "proto-empty", "--json"]);
+
+          const execBdWithVars = mockBdPipeline({ protoId: "proto-vars", moleculeId: "mol-vars", steps: [] });
+          const stdout2 = captureStdout();
+          try {
+            await runDispatch(
+              moleculeTestConfig(stack, { formula: "demo-formula", vars: ["foo=bar", "baz=qux"] }),
+              stack.mockFetch,
+              { execBdFn: execBdWithVars, runSingleDispatchFn },
+            );
+            expect(execBdWithVars).toHaveBeenNthCalledWith(1, ["cook", "demo-formula", "--var", "foo=bar", "--var", "baz=qux", "--json"]);
+            expect(execBdWithVars).toHaveBeenNthCalledWith(2, ["cook", "demo-formula", "--persist", "--force", "--var", "foo=bar", "--var", "baz=qux", "--json"]);
+            expect(execBdWithVars).toHaveBeenNthCalledWith(3, ["mol", "pour", "proto-vars", "--var", "foo=bar", "--var", "baz=qux", "--json"]);
+          } finally {
+            stdout2.spy.mockRestore();
+          }
+        },
+      );
+    });
+  });
+
+  describe("molecule helpers", () => {
+    it("parseLabelValue extracts prefixed values", () => {
+      const labels = ["mode:architect", "card:explore-phase", "phase:1"];
+      expect(parseLabelValue(labels, "mode")).toBe("architect");
+      expect(parseLabelValue(labels, "card")).toBe("explore-phase");
+      expect(parseLabelValue(labels, "missing")).toBeUndefined();
+    });
+
+    it("isParentOnlyStep recognizes action:parent", () => {
+      expect(isParentOnlyStep(["action:parent", "phase:1"])).toBe(true);
+      expect(isParentOnlyStep(["mode:architect"])).toBe(false);
+    });
+
+    it("extractStepConfig parses mode/card/parent flags", () => {
+      expect(extractStepConfig(["mode:architect", "card:discover-phase", "action:parent"]))
+        .toEqual({ mode: "architect", card: "discover-phase", isParent: true });
+      expect(extractStepConfig(["phase:1"]))
+        .toEqual({ mode: undefined, card: undefined, isParent: false });
+    });
+
+    it("buildCookCommand builds args with vars and json", () => {
+      expect(buildCookCommand("demo-formula", ["foo=bar", "baz=qux"]))
+        .toEqual(["cook", "demo-formula", "--var", "foo=bar", "--var", "baz=qux", "--json"]);
+      expect(buildCookCommand("demo-formula", ["foo=bar"], true))
+        .toEqual(["cook", "demo-formula", "--persist", "--force", "--var", "foo=bar", "--json"]);
+      expect(buildCookCommand("demo-formula", []))
+        .toEqual(["cook", "demo-formula", "--json"]);
+    });
+
+    it("buildPourCommand builds args with vars and json", () => {
+      expect(buildPourCommand("proto-123", ["foo=bar"]))
+        .toEqual(["mol", "pour", "proto-123", "--var", "foo=bar", "--json"]);
+      expect(buildPourCommand("proto-123", []))
+        .toEqual(["mol", "pour", "proto-123", "--json"]);
+    });
+  });
+
   describe("ExitCode", () => {
     it("has the correct values matching the shell script", () => {
       expect(ExitCode.SUCCESS).toBe(0);
+      expect(ExitCode.GENERAL_ERROR).toBe(1);
       expect(ExitCode.USAGE_ERROR).toBe(1);
       expect(ExitCode.HEALTH_CHECK_FAILED).toBe(2);
       expect(ExitCode.SESSION_CREATION_FAILED).toBe(3);

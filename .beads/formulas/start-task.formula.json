@@ -1,0 +1,27 @@
+{
+  "formula": "start_task",
+  "type": "workflow",
+  "description": "Start task preparation: discover scope, explore codebase, prepare implementation plan",
+  "steps": [
+    {
+      "id": "discover",
+      "title": "Discover scope",
+      "labels": ["mode:architect", "card:discover-phase", "phase:1"],
+      "description": "Dispatch architect child for task discovery — understand scope, gather strategic context for task {{task_id}}"
+    },
+    {
+      "id": "explore",
+      "title": "Explore codebase",
+      "depends_on": ["discover"],
+      "labels": ["mode:architect", "card:explore-phase", "phase:2"],
+      "description": "Dispatch architect child for codebase exploration — deep structural and semantic analysis for task {{task_id}}"
+    },
+    {
+      "id": "prepare",
+      "title": "Prepare implementation plan",
+      "depends_on": ["explore"],
+      "labels": ["mode:architect", "card:prepare-phase", "phase:3"],
+      "description": "Dispatch architect child for implementation planning — design subtask plan via sequential thinking for task {{task_id}}"
+    }
+  ]
+}

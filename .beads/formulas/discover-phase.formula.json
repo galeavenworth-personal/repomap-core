@@ -1,0 +1,34 @@
+{
+  "formula": "discover_phase",
+  "type": "workflow",
+  "description": "Architect child: fetch task details, semantic codebase discovery, read key files, return structured discovery summary",
+  "steps": [
+    {
+      "id": "fetch-task-details",
+      "title": "Fetch task details",
+      "labels": ["mode:architect", "card:discover-phase", "phase:1", "tool:bd-show"],
+      "description": "Fetch bead details for {{task_id}} via bd show. If the task has a parent epic, fetch parent context too."
+    },
+    {
+      "id": "semantic-discovery",
+      "title": "Semantic codebase discovery",
+      "depends_on": ["fetch-task-details"],
+      "labels": ["mode:architect", "card:discover-phase", "phase:2", "tool:codebase-retrieval", "gate:hard"],
+      "description": "Query codebase-retrieval for architectural patterns, key files, and modules relevant to {{task_id}}. Hard gate: must call codebase-retrieval at least once."
+    },
+    {
+      "id": "read-key-files",
+      "title": "Read key files",
+      "depends_on": ["semantic-discovery"],
+      "labels": ["mode:architect", "card:discover-phase", "phase:3", "tool:read-file", "gate:hard"],
+      "description": "Read up to 5 key files identified by semantic retrieval. Hard gate: must call read_file at least once."
+    },
+    {
+      "id": "structured-output",
+      "title": "Return discovery summary",
+      "depends_on": ["read-key-files"],
+      "labels": ["mode:architect", "card:discover-phase", "phase:4", "output:discovery-summary"],
+      "description": "Return structured discovery summary for {{task_id}}: task understanding (what/why/type), key components, dependencies/blockers, scope boundaries, runtime attestation."
+    }
+  ]
+}

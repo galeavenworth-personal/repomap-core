@@ -1,0 +1,41 @@
+{
+  "formula": "execute_subtask",
+  "type": "workflow",
+  "description": "Code child: gather context, implement changes, find downstream impacts, run quality gates, return structured result",
+  "steps": [
+    {
+      "id": "gather-context",
+      "title": "Gather context",
+      "labels": ["mode:code", "card:execute-subtask", "phase:1", "tool:codebase-retrieval", "gate:hard"],
+      "description": "Query codebase-retrieval for exact signatures, usage patterns, and caller relationships for subtask {{subtask_index}} of {{subtask_count}} in task {{task_id}}. Read assigned files. Verify external APIs via Context7 if needed. Apply interface appendix identifiers exactly as cited. Hard gate: must call codebase-retrieval at least once."
+    },
+    {
+      "id": "implement",
+      "title": "Implement changes",
+      "depends_on": ["gather-context"],
+      "labels": ["mode:code", "card:execute-subtask", "phase:2"],
+      "description": "Make targeted, minimal edits for subtask {{subtask_index}} of {{subtask_count}}: use edit_file/apply_diff for modifications, write_to_file only for new files. Stay within assigned scope and files."
+    },
+    {
+      "id": "downstream-impacts",
+      "title": "Find and update downstream impacts",
+      "depends_on": ["implement"],
+      "labels": ["mode:code", "card:execute-subtask", "phase:3", "tool:codebase-retrieval"],
+      "description": "Search for all references to modified functions, classes, and types. Update call sites, imports, and tests affected by changes in subtask {{subtask_index}}."
+    },
+    {
+      "id": "quality-gates",
+      "title": "Run quality gates",
+      "depends_on": ["downstream-impacts"],
+      "labels": ["mode:code", "card:execute-subtask", "phase:4", "gate:quality", "gate:hard"],
+      "description": "Run composite quality gate for subtask {{subtask_index}}: ruff format, ruff check, mypy, pytest. All 4 must pass via bounded_gate.py with receipt tracking. Fix and re-run if any gate fails."
+    },
+    {
+      "id": "structured-output",
+      "title": "Return subtask result",
+      "depends_on": ["quality-gates"],
+      "labels": ["mode:code", "card:execute-subtask", "phase:5", "output:subtask-result"],
+      "description": "Return structured result for subtask {{subtask_index}} of {{subtask_count}} in task {{task_id}}: status (SUCCESS/ERROR/PARTIAL), deliverables, success criteria verification, quality gate results, runtime attestation."
+    }
+  ]
+}

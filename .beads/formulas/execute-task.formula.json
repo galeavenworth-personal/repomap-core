@@ -1,0 +1,55 @@
+{
+  "formula": "execute_task",
+  "type": "workflow",
+  "description": "Execute task implementation: verify preparation, dispatch sequential code children per subtask plan, verify completion",
+  "steps": [
+    {
+      "id": "pre-execution-gate",
+      "title": "Pre-execution gate",
+      "labels": ["action:parent", "card:process-orchestrate", "phase:0"],
+      "description": "Verify preparation output exists for task {{task_id}} — locate subtask plan and session export, extract subtask list ({{subtask_count}} subtasks), build todo list. HALT if no subtask plan exists."
+    },
+    {
+      "id": "subtask-1",
+      "title": "Execute subtask 1",
+      "depends_on": ["pre-execution-gate"],
+      "labels": ["mode:code", "card:execute-subtask", "phase:1"],
+      "description": "Dispatch code child for subtask 1 of {{subtask_count}} for task {{task_id}} — handoff includes subtask objective, files, acceptance criteria, and session export path. Child runs /execute-subtask workflow with punch card execute-subtask. Subtasks beyond {{subtask_count}} are skipped at runtime."
+    },
+    {
+      "id": "subtask-2",
+      "title": "Execute subtask 2",
+      "depends_on": ["subtask-1"],
+      "labels": ["mode:code", "card:execute-subtask", "phase:2"],
+      "description": "Dispatch code child for subtask 2 of {{subtask_count}} for task {{task_id}} — handoff includes subtask objective, files, acceptance criteria, and prior subtask results. Child runs /execute-subtask workflow with punch card execute-subtask. Subtasks beyond {{subtask_count}} are skipped at runtime."
+    },
+    {
+      "id": "subtask-3",
+      "title": "Execute subtask 3",
+      "depends_on": ["subtask-2"],
+      "labels": ["mode:code", "card:execute-subtask", "phase:3"],
+      "description": "Dispatch code child for subtask 3 of {{subtask_count}} for task {{task_id}} — handoff includes subtask objective, files, acceptance criteria, and prior subtask results. Child runs /execute-subtask workflow with punch card execute-subtask. Subtasks beyond {{subtask_count}} are skipped at runtime."
+    },
+    {
+      "id": "subtask-4",
+      "title": "Execute subtask 4",
+      "depends_on": ["subtask-3"],
+      "labels": ["mode:code", "card:execute-subtask", "phase:4"],
+      "description": "Dispatch code child for subtask 4 of {{subtask_count}} for task {{task_id}} — handoff includes subtask objective, files, acceptance criteria, and prior subtask results. Child runs /execute-subtask workflow with punch card execute-subtask. Subtasks beyond {{subtask_count}} are skipped at runtime."
+    },
+    {
+      "id": "subtask-5",
+      "title": "Execute subtask 5",
+      "depends_on": ["subtask-4"],
+      "labels": ["mode:code", "card:execute-subtask", "phase:5"],
+      "description": "Dispatch code child for subtask 5 of {{subtask_count}} for task {{task_id}} — handoff includes subtask objective, files, acceptance criteria, and prior subtask results. Child runs /execute-subtask workflow with punch card execute-subtask. Subtasks beyond {{subtask_count}} are skipped at runtime."
+    },
+    {
+      "id": "verification",
+      "title": "Verify completion",
+      "depends_on": ["subtask-5"],
+      "labels": ["action:parent", "card:process-orchestrate", "phase:6"],
+      "description": "Confirm all {{subtask_count}} subtasks for task {{task_id}} are marked COMPLETE — review success criteria from prep phase, roll up runtime attestations (model, mode, files, gate results) from each child, run punch card checkpoint for process-orchestrate."
+    }
+  ]
+}

@@ -3,7 +3,7 @@
  * CLI entry point for Factory Dispatch.
  *
  * Usage:
- *   npx tsx daemon/src/infra/factory-dispatch.cli.ts [OPTIONS] <prompt-file-or-string>
+ *   npx tsx daemon/src/infra/factory-dispatch.cli.ts [OPTIONS] [<prompt-file-or-string>]
  *
  * Options:
  *   -m, --mode MODE        Agent mode to dispatch to (default: plant-manager)
@@ -14,6 +14,8 @@
  *   -q, --quiet            Suppress progress output
  *   --card CARD_ID         Override punch card ID (bypasses mode-card-map)
  *   --bead-id BEAD_ID      Optional bead ID to thread into payload metadata
+ *   --formula NAME         Formula name or path to cook and pour as a molecule
+ *   --var KEY=VALUE        Variable for formula cooking (repeatable)
  *   --poll SECONDS         Poll interval (default: 10)
  *   --no-monitor           Fire and forget — print session ID and exit
  *   --json                 Output final result as JSON instead of text
@@ -30,9 +32,15 @@
  */
 
 import { defaultConfig, runDispatch } from "./factory-dispatch.js";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 function showHelp(): void {
-  console.log(`Usage: npx tsx daemon/src/infra/factory-dispatch.cli.ts [OPTIONS] <prompt>
+  console.log(`Usage: npx tsx daemon/src/infra/factory-dispatch.cli.ts [OPTIONS] [<prompt>]
+
+Prompt:
+  <prompt>               Prompt string or .json payload file (optional with --formula)
 
 Options:
   -m, --mode MODE        Agent mode to dispatch to (default: plant-manager)
@@ -43,6 +51,8 @@ Options:
   -q, --quiet            Suppress progress output
   --card CARD_ID         Override punch card ID (bypasses mode-card-map)
   --bead-id BEAD_ID      Optional bead ID to thread into payload metadata
+  --formula <name>       Formula name or path to cook and pour as a molecule
+  --var <key=value>      Variable for formula cooking (repeatable)
   --poll SECONDS         Poll interval (default: 10)
   --no-monitor           Fire and forget — print session ID and exit
   --json                 Output final result as JSON instead of text
@@ -58,65 +68,39 @@ Exit codes:
   6  No assistant response found`);
 }
 
-function parseArgs(argv: string[]): ReturnType<typeof defaultConfig> {
+export function parseArgs(argv: string[]): ReturnType<typeof defaultConfig> {
   const config = defaultConfig();
   const args = argv.slice(2); // skip node and script path
 
   let i = 0;
+  function nextVal(flag: string): string {
+    if (i + 1 >= args.length) throw new Error(`Missing value for ${flag}`);
+    return args[++i];
+  }
+
   while (i < args.length) {
     const arg = args[i];
     switch (arg) {
       case "-m":
-      case "--mode":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.mode = args[++i];
-        break;
+      case "--mode":       config.mode = nextVal(arg); break;
       case "-t":
-      case "--title":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.title = args[++i];
-        break;
+      case "--title":      config.title = nextVal(arg); break;
       case "-h":
-      case "--host":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.host = args[++i];
-        break;
+      case "--host":       config.host = nextVal(arg); break;
       case "-p":
-      case "--port":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.port = Number(args[++i]);
-        break;
+      case "--port":       config.port = Number(nextVal(arg)); break;
       case "-w":
-      case "--wait":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.maxWait = Number(args[++i]);
-        break;
+      case "--wait":       config.maxWait = Number(nextVal(arg)); break;
       case "-q":
-      case "--quiet":
-        config.quiet = true;
-        break;
-      case "--poll":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.pollInterval = Number(args[++i]);
-        break;
-      case "--card":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.cardId = args[++i];
-        break;
-      case "--bead-id":
-        if (i + 1 >= args.length) throw new Error(`Missing value for ${arg}`);
-        config.beadId = args[++i];
-        break;
-      case "--no-monitor":
-        config.noMonitor = true;
-        break;
-      case "--json":
-        config.jsonOutput = true;
-        break;
-      case "--help":
-        showHelp();
-        process.exit(0);
-        break;
+      case "--quiet":      config.quiet = true; break;
+      case "--poll":       config.pollInterval = Number(nextVal(arg)); break;
+      case "--card":       config.cardId = nextVal(arg); break;
+      case "--bead-id":    config.beadId = nextVal(arg); break;
+      case "--formula":    config.formula = nextVal(arg); break;
+      case "--var":        config.vars.push(nextVal(arg)); break;
+      case "--no-monitor": config.noMonitor = true; break;
+      case "--json":       config.jsonOutput = true; break;
+      case "--help":       showHelp(); process.exit(0); break;
       default:
         if (arg.startsWith("-")) {
           console.error(`ERROR: Unknown option: ${arg}`);
@@ -128,8 +112,8 @@ function parseArgs(argv: string[]): ReturnType<typeof defaultConfig> {
     i++;
   }
 
-  if (!config.promptArg) {
-    console.error("ERROR: No prompt provided. Use --help for usage.");
+  if (!config.promptArg && !config.formula) {
+    console.error("ERROR: No prompt or formula provided. Use --help for usage.");
     process.exit(1);
   }
 
@@ -141,5 +125,19 @@ async function main(): Promise<number> {
   return runDispatch(config);
 }
 
-const code = await main();
-process.exit(code);
+const shouldRunAsCli =
+  process.argv[1] !== undefined &&
+  (() => {
+    try {
+      const modulePath = realpathSync(fileURLToPath(import.meta.url));
+      const scriptPath = realpathSync(resolve(process.argv[1]));
+      return modulePath === scriptPath;
+    } catch {
+      return false;
+    }
+  })();
+
+if (shouldRunAsCli) {
+  const code = await main();
+  process.exit(code);
+}

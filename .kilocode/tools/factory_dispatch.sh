@@ -7,7 +7,7 @@
 # This wrapper ensures node_modules are installed and tsx is available,
 # then execs the TypeScript CLI with all arguments forwarded.
 #
-# Usage: factory_dispatch.sh [OPTIONS] <prompt-file-or-string>
+# Usage: factory_dispatch.sh [OPTIONS] [<prompt-file-or-string>]
 # See:   npx tsx daemon/src/infra/factory-dispatch.cli.ts --help
 #
 # Exit codes match the TypeScript implementation (0–6).

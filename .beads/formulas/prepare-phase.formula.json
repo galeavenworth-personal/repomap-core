@@ -1,0 +1,48 @@
+{
+  "formula": "prepare_phase",
+  "type": "workflow",
+  "description": "Architect child: sequential thinking to transform discovery and exploration into executable subtask plan with decision rationale",
+  "steps": [
+    {
+      "id": "problem-definition",
+      "title": "Problem definition branches",
+      "labels": ["mode:architect", "card:prepare-phase", "phase:1", "tool:sequential-thinking", "gate:hard"],
+      "description": "Create at least 2 interpretation branches for {{task_id}} via sequential thinking (stage=Problem Definition). Hard gate: must call process_thought at least once."
+    },
+    {
+      "id": "analysis",
+      "title": "Approach candidates",
+      "depends_on": ["problem-definition"],
+      "labels": ["mode:architect", "card:prepare-phase", "phase:2", "tool:sequential-thinking"],
+      "description": "Generate at least 2 implementation approaches for {{task_id}} via sequential thinking (stage=Analysis). Each includes strategy, pros/cons, effort, risk, and downstream impact."
+    },
+    {
+      "id": "synthesis",
+      "title": "Synthesis and comparison",
+      "depends_on": ["analysis"],
+      "labels": ["mode:architect", "card:prepare-phase", "phase:3", "tool:sequential-thinking"],
+      "description": "Generate summary to verify stage coverage, then synthesize comparison of approaches for {{task_id}} (stage=Synthesis). Recommend chosen approach with rationale."
+    },
+    {
+      "id": "conclusion",
+      "title": "Decision and subtask plan",
+      "depends_on": ["synthesis"],
+      "labels": ["mode:architect", "card:prepare-phase", "phase:4", "tool:sequential-thinking", "output:subtask-plan"],
+      "description": "Record decision and define implementation subtask list for {{task_id}} (stage=Conclusion). Each subtask specifies: description, files, success criteria. Forward Interface Appendix verbatim from explore phase."
+    },
+    {
+      "id": "export-session",
+      "title": "Export thinking session",
+      "depends_on": ["conclusion"],
+      "labels": ["mode:architect", "card:prepare-phase", "phase:5", "tool:sequential-thinking", "gate:hard"],
+      "description": "Export sequential thinking session to .kilocode/thinking/task-{{task_id}}-prep-{{date}}.json. Hard gate: must call export_session before completing."
+    },
+    {
+      "id": "structured-output",
+      "title": "Return preparation summary",
+      "depends_on": ["export-session"],
+      "labels": ["mode:architect", "card:prepare-phase", "phase:6", "output:preparation-summary"],
+      "description": "Return structured preparation summary for {{task_id}}: decision, success criteria, ordered subtask list, risks/mitigations, interface appendix, session export path, runtime attestation."
+    }
+  ]
+}
